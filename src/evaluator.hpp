@@ -24,7 +24,11 @@ enum class EvalCtx { Full, Geo, World };
 enum class Role { Empty, Normal, Tangent, Hug };
 
 Role nodeRole(const Node& n, EvalCtx ctx, const std::string& activeWorld, const std::function<bool(const std::string&)>& worldExists);
-void applyModifier(V4& q, const Modifier& m);
+void applyModifier(V4& q, const Modifier& m);  // mirror / repeat / rotate
+/** Coordinate pass of a node's modifier stack (outermost first); captures extrude coordinates in t. */
+double modifierCoords(const Node& n, const std::vector<ModAxis>& ax, V4& q, double* t);
+/** Distance pass (innermost first): applies the captured extrusions. */
+double modifierDistance(const Node& n, const std::vector<ModAxis>& ax, double d, const double* t);
 double opExtrudeD(double d, double wy);
 
 struct Sample {
@@ -51,7 +55,7 @@ class SceneEvaluator {
   std::string activeWorld;
 
  private:
-  struct Prep { M4 inv; const PrimitiveDef* prim = nullptr; int dim = 4; };
+  struct Prep { M4 inv; const PrimitiveDef* prim = nullptr; int dim = 4; std::vector<ModAxis> axes; };
   Node& root_;
   const PrimitiveRegistry& reg_;
   std::unordered_map<std::string, Prep> prep_;

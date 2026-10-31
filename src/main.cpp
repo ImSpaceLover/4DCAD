@@ -1,7 +1,7 @@
 // 4DCAD entry point: window, OpenGL context, ImGui, main loop.
 // Command line (mainly for automated testing):
 //   4DCAD [scene.json] [--example playground|planet] [--geo] [--explore]
-//         [--size WxH] [--screenshot out.ppm --frames N]
+//         [--select NAME] [--tool move|rotate] [--size WxH] [--screenshot out.ppm --frames N]
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -54,12 +54,15 @@ static void loadFonts(float scale) {
 
 int main(int argc, char** argv) {
   std::string sceneArg, example, screenshot;
+  std::string selectName, toolName;
   bool startGeo = false, startExplore = false;
   int frames = 30, W = 1600, H = 900;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--example" && i + 1 < argc) example = argv[++i];
     else if (a == "--geo") startGeo = true;
+    else if (a == "--select" && i + 1 < argc) selectName = argv[++i];
+    else if (a == "--tool" && i + 1 < argc) toolName = argv[++i];
     else if (a == "--explore") startExplore = true;
     else if (a == "--screenshot" && i + 1 < argc) screenshot = argv[++i];
     else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -110,6 +113,9 @@ int main(int argc, char** argv) {
   if (!sceneArg.empty() && !app.loadSceneFile(sceneArg, err)) app.toast(err, true);
   for (auto& ex : EXAMPLES) if (example == ex.id) app.loadScene(ex.make());
   if (startGeo) app.setGeo(true);
+  if (!selectName.empty()) walk(app.root, [&](Node& n, Node*, int) { if (n.name == selectName && app.selection.empty()) app.selection = {n.id}; });
+  if (toolName == "move") app.tool = Tool::Move;
+  if (toolName == "rotate") app.tool = Tool::Rotate;
   if (startExplore) app.setMode(Mode::Explore);
 
   auto t0 = std::chrono::steady_clock::now();
@@ -125,7 +131,7 @@ int main(int argc, char** argv) {
     // explore mouse capture
     if (app.wantCapture && !screenshot.empty()) app.wantCapture = false;
     if (app.wantCapture) { glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED); app.mouseCaptured = true; app.wantCapture = false; }
-    if (app.wantRelease || (app.mouseCaptured && app.mode != Mode::Explore)) {
+    if (app.wantRelease || (app.mouseCaptured && app.mode != Mode::Explore && !app.flying())) {
       glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
       app.mouseCaptured = false;
       app.wantRelease = false;

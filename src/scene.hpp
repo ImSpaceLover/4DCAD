@@ -18,11 +18,23 @@ inline const char* BOOL_OP_NAMES[6] = {"union", "intersection", "subtraction", "
 inline const char* BOOL_OP_LABELS[6] = {"Union", "Intersection", "Subtraction", "Smooth union", "Smooth intersection", "Smooth subtraction"};
 inline bool isSmooth(BoolOp o) { return o >= BoolOp::SmoothUnion; }
 
+// Modifier stack of a node, listed in the order they are applied to the shape
+// (first = innermost). Dimension-raising modifiers (Extrude, Revolve) each add
+// the next axis (X -> Y -> Z -> W) after the node's base dimension.
+enum ModType { MOD_MIRROR = 1, MOD_REPEAT = 2, MOD_EXTRUDE = 3, MOD_REVOLVE = 4, MOD_ROTATE = 5 };
+inline const char* MOD_NAMES[6] = {"", "Mirror", "Repeat", "Extrude", "Revolve", "Rotate"};
+
 struct Modifier {
-  int type = 1;  // 1 mirror, 2 repeat
-  int axis = 0;
-  double spacing = 3;
-  int count = 2;  // repeat: copies on each side, 0 = infinite
+  int type = MOD_MIRROR;
+  int axis = 0;          // mirror / repeat axis; revolve: existing axis spun into the new one (-1 = newest)
+  double spacing = 3;    // repeat
+  int count = 2;         // repeat: copies on each side, 0 = infinite
+  ExtrudeMode mode = ExtrudeMode::Finite;  // extrude
+  double length = 2;     // extrude
+  double radius = 0;     // revolve
+  int i = 0, j = 1;      // rotate plane
+  double angle = 45;     // rotate (degrees)
+  bool raises() const { return type == MOD_EXTRUDE || type == MOD_REVOLVE; }
 };
 
 struct Transform {
@@ -102,7 +114,20 @@ class PrimitiveRegistry {
   std::vector<PrimitiveDef> list_;
 };
 
+/** Base dimension of a node before its own modifiers (leaf: primitive dim, group: max child dim). */
+int nodeBaseDim(const Node& n, const PrimitiveRegistry& reg);
+/** Per-modifier resolved axes: invalid raises (beyond 4D, revolve of a point) are ignored. */
+struct ModAxis { bool valid = true; int newAxis = -1; int srcAxis = -1; };
+std::vector<ModAxis> modifierAxes(const Node& n, const PrimitiveRegistry& reg);
+/** A point leaf shaped like the named built-in primitive (cube, sphere, ...). */
+Node makeShape(const std::string& builtinId, const std::string& name, V4 pos = {0, 0, 0, 0}, std::array<double, 3> color = {0.8, 0.5, 0.3});
+/** Dimension after the node's modifiers (capped at 4). */
 int nodeDim(const Node& n, const PrimitiveRegistry& reg);
+/** Problems in a node's modifier stack (e.g. more than 4 dimensions). Index -> message. */
+std::vector<std::pair<int, std::string>> modifierProblems(const Node& n, const PrimitiveRegistry& reg);
+/** Convert a primitive recipe into modifiers on a point leaf. */
+std::vector<Modifier> stepsToModifiers(const std::vector<Step>& steps);
+Node nodeFromPrimitive(const PrimitiveDef& p, const std::string& name);
 
 struct SceneFile {
   Node root;
@@ -114,24 +139,31 @@ struct SceneFile {
 struct LibraryObject {
   std::string id, name;
   Node node;
-  std::vector<PrimitiveDef> primitives;
 };
+
+struct LibraryFolder {
+  std::string id, name;
+  bool builtin = false;  // read-only built-in folders
+  std::vector<LibraryObject> objects;
+};
+
+/** Built-in folders (basic 0D-2D, 3D, 4D shapes made of a point + modifiers). */
+std::vector<LibraryFolder> builtinFolders();
 
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
 std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam);
 SceneFile sceneFromJson(const std::string& text);
 std::string nodeToJson(const Node& n);  // compact snapshot (undo)
 Node nodeFromJson(const std::string& text);
-std::string primitiveToJson(const PrimitiveDef& p, bool asFile);
 LibraryObject makeLibraryObject(const Node& n, const PrimitiveRegistry& reg, const std::string& name);
 std::string libraryObjectToJson(const LibraryObject& o);
 
 struct LibraryImport {
-  std::vector<PrimitiveDef> primitives;
-  std::vector<LibraryObject> objects;
+  std::vector<LibraryFolder> folders;   // full library files
+  std::vector<LibraryObject> objects;   // single objects / old primitives
   std::string description;
 };
 LibraryImport importLibraryJson(const std::string& text);
-std::string libraryToJson(const std::vector<PrimitiveDef>& prims, const std::vector<LibraryObject>& objs);
+std::string libraryToJson(const std::vector<LibraryFolder>& folders);
 
 }  // namespace fd

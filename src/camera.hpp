@@ -23,8 +23,12 @@ class FullCamera {
   V4 target{0, 0.5, 0, 0};
   double distance = 8, yaw = 0.6, pitch = -0.35;
   M4 rot4 = identity();
+  V4 pivot{0, 0.5, 0, 0};  // centre of rotation for orbiting (MMB click sets it)
+  bool pivotSet = false;
 
-  void load(const CameraState& s) { target = s.target; distance = s.distance; yaw = s.yaw; pitch = s.pitch; rot4 = s.rot4; }
+  void load(const CameraState& s) { target = s.target; distance = s.distance; yaw = s.yaw; pitch = s.pitch; rot4 = s.rot4; pivotSet = false; }
+  V4 orbitCenter() const { return pivotSet ? pivot : target; }
+  void setPivot(const V4& p) { pivot = p; pivotSet = true; }
   CameraState save() const { return {target, distance, yaw, pitch, rot4}; }
   M4 e3() const { return mul(planeRotation(2, 0, yaw), planeRotation(2, 1, pitch)); }
   M4 frame() const { return mul(rot4, e3()); }
@@ -41,7 +45,7 @@ class FullCamera {
   void reset4() { rot4 = identity(); }
   /** Position of the visible slice along the camera's ana axis. */
   double sliceW() const { return dot(target, col(frame(), 3)); }
-  void setSliceW(double w) { V4 ana = col(frame(), 3); target = target + ana * (w - sliceW()); }
+  void setSliceW(double w) { V4 ana = col(frame(), 3); V4 d = ana * (w - sliceW()); target = target + d; pivot = pivot + d; }
 
   // Explore (first person)
   void look(double dx, double dy);

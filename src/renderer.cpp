@@ -161,6 +161,11 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
   gl::Uniform4fv(u(*p, "u_light"), 1, light);
   gl::Uniform4fv(u(*p, "u_marker"), 1, mk);
   gl::Uniform4fv(u(*p, "u_markerCol"), 1, fp.markerCol.data());
+  float mf[4];
+  for (int i = 0; i < 4; i++) mf[i] = (float)fp.markerFwd[i];
+  gl::Uniform4fv(u(*p, "u_markerFwd"), 1, mf);
+  gl::Uniform1f(u(*p, "u_markerSkip"), fp.markerSkip);
+  gl::Uniform3f(u(*p, "u_skyCol"), fp.skyCol[0], fp.skyCol[1], fp.skyCol[2]);
   gl::Disable(GL_SCISSOR_TEST);
   gl::Disable(GL_BLEND);
   gl::Disable(GL_DEPTH_TEST);

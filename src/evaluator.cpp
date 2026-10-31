@@ -15,13 +15,40 @@ Role nodeRole(const Node& n, EvalCtx ctx, const std::string& activeWorld, const 
 }
 
 void applyModifier(V4& q, const Modifier& m) {
-  if (m.type == 1) q[m.axis] = std::abs(q[m.axis]);
-  else {
+  if (m.type == MOD_MIRROR) q[m.axis] = std::abs(q[m.axis]);
+  else if (m.type == MOD_REPEAT) {
     if (m.spacing <= 0) return;
     double r = std::floor(q[m.axis] / m.spacing + 0.5);
     if (m.count > 0) r = clampd(r, -m.count, m.count);
     q[m.axis] -= m.spacing * r;
+  } else if (m.type == MOD_ROTATE && m.i != m.j) {
+    double ang = -m.angle * PI / 180, ci = q[m.i], cj = q[m.j];
+    q[m.i] = std::cos(ang) * ci - std::sin(ang) * cj;
+    q[m.j] = std::sin(ang) * ci + std::cos(ang) * cj;
   }
+}
+
+double modifierCoords(const Node& n, const std::vector<ModAxis>& ax, V4& q, double* t) {
+  for (int k = (int)n.mods.size() - 1; k >= 0; k--) {
+    const Modifier& m = n.mods[k];
+    if (!ax[k].valid) continue;
+    if (m.type == MOD_EXTRUDE) { t[k] = q[ax[k].newAxis]; q[ax[k].newAxis] = 0; }
+    else if (m.type == MOD_REVOLVE) {
+      int a = ax[k].srcAxis, nn = ax[k].newAxis;
+      q[a] = std::hypot(q[a], q[nn]) - m.radius;
+      q[nn] = 0;
+    } else applyModifier(q, m);
+  }
+  return 0;
+}
+
+double modifierDistance(const Node& n, const std::vector<ModAxis>& ax, double d, const double* t) {
+  for (size_t k = 0; k < n.mods.size(); k++) {
+    const Modifier& m = n.mods[k];
+    if (!ax[k].valid || m.type != MOD_EXTRUDE || m.mode == ExtrudeMode::Infinite) continue;
+    d = opExtrudeD(d, m.mode == ExtrudeMode::Half ? t[k] : std::abs(t[k]) - m.length / 2);
+  }
+  return d;
 }
 
 double opExtrudeD(double d, double wy) {
@@ -57,41 +84,45 @@ double leafLocalRadius(const Node& n, const PrimitiveDef* def) {
   auto e = primitiveExtents(*def);
   for (int a = primitiveDim(*def); a < 4; a++) e[a] = n.thickness / 2;
   double r = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2] + e[3] * e[3]);
-  return r + std::max(0.0, n.round.value_or(def->round)) + std::max(0.0, n.shell.value_or(def->shell));
+  return r + std::max(0.0, n.round.value_or(0.0)) + std::max(0.0, n.shell.value_or(0.0));
 }
 
 std::unordered_map<std::string, Bound> computeBounds(const Node& root, const PrimitiveRegistry& reg) {
   std::unordered_map<std::string, Bound> out;
   std::function<Bound(const Node&)> visit = [&](const Node& n) -> Bound {
-    V4 c{0, 0, 0, 0};
-    double r;
-    if (n.isLeaf()) r = leafLocalRadius(n, reg.get(n.prim));
-    else {
+    // per-axis half extents around the local origin, pushed through the modifier stack
+    std::array<double, 4> e{0, 0, 0, 0};
+    auto ax = modifierAxes(n, reg);
+    int dimFinal = nodeDim(n, reg);
+    if (n.isLeaf()) {
+      if (auto* def = reg.get(n.prim)) e = primitiveExtents(*def);
+      for (int a = dimFinal; a < 4; a++) e[a] = n.thickness / 2;
+    } else {
       std::vector<Bound> kids;
       for (auto& ch : n.children) kids.push_back(visit(ch));
-      if (kids.empty()) r = 0;
-      else if (n.op != BoolOp::Union && n.op != BoolOp::SmoothUnion) { c = kids[0].c; r = kids[0].r; }
-      else {
-        bool inf = false;
-        for (auto& k : kids) if (!std::isfinite(k.r)) inf = true;
-        if (inf) r = INFINITY;
-        else {
-          for (auto& k : kids) c = c + k.c * (1.0 / kids.size());
-          r = 0;
-          for (auto& k : kids) r = std::max(r, length(k.c - c) + k.r);
-        }
-      }
-      if (isSmooth(n.op)) r += n.k;
+      std::vector<Bound> use = kids;
+      if (!kids.empty() && n.op != BoolOp::Union && n.op != BoolOp::SmoothUnion) use = {kids[0]};
+      for (auto& k : use)
+        for (int a = 0; a < 4; a++) e[a] = std::max(e[a], std::abs(k.c[a]) + k.r);
+      if (isSmooth(n.op)) for (auto& x : e) x += n.k;
     }
-    for (auto& m : n.mods) {
-      if (m.type == 1) { r += std::abs(c[m.axis]); c[m.axis] = 0; }
-      else r = m.count > 0 ? r + m.count * m.spacing : INFINITY;
+    for (size_t k = 0; k < n.mods.size(); k++) {
+      auto& m = n.mods[k];
+      if (!ax[k].valid) continue;
+      if (m.type == MOD_REPEAT) e[m.axis] = m.count > 0 ? e[m.axis] + m.count * m.spacing : INFINITY;
+      else if (m.type == MOD_EXTRUDE) e[ax[k].newAxis] = m.mode == ExtrudeMode::Finite ? m.length / 2 : INFINITY;
+      else if (m.type == MOD_REVOLVE) { double v = m.radius + e[ax[k].srcAxis]; e[ax[k].srcAxis] = v; e[ax[k].newAxis] = v; }
+      else if (m.type == MOD_ROTATE) { double v = std::hypot(e[m.i], e[m.j]); e[m.i] = v; e[m.j] = v; }
+    }
+    double r = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2] + e[3] * e[3]);
+    if (n.isLeaf()) {
+      auto* def = reg.get(n.prim);
+      r += std::max(0.0, n.round.value_or(0.0)) + std::max(0.0, n.shell.value_or(0.0));
     }
     Bound b;
-    double s = n.xf.scale;
     if (!std::isfinite(r)) b = {n.xf.pos, INFINITY};
     else {
-      b = {n.xf.pos + mul(nodeRotation(n), c) * s, r * s};
+      b = {n.xf.pos, r * n.xf.scale};
       if (n.anchor) b.r = b.r * 1.5 + 0.1;  // anchored objects bend along the surface
     }
     out[n.id] = b;
@@ -106,7 +137,9 @@ SceneEvaluator::SceneEvaluator(Node& root, const PrimitiveRegistry& reg, const s
   walk(root, [&](Node& n, Node*, int) {
     Prep p;
     p.inv = transpose(nodeRotation(n));
-    if (n.isLeaf()) { p.prim = reg.get(n.prim); p.dim = p.prim ? primitiveDim(*p.prim) : 4; }
+    if (n.isLeaf()) p.prim = reg.get(n.prim);
+    p.dim = nodeDim(n, reg);
+    p.axes = modifierAxes(n, reg);
     prep_[n.id] = p;
   });
 }
@@ -128,7 +161,8 @@ double SceneEvaluator::worldDist(const V4& g, const std::string& worldId) const 
   for (size_t i = 0; i + 1 < path.size(); i++) {
     p = toLocal(*path[i], p);
     s *= path[i]->xf.scale;
-    for (auto& m : path[i]->mods) applyModifier(p, m);
+    double t[64];
+    if (path[i]->mods.size() <= 64) modifierCoords(*path[i], prep_.at(path[i]->id).axes, p, t);
   }
   return evalNode(*path.back(), p, g, s, EvalCtx::World).d * s;
 }
@@ -156,16 +190,19 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
     else wd = it->second;
     q[3] = wd / (sAcc * s);
   }
-  for (auto& m : n.mods) applyModifier(q, m);
+  auto& pr = prep_.at(n.id);
+  double t[64];
+  if (n.mods.size() > 64) return {};
+  modifierCoords(n, pr.axes, q, t);
   Sample r;
   if (n.isLeaf()) {
-    auto& pr = prep_.at(n.id);
     if (!pr.prim) return {};
     double d = evalPrimitive(*pr.prim, q);
     for (int a = pr.dim; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
-    double shell = n.shell.value_or(pr.prim->shell);
+    d = modifierDistance(n, pr.axes, d, t);
+    double shell = n.shell.value_or(0.0);
     if (shell > 0) d = std::abs(d) - shell;
-    d -= n.round.value_or(pr.prim->round);
+    d -= n.round.value_or(0.0);
     r = {d, n.color, &n};
   } else {
     bool first = true;
@@ -174,6 +211,7 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
       if (first) { r = cs; first = false; continue; }
       r = combine(n.op, std::max(n.k, 1e-4), r, cs);
     }
+    if (r.d < INF * 0.5) r.d = modifierDistance(n, pr.axes, r.d, t);
   }
   if (r.d >= INF * 0.5) return r;
   r.d *= s;

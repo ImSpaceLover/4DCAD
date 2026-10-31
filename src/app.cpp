@@ -48,7 +48,6 @@ void App::restore(const std::string& s) {
 }
 
 void App::loadScene(SceneFile f) {
-  for (auto& p : f.primitives) { p.builtin = false; reg.set(p); }
   root = std::move(f.root);
   world = (!f.world.empty() && findNode(root, f.world)) ? f.world : "";
   selection.clear();
@@ -194,8 +193,8 @@ void App::ungroup(const std::string& id) {
   if (!p) return;
   size_t i = 0;
   while (i < p->children.size() && p->children[i].id != id) i++;
+  if (p->children[i].isLeaf()) return;
   Node g = std::move(p->children[i]);
-  if (g.isLeaf()) { p->children[i] = std::move(g); return; }
   p->children.erase(p->children.begin() + i);
   selection.clear();
   for (auto& c : g.children) selection.push_back(c.id);
@@ -226,16 +225,17 @@ void App::reparent(const std::string& id, const std::string& targetId, Drop wher
 void App::setWorld(const std::string& id) {
   world = id;
   geoEdit.valid = geoPlayer.valid = false;
-  if (world.empty() && geo) geo = false;
+  bool wasGeo = geo;
+  geo = false;
   commit();
-  if (geo) { geo = false; setGeo(true); }
+  if (wasGeo && !world.empty()) setGeo(true);
 }
 
 void App::attachToWorld(const std::string& id) {
   Node* n = findNode(root, id);
   if (!n || world.empty() || id == world || isAncestor(root, id, world)) return;
   if (nodeDim(*n, reg) > 3) { toast("Only 3D (or lower) objects can be attached to a world surface", true); return; }
-  auto a = makeAnchor(*ev, world, n->xf.pos, currentView().frame);
+  auto a = makeAnchor(*ev, world, nodeWorldPos(id), currentView().frame);
   n->xf.pos = a.pos;
   n->anchor = a.anchor;
   if (findParent(root, id) != &root) {
@@ -249,23 +249,31 @@ void App::detach(const std::string& id) {
   if (Node* n = findNode(root, id)) { n->anchor.reset(); commit(); }
 }
 
-// ============================================================ modes & views
-void App::syncPlayerFromEdit() {
-  // first time in Explore: the player starts where the editor camera is
-  if (!playerPlaced) { playerCam.setFromView(editCam.view(), 3); playerPlaced = true; }
+V4 App::nodeWorldPos(const std::string& id) {
+  auto path = pathTo(root, id);
+  if (path.empty()) return {0, 0, 0, 0};
+  V4 p = path.back()->xf.pos;
+  for (int i = (int)path.size() - 2; i >= 0; i--) p = path[i]->xf.pos + mul(nodeRotation(*path[i]), p) * path[i]->xf.scale;
+  return p;
 }
 
+M4 App::nodeWorldFrame(const std::string& id) {
+  M4 r = identity();
+  for (Node* n : pathTo(root, id)) r = mul(r, nodeRotation(*n));
+  return r;
+}
+
+// ============================================================ modes & views
 void App::setMode(Mode m) {
   if (m == mode) return;
   cancelModal();
+  drag_ = Drag::None;
   if (m == Mode::Explore) {
-    if (geo) {
-      if (!geoPlayer.valid) { geoPlayer = geoEdit; auto v = geoEdit.view(field(), quality.geoMaxStep * 0.5); geoPlayer.pivot = v.eye; geoPlayer.frame = v.frame; geoPlayer.distance = 0; }
-    } else syncPlayerFromEdit();
+    // the player always starts where the editor camera currently is
+    if (geo && geoEdit.valid) { geoPlayer = geoEdit; geoPlayer.distance = 0; geoPlayer.valid = true; }
+    else { playerCam.setFromView(editCam.view(), 3); playerPlaced = true; }
     wantCapture = true;
-  } else {
-    wantRelease = true;
-  }
+  } else wantRelease = true;
   mode = m;
   lastChange_ = now;
 }
@@ -274,18 +282,20 @@ void App::setGeo(bool g) {
   if (g == geo) return;
   if (g && world.empty()) { toast("Choose a world object first (World menu or Properties > Use as world)", true); return; }
   cancelModal();
+  drag_ = Drag::None;
   if (g) {
     auto f = field();
-    if (!geoEdit.valid) {
-      geoEdit.initFrom(f, editCam.view(), 0);
-      if (geoEdit.valid) { auto r = shoot(f, geoEdit.pivot, geoEdit.frame, {0, 0, 1}, 4, quality.geoMaxStep * 0.5); geoEdit.pivot = r.pos; geoEdit.frame = r.frame; geoEdit.distance = 4; }
-    }
-    // player continues from its Full-4D position, projected onto the surface
-    if (!geoPlayer.valid) { syncPlayerFromEdit(); geoPlayer.initFrom(f, playerCam.view(), 0); }
+    // the (first-person) geodesic editor camera starts where the 4D camera is, on the surface
+    geoEdit.initFrom(f, mode == Mode::Explore ? playerCam.view() : editCam.view(), 0);
     if (!geoEdit.valid) { toast("Could not place the camera on the world surface", true); return; }
+    if (mode == Mode::Explore || !geoPlayer.valid) { geoPlayer = geoEdit; }
   } else {
-    // leaving the surface: the Full-4D player continues from the surface position
     if (geoPlayer.valid) { playerCam.setFromView({geoPlayer.pivot, geoPlayer.frame}, 3); playerPlaced = true; }
+    if (geoEdit.valid && mode == Mode::Edit) {
+      // keep looking from the same place
+      editCam.setFromView({geoEdit.pivot, geoEdit.frame}, 4);
+      editCam.pivotSet = false;
+    }
   }
   geo = g;
   lastChange_ = now;
@@ -294,7 +304,7 @@ void App::setGeo(bool g) {
 View App::currentView() {
   if (geo && geoEdit.valid) {
     if (mode == Mode::Explore && geoPlayer.valid) return {geoPlayer.pivot, geoPlayer.frame};
-    return geoEdit.view(field(), quality.geoMaxStep * 0.5);
+    return {geoEdit.pivot, geoEdit.frame};
   }
   return mode == Mode::Explore ? playerCam.view() : editCam.view();
 }
@@ -328,54 +338,59 @@ void App::focusSelection() {
   Node* n = selected();
   if (!n) return;
   if (!geo) {
-    V4 p{0, 0, 0, 0};
-    for (Node* m : pathTo(root, n->id)) p = p + m->xf.pos;
-    editCam.target = p;
+    editCam.target = nodeWorldPos(n->id);
     editCam.distance = std::max(2.0, 4 * n->xf.scale);
+    editCam.pivotSet = false;
   } else if (n->anchor && n->anchor->world == world) {
-    geoEdit.pivot = n->xf.pos;
-    geoEdit.frame = n->anchor->basis;
-    geoEdit.distance = std::max(2.0, 4 * n->xf.scale);
+    auto r = shoot(field(), n->xf.pos, n->anchor->basis, {0, 0, -1}, std::max(2.0, 4 * n->xf.scale), quality.geoMaxStep * 0.5);
+    geoEdit.pivot = r.pos;
+    geoEdit.frame = r.frame;
   }
 }
 
 void App::standardView(int which) {
   editCam.reset4();
+  editCam.pivotSet = false;
   if (which == 0) { editCam.yaw = 0; editCam.pitch = 0; }
   if (which == 1) { editCam.yaw = -PI / 2; editCam.pitch = 0; }
   if (which == 2) { editCam.yaw = 0; editCam.pitch = -PI / 2 + 0.001; }
   if (which == 3) { editCam.yaw = 0; editCam.pitch = 0; editCam.rotate4(2, 3, PI / 2); }
 }
 
-// ============================================================ placement
-int App::itemDim(const LibraryItem& it) {
-  if (!it.object) { auto* p = reg.get(it.id); return p ? primitiveDim(*p) : 0; }
-  for (auto& o : lib.objects) if (o.id == it.id) return nodeDim(o.node, reg);
-  return 0;
+std::array<float, 3> App::worldColor() {
+  std::array<float, 3> c{0.35f, 0.4f, 0.55f};
+  Node* w = world.empty() ? nullptr : findNode(root, world);
+  if (!w) return c;
+  double s[3] = {0, 0, 0};
+  int n = 0;
+  walk(*w, [&](Node& m, Node*, int) { if (m.isLeaf() && !m.hidden) { for (int i = 0; i < 3; i++) s[i] += m.color[i]; n++; } });
+  if (n) for (int i = 0; i < 3; i++) c[i] = (float)(s[i] / n);
+  return c;
 }
 
-bool App::canPlace(const LibraryItem& it, std::string* reason) {
+// ============================================================ placement
+int App::itemDim(const std::string& id) {
+  const LibraryObject* o = lib.find(id);
+  return o ? nodeDim(o->node, reg) : 0;
+}
+
+bool App::canPlace(const std::string& id, std::string* reason) {
   if (mode != Mode::Edit) { if (reason) *reason = "Switch to Edit mode to place objects"; return false; }
-  if (geo && itemDim(it) > 3) { if (reason) *reason = "Geodesic view: only 3D (or lower) objects can be placed on the world surface"; return false; }
+  if (geo && itemDim(id) > 3) { if (reason) *reason = "Geodesic view: only 3D (or lower) objects can be placed on the world surface"; return false; }
   return true;
 }
 
-void App::placeItem(const LibraryItem& it, std::optional<std::pair<double, double>> screen) {
+void App::placeItem(const std::string& id, std::optional<std::pair<double, double>> screen) {
   std::string why;
-  if (!canPlace(it, &why)) { toast(why, true); return; }
-  Node node;
-  if (!it.object) {
-    auto* p = reg.get(it.id);
-    if (!p) return;
+  if (!canPlace(id, &why)) { toast(why, true); return; }
+  const LibraryObject* o = lib.find(id);
+  if (!o) return;
+  Node node = cloneFresh(o->node);
+  node.name = o->name;
+  if (id.rfind("builtin-", 0) == 0) {  // give built-in shapes a fresh colour
     static int hueCounter = 0;
-    node = makeLeaf(p->id, p->name, {0, 0, 0, 0}, hsl(std::fmod(0.13 + 0.618 * hueCounter++, 1.0), 0.55, 0.6));
-  } else {
-    const LibraryObject* o = nullptr;
-    for (auto& x : lib.objects) if (x.id == it.id) o = &x;
-    if (!o) return;
-    for (auto& p : o->primitives) reg.set(p);
-    node = cloneFresh(o->node);
-    node.name = o->name;
+    auto c = hsl(std::fmod(0.13 + 0.618 * hueCounter++, 1.0), 0.55, 0.6);
+    walk(node, [&](Node& m, Node*, int) { m.color = c; });
   }
   View v = currentView();
   V4 dir = col(v.frame, 2);
@@ -387,7 +402,7 @@ void App::placeItem(const LibraryItem& it, std::optional<std::pair<double, doubl
   }
   if (geo) {
     auto f = field();
-    double dist = hit ? std::max(0.5, hit->t - 1) : (geoEdit.distance > 0 ? geoEdit.distance : 3);
+    double dist = hit ? std::max(0.5, hit->t - 1) : 3;
     std::array<double, 3> local{dot(dir, col(v.frame, 0)), dot(dir, col(v.frame, 1)), dot(dir, col(v.frame, 2))};
     auto r = shoot(f, v.eye, v.frame, local, dist, quality.geoMaxStep * 0.5);
     auto a = makeAnchor(*ev, world, r.pos, r.frame);
@@ -403,9 +418,9 @@ void App::placeItem(const LibraryItem& it, std::optional<std::pair<double, doubl
   } else {
     node.xf.pos = screen ? v.eye + dir * editCam.distance : editCam.target;
   }
-  std::string id = node.id;
+  std::string nid = node.id;
   root.children.push_back(std::move(node));
-  selection = {id};
+  selection = {nid};
   commit();
 }
 
@@ -447,12 +462,98 @@ void App::rotateNodes(const std::vector<std::string>& ids, const M4& q) {
     Node* n = findNode(root, id);
     if (!n || id == root.id) continue;
     M4 pr = parentWorldRotation(id, nullptr);
-    M4 local = mul(mul(transpose(pr), q), pr);  // rotation expressed in the parent frame
+    M4 local = mul(mul(transpose(pr), q), pr);
     if (n->anchor) {
       const M4& b = n->anchor->basis;
       n->xf.rot = orthonormalize(mul(mul(mul(transpose(b), local), b), n->xf.rot));
     } else n->xf.rot = orthonormalize(mul(local, n->xf.rot));
   }
+}
+
+/** Object axis projected into the visible 3D slice (zero if it points straight out of it). */
+V4 App::gizmoAxisDir(const std::string& id, int axis, const View& v) {
+  Node* n = findNode(root, id);
+  if (!n) return {0, 0, 0, 0};
+  V4 a = col(nodeWorldFrame(id), axis);
+  V4 out = (geo && n->anchor) ? col(n->anchor->basis, 3) : col(v.frame, 3);
+  V4 d = reject(a, normalize(out));
+  return length(d) > 0.2 ? normalize(d) : V4{0, 0, 0, 0};
+}
+
+static double segDist(double px, double py, double ax, double ay, double bx, double by) {
+  double vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+  double t = l2 > 0 ? clampd(((px - ax) * vx + (py - ay) * vy) / l2, 0, 1) : 0;
+  return std::hypot(px - ax - t * vx, py - ay - t * vy);
+}
+
+Gizmo App::gizmo() {
+  Gizmo g;
+  Node* n = selected();
+  if (mode != Mode::Edit || tool == Tool::Select || !n || n->id == root.id || modal != Modal::None) return g;
+  View v = currentView();
+  V4 c = nodeWorldPos(n->id);
+  if (!project(c, v, g.cx, g.cy)) return g;
+  double depth = std::max(0.3, dot(c - v.eye, col(v.frame, 2)));
+  g.worldLen = 95.0 * 2 * depth * tanHalf() / vpH;
+  g.visible = true;
+  std::vector<int> vis;
+  for (int a = 0; a < 4; a++) {
+    auto& ax = g.axes[a];
+    ax.axis = a;
+    ax.dir = gizmoAxisDir(n->id, a, v);
+    if (length(ax.dir) < 0.5) continue;
+    if (!project(c + ax.dir * g.worldLen, v, ax.ex, ax.ey)) continue;
+    if (std::hypot(ax.ex - g.cx, ax.ey - g.cy) < 8) continue;  // pointing at the camera
+    ax.visible = true;
+    vis.push_back(a);
+  }
+  if (tool == Tool::Rotate) {
+    double r = g.worldLen * 0.85;
+    for (size_t i = 0; i < vis.size(); i++)
+      for (size_t j = i + 1; j < vis.size(); j++) {
+        Gizmo::Ring ring;
+        ring.a = vis[i]; ring.b = vis[j];
+        ring.u = g.axes[vis[i]].dir;
+        V4 v2 = reject(g.axes[vis[j]].dir, ring.u);
+        if (length(v2) < 0.2) continue;
+        ring.v = normalize(v2);
+        bool ok = true;
+        for (int k = 0; k <= 64 && ok; k++) {
+          double t = k / 64.0 * 2 * PI, sx, sy;
+          ok = project(c + (ring.u * std::cos(t) + ring.v * std::sin(t)) * r, v, sx, sy);
+          ring.pts.push_back({sx, sy});
+        }
+        if (!ok) continue;
+        double ux, uy, wx, wy;
+        project(c + ring.u * r, v, ux, uy);
+        project(c + ring.v * r, v, wx, wy);
+        double cr = (ux - g.cx) * (wy - g.cy) - (uy - g.cy) * (wx - g.cx);
+        ring.orient = cr >= 0 ? 1 : -1;
+        g.rings.push_back(ring);
+      }
+  }
+  // hover
+  if (gizmoHandle_ >= 0) g.hot = gizmoHandle_;
+  else {
+    double best = 9;
+    if (tool == Tool::Move) {
+      if (std::hypot(lastMx_ - g.cx, lastMy_ - g.cy) < 10) { g.hot = 4; best = 0; }
+      for (int a = 0; a < 4; a++) {
+        if (!g.axes[a].visible) continue;
+        double d = segDist(lastMx_, lastMy_, g.cx, g.cy, g.axes[a].ex, g.axes[a].ey);
+        if (d < best && std::hypot(lastMx_ - g.cx, lastMy_ - g.cy) > 10) { best = d; g.hot = a; }
+      }
+    } else {
+      for (size_t r = 0; r < g.rings.size(); r++) {
+        auto& p = g.rings[r].pts;
+        for (size_t k = 0; k + 1 < p.size(); k++) {
+          double d = segDist(lastMx_, lastMy_, p[k].first, p[k].second, p[k + 1].first, p[k + 1].second);
+          if (d < best) { best = d; g.hot = 10 + (int)r; }
+        }
+      }
+    }
+  }
+  return g;
 }
 
 void App::captureOrig() {
@@ -479,12 +580,12 @@ void App::confirmModal() { if (modal != Modal::None) { modal = Modal::None; comm
 void App::cancelModal() { if (modal != Modal::None) { restoreOrig(); modal = Modal::None; rebuild(); } }
 
 std::string App::transformHint() const {
-  static const char* ax[3] = {"screen-right", "screen-up", "depth"};
   std::string a;
-  for (int x : modalAxes) a += std::string(a.empty() ? "" : "+") + ax[x];
+  for (int x : modalAxes) a += AXIS[x];
   switch (modal) {
-    case Modal::Grab: return "Grab" + (a.empty() ? std::string(" in screen plane") : " along " + a) + " | X/Y/Z: screen-right / screen-up / depth | click/Enter confirm, Esc/RMB cancel";
-    case Modal::Rotate: return std::string("Rotate ") + (a.empty() ? "about view axis" : "about " + a) + " | X/Y/Z: axis in camera space | click/Enter confirm, Esc/RMB cancel";
+    case Modal::Grab: return "Grab" + (a.empty() ? std::string(" in screen plane") : " along object " + a) + " | X/Y/Z/W: object axis | click/Enter confirm, Esc/RMB cancel";
+    case Modal::Rotate: return "Rotate" + (a.empty() ? std::string(" in screen plane") : a.size() == 1 ? " about object " + a : " in object plane " + a) +
+                               " | X/Y/Z: about axis, two keys (e.g. X W): plane | click/Enter confirm, Esc/RMB cancel";
     case Modal::Scale: return "Scale | click/Enter confirm, Esc/RMB cancel";
     default: return "";
   }
@@ -498,25 +599,37 @@ void App::applyModal() {
   std::vector<std::string> ids;
   for (auto& [id, o] : orig_) ids.push_back(id);
   if (modal == Modal::Grab) {
-    // all movement stays in the visible slice: combinations of right / up / forward only
     for (auto& [id, o] : orig_) {
-      double depth = std::max(0.5, std::abs(dot(o.xf.pos - v.eye, fwd)));
+      V4 c = nodeWorldPos(id);
+      double depth = std::max(0.5, std::abs(dot(c - v.eye, fwd)));
       double k = 2 * depth * tanHalf() / vpH;
       V4 delta = right * (dx * k) - up * (dy * k);
       if (modalAxes.size() == 1) {
-        int a = modalAxes[0];
-        V4 axis = a == 0 ? right : a == 1 ? up : fwd;
-        delta = axis * ((a == 1 ? -dy : a == 2 ? -dy : dx) * k);
+        V4 axis = gizmoAxisDir(id, modalAxes[0], v);
+        double sx0, sy0, sx1, sy1;
+        if (length(axis) > 0.5 && project(c, v, sx0, sy0) && project(c + axis, v, sx1, sy1)) {
+          double ax = sx1 - sx0, ay = sy1 - sy0, l2 = ax * ax + ay * ay;
+          delta = l2 > 1e-6 ? axis * ((dx * ax + dy * ay) / l2) : axis * (dx * k);
+        } else delta = {0, 0, 0, 0};
       }
       translateNodes({id}, delta);
     }
   } else if (modal == Modal::Rotate) {
     double ang = dx * 0.01;
-    M4 q;
-    if (modalAxes.empty() || modalAxes[0] == 2) q = rotationInPlane(right, up, -ang);  // about depth axis
-    else if (modalAxes[0] == 0) q = rotationInPlane(up, fwd, ang);                      // about screen-right
-    else q = rotationInPlane(fwd, right, ang);                                          // about screen-up
-    rotateNodes(ids, q);
+    for (auto& id : ids) {
+      M4 q;
+      if (modalAxes.empty()) q = rotationInPlane(right, up, -ang);
+      else {
+        int a, b;
+        if (modalAxes.size() >= 2) { a = modalAxes[0]; b = modalAxes[1]; }
+        else { int x = modalAxes[0]; a = x == 0 ? 1 : 0; b = x == 2 ? 1 : x == 3 ? 1 : 2; if (x == 1) { a = 2; b = 0; } }
+        V4 u = gizmoAxisDir(id, a, v), w = gizmoAxisDir(id, b, v);
+        w = reject(w, u);
+        if (length(u) < 0.5 || length(w) < 0.2) continue;
+        q = rotationInPlane(u, normalize(w), ang);
+      }
+      rotateNodes({id}, q);
+    }
   } else if (modal == Modal::Scale) {
     for (auto& [id, o] : orig_) if (Node* n = findNode(root, id)) n->xf.scale = std::max(0.01, o.xf.scale * std::exp(dx * 0.005));
   }
@@ -534,10 +647,14 @@ void App::handleKey(int key, bool shift, bool ctrl) {
     if (key == GLFW_KEY_R && !geo) playerCam.reset4();
     return;
   }
+  if (drag_ == Drag::Fly) return;  // WASD are flying keys while RMB is held
   if (modal != Modal::None) {
-    int ax = key == GLFW_KEY_X ? 0 : key == GLFW_KEY_Y ? 1 : key == GLFW_KEY_Z ? 2 : -1;
-    if (ax >= 0) { modalAxes = (modalAxes.size() == 1 && modalAxes[0] == ax) ? std::vector<int>{} : std::vector<int>{ax}; applyModal(); }
-    else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) confirmModal();
+    int ax = key == GLFW_KEY_X ? 0 : key == GLFW_KEY_Y ? 1 : key == GLFW_KEY_Z ? 2 : key == GLFW_KEY_W ? 3 : -1;
+    if (ax >= 0) {
+      if (modal == Modal::Rotate) modalAxes = (modalAxes.size() >= 2 || (modalAxes.size() == 1 && modalAxes[0] == ax)) ? std::vector<int>{ax} : (modalAxes.push_back(ax), modalAxes);
+      else modalAxes = (modalAxes.size() == 1 && modalAxes[0] == ax) ? std::vector<int>{} : std::vector<int>{ax};
+      applyModal();
+    } else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) confirmModal();
     else if (key == GLFW_KEY_ESCAPE) cancelModal();
     return;
   }
@@ -563,13 +680,25 @@ void App::handleKey(int key, bool shift, bool ctrl) {
   }
 }
 
+void App::flyGeoEdit(const InputState& in, double dt) {
+  // game-like editor camera in the Geodesic view: hold RMB, mouse looks, WASD/Space/Shift move, Q/E roll
+  auto f = field();
+  if (in.dx != 0 || in.dy != 0) geoEdit.look(in.dx, in.dy);
+  if (!in.keyDown) return;
+  auto K = [&](int k) { return in.keyDown(k) ? 1.0 : 0.0; };
+  double sp = editFlySpeed * dt;
+  double mr = K(GLFW_KEY_D) - K(GLFW_KEY_A), mf = K(GLFW_KEY_W) - K(GLFW_KEY_S);
+  double mu = K(GLFW_KEY_SPACE) - std::max(K(GLFW_KEY_LEFT_SHIFT), K(GLFW_KEY_RIGHT_SHIFT));
+  double roll = K(GLFW_KEY_E) - K(GLFW_KEY_Q);
+  if (roll != 0) geoEdit.roll(roll * 1.2 * dt);
+  if (mr != 0 || mf != 0 || mu != 0) geoEdit.move(f, {mr * sp, mu * sp, mf * sp}, quality.geoMaxStep * 0.5, nullptr);
+}
+
 void App::handleInput(const InputState& in, double dt) {
   lastMx_ = in.mx;
   lastMy_ = in.my;
   if (mode == Mode::Explore) { updateExplore(in, dt); return; }
   bool g = geo && geoEdit.valid;
-  auto f = g ? field() : SurfaceField{};
-  // --- modal transform (G/R/S) ---
   if (modal != Modal::None) {
     modalX_ = in.mx; modalY_ = in.my;
     if (in.dx != 0 || in.dy != 0) applyModal();
@@ -581,66 +710,80 @@ void App::handleInput(const InputState& in, double dt) {
   for (int b = 0; b < 3; b++) {
     if (!in.pressed[b] || !in.vpHovered || drag_ != Drag::None) continue;
     pressX_ = in.mx; pressY_ = in.my; dragMoved_ = false; dragButton_ = b;
+    if (g && b == 1) { drag_ = Drag::Fly; wantCapture = true; continue; }
     if (b == 1 || b == 2 || (b == 0 && in.alt)) {
       drag_ = in.shift ? Drag::Pan : in.ctrl ? Drag::Zoom : (in.alt && b != 0) ? Drag::Rot4 : Drag::Orbit;
-    } else if (b == 0 && (tool == Tool::Move || tool == Tool::Rotate)) {
-      // press on an object selects it (keeping a selected ancestor group), then the drag moves/rotates
+      continue;
+    }
+    // left button: gizmo handle, object body (Move tool) or click-select
+    Gizmo gz = gizmo();
+    if (gz.visible && gz.hot >= 0) {
+      gizmoHandle_ = gz.hot;
+      gizmoAtPress_ = gz;
+      drag_ = Drag::Gizmo;
+      captureOrig();
+      modalView_ = currentView();
+      continue;
+    }
+    drag_ = Drag::Click;
+    if (tool == Tool::Move) {
       auto hit = pick(in.mx, in.my);
       if (hit && hit->node) {
         std::string id = hit->node->id;
         bool keep = false;
         for (auto& s : selection) if (s == id || isAncestor(root, s, id)) keep = true;
         if (!keep) selection = {id};
-      }
-      if (hit && hit->node && !selection.empty()) {
         captureOrig();
         modalView_ = currentView();
-        drag_ = tool == Tool::Move ? Drag::ToolMove : Drag::ToolRotate;
-      } else drag_ = Drag::None;
-    } else if (b == 0) {
-      drag_ = Drag::None;  // click-select handled on release
-      dragButton_ = 0;
+        drag_ = Drag::FreeMove;
+      }
     }
   }
-  if (in.wheel != 0 && in.vpHovered) { if (g) geoEdit.zoom(-in.wheel); else editCam.zoom(-in.wheel); }
+  if (in.wheel != 0 && in.vpHovered) {
+    if (g) editFlySpeed = clampd(editFlySpeed * std::exp(in.wheel * 0.15), 0.2, 30);
+    else editCam.zoom(-in.wheel);
+  }
 
   // --- continue drags ---
-  if (drag_ != Drag::None && in.down[dragButton_]) {
+  if (drag_ != Drag::None && dragButton_ >= 0 && in.down[dragButton_]) {
     if (std::abs(in.mx - pressX_) + std::abs(in.my - pressY_) > 3) dragMoved_ = true;
+    const View& v = modalView_;
     switch (drag_) {
-      case Drag::Orbit: g ? geoEdit.orbit(in.dx, in.dy) : editCam.orbit(in.dx, in.dy); break;
-      case Drag::Pan: if (g) geoEdit.pan(f, in.dx, in.dy, quality.geoMaxStep * 0.5); else editCam.pan(in.dx, in.dy); break;
-      case Drag::Zoom: g ? geoEdit.zoom(in.dy * 0.05) : editCam.zoom(in.dy * 0.05); break;
-      case Drag::Rot4:
-        if (g) geoEdit.roll(in.dx * 0.005);
-        else { editCam.rotate4(0, 3, in.dx * 0.006); editCam.rotate4(1, 3, -in.dy * 0.006); }
-        break;
-      case Drag::ToolMove: {
-        // camera-relative move restricted to the visible slice; Shift = along depth
+      case Drag::Orbit: if (dragMoved_) editCam.orbit(in.dx, in.dy); break;
+      case Drag::Pan: editCam.pan(in.dx, in.dy); break;
+      case Drag::Zoom: editCam.zoom(in.dy * 0.05); break;
+      case Drag::Rot4: editCam.rotate4(0, 3, in.dx * 0.006); editCam.rotate4(1, 3, -in.dy * 0.006); break;
+      case Drag::Fly: flyGeoEdit(in, dt); break;
+      case Drag::FreeMove: {
         if (in.dx == 0 && in.dy == 0) break;
-        const View& v = modalView_;
         V4 right = col(v.frame, 0), up = col(v.frame, 1), fwd = col(v.frame, 2);
         for (auto& [id, o] : orig_) {
-          Node* n = findNode(root, id);
-          if (!n) continue;
-          double depth = std::max(0.5, std::abs(dot(n->xf.pos - v.eye, fwd)));
+          double depth = std::max(0.5, std::abs(dot(nodeWorldPos(id) - v.eye, fwd)));
           double k = 2 * depth * tanHalf() / vpH;
-          V4 delta = in.shift ? fwd * (-in.dy * k * 2) : right * (in.dx * k) - up * (in.dy * k);
-          translateNodes({id}, delta);
+          translateNodes({id}, in.shift ? fwd * (-in.dy * k * 2) : right * (in.dx * k) - up * (in.dy * k));
         }
         rebuild();
         break;
       }
-      case Drag::ToolRotate: {
+      case Drag::Gizmo: {
         if (in.dx == 0 && in.dy == 0) break;
-        const View& v = modalView_;
-        V4 right = col(v.frame, 0), up = col(v.frame, 1), fwd = col(v.frame, 2);
+        Gizmo& gz = gizmoAtPress_;
         std::vector<std::string> ids;
         for (auto& [id, o] : orig_) ids.push_back(id);
-        if (in.shift) rotateNodes(ids, rotationInPlane(right, up, -in.dx * 0.01));  // roll about depth
-        else {
-          rotateNodes(ids, rotationInPlane(right, fwd, -in.dx * 0.01));            // turn about screen-up
-          rotateNodes(ids, rotationInPlane(up, fwd, in.dy * 0.01));                // tilt about screen-right
+        if (gizmoHandle_ <= 3) {  // arrow: move along the (projected) object axis
+          auto& ax = gz.axes[gizmoHandle_];
+          double sx = ax.ex - gz.cx, sy = ax.ey - gz.cy, l2 = sx * sx + sy * sy;
+          if (l2 > 1) translateNodes(ids, ax.dir * ((in.dx * sx + in.dy * sy) / l2 * gz.worldLen));
+        } else if (gizmoHandle_ == 4) {  // centre: free move in the screen plane (Shift: along depth)
+          double k = gz.worldLen / 95.0;
+          translateNodes(ids, in.shift ? col(v.frame, 2) * (-in.dy * k * 2) : col(v.frame, 0) * (in.dx * k) - col(v.frame, 1) * (in.dy * k));
+        } else {  // ring: rotate in the plane of two object axes, by the angle swept on screen
+          auto& ring = gz.rings[gizmoHandle_ - 10];
+          double a0 = std::atan2(in.my - in.dy - gz.cy, in.mx - in.dx - gz.cx), a1 = std::atan2(in.my - gz.cy, in.mx - gz.cx);
+          double da = a1 - a0;
+          if (da > PI) da -= 2 * PI;
+          if (da < -PI) da += 2 * PI;
+          rotateNodes(ids, rotationInPlane(ring.u, ring.v, da * ring.orient));
         }
         rebuild();
         break;
@@ -650,13 +793,19 @@ void App::handleInput(const InputState& in, double dt) {
   }
   // --- release ---
   if (dragButton_ >= 0 && in.released[dragButton_]) {
-    if ((drag_ == Drag::ToolMove || drag_ == Drag::ToolRotate) && dragMoved_) commit();
-    bool click = !dragMoved_ && dragButton_ == 0 && (drag_ == Drag::None || drag_ == Drag::ToolMove || drag_ == Drag::ToolRotate);
+    if ((drag_ == Drag::FreeMove || drag_ == Drag::Gizmo) && dragMoved_) commit();
+    if (drag_ == Drag::Fly) wantRelease = true;
+    // MMB click (no drag) in the Full 4D view: set the centre of rotation
+    if (drag_ == Drag::Orbit && dragButton_ == 2 && !dragMoved_ && !g) {
+      if (auto hit = pick(in.mx, in.my)) { editCam.setPivot(hit->pos); toast("Centre of rotation set"); }
+      else { editCam.pivotSet = false; toast("Centre of rotation reset to the view centre"); }
+    }
+    bool click = !dragMoved_ && dragButton_ == 0 && (drag_ == Drag::Click || drag_ == Drag::FreeMove);
     if (click && in.vpHovered) {
       auto hit = pick(in.mx, in.my);
       std::string id = hit && hit->node ? hit->node->id : "";
       if (!id.empty() && !in.shift && selection.size() == 1) {
-        if (selection[0] == id) {  // click again: walk up to the parent group
+        if (selection[0] == id) {
           Node* p = findParent(root, id);
           if (p && p->id != root.id) id = p->id;
         } else if (selection[0] != root.id && isAncestor(root, selection[0], id)) id = selection[0];
@@ -669,6 +818,7 @@ void App::handleInput(const InputState& in, double dt) {
     }
     drag_ = Drag::None;
     dragButton_ = -1;
+    gizmoHandle_ = -1;
   }
 }
 
@@ -685,32 +835,31 @@ void App::updateExplore(const InputState& in, double dt) {
   double mr = K(GLFW_KEY_D) - K(GLFW_KEY_A), mf = K(GLFW_KEY_W) - K(GLFW_KEY_S);
   double mu = K(GLFW_KEY_SPACE) - std::max(K(GLFW_KEY_LEFT_SHIFT), K(GLFW_KEY_RIGHT_SHIFT));
   double ma = K(GLFW_KEY_E) - K(GLFW_KEY_Q);
+  double r = avatarRadius;
   if (geo && geoPlayer.valid) {
     auto f = field();
     if (ma != 0) geoPlayer.roll(ma * rot);
     if (mr != 0 || mf != 0 || mu != 0)
       geoPlayer.move(f, {mr * sp, mu * sp, mf * sp}, quality.geoMaxStep * 0.5,
-                     collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalGeo(to).d < 0.08; }) : nullptr);
+                     collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalGeo(to).d < r; }) : nullptr);
   } else {
     double zx = K(GLFW_KEY_Z) - K(GLFW_KEY_X), cv = K(GLFW_KEY_C) - K(GLFW_KEY_V);
     if (zx != 0) playerCam.rotate4AroundEye(2, 3, zx * rot);
     if (cv != 0) playerCam.rotate4AroundEye(0, 3, cv * rot);
     if (mr != 0 || mf != 0 || mu != 0 || ma != 0)
       playerCam.move({mr * sp, mu * sp, mf * sp, ma * sp},
-                     collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalFull(to).d < 0.08; }) : nullptr);
+                     collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalFull(to).d < r; }) : nullptr);
   }
 }
 
 // ============================================================ rendering
 View App::thumbnailView() {
-  // Outside view of the world in a 3D slice that contains the world centre and the camera,
-  // spanned by (camera right, outward normal, camera forward): a "map" seen from above.
   View cur = currentView();
   auto bounds = computeBounds(root, reg);
   V4 c{0, 0, 0, 0};
   double R = 5;
   auto it = bounds.find(world);
-  if (it != bounds.end() && std::isfinite(it->second.r)) { c = it->second.c; R = std::max(0.5, it->second.r); }
+  if (it != bounds.end() && std::isfinite(it->second.r)) { c = nodeWorldPos(world); R = std::max(0.5, it->second.r); }
   else c = cur.eye - col(cur.frame, 3) * 2;
   V4 out = normalize(cur.eye - c);
   if (length(out) < 0.5) out = col(cur.frame, 3);
@@ -719,7 +868,7 @@ View App::thumbnailView() {
   V4 ana = normalize(reject(reject(reject(col(cur.frame, 1), out), right), fwd));
   if (length(ana) < 0.5) ana = completeBasis({out, right, fwd})[3];
   FullCamera cam;
-  cam.rot4 = fromCols(right, out, fwd, ana);  // local X=right, Y=outward ("up"), Z=forward
+  cam.rot4 = fromCols(right, out, fwd, ana);
   cam.yaw = thumbYaw;
   cam.pitch = thumbPitch;
   cam.target = c;
@@ -727,19 +876,18 @@ View App::thumbnailView() {
   return cam.view();
 }
 
-V4 App::thumbnailMarker() { return currentView().eye; }
-
 void App::renderFrame() {
   if (!renderer) return;
   View v = currentView();
-  bool moving = (now - lastChange_) < 0.25 || drag_ != Drag::None || modal != Modal::None || mode == Mode::Explore;
+  bool interacting = drag_ != Drag::None && drag_ != Drag::Click;
+  bool moving = (now - lastChange_) < 0.25 || interacting || modal != Modal::None || mode == Mode::Explore;
   float scale = quality.resolutionScale * (moving ? quality.motionScale : 1.0f);
   std::ostringstream key;
   key.precision(9);
   for (double x : v.eye) key << x << ',';
   for (double x : v.frame) key << x << ',';
   key << version_ << '|' << geo << (int)mode << '|' << vpW << 'x' << vpH << '|' << scale << '|' << fov << '|' << quality.maxSteps
-      << quality.shadows << quality.ao << quality.geoMaxStep << quality.geoProjectIters << showPlayerMarker << '|';
+      << quality.shadows << quality.ao << quality.geoMaxStep << quality.geoProjectIters << showPlayerMarker << showOwnBody << '|';
   for (auto& s : selection) key << s << ';';
 
   FrameParams fp;
@@ -749,24 +897,31 @@ void App::renderFrame() {
   fp.fovDeg = fov;
   fp.quality = &quality;
   fp.light = light;
-  // player marker: in Edit mode the Explore player is shown as a sphere,
-  // projected into the visible slice (Full 4D) / at its surface position (Geodesic)
-  if (mode == Mode::Edit && showPlayerMarker && (fp.geo ? geoPlayer.valid : playerPlaced)) {
+  fp.skyCol = worldColor();
+  // the player's body: always in Explore (you can see yourself / your shadow, e.g. light
+  // wrapping around a closed world); in Edit it marks where the player is
+  float r = (float)avatarRadius;
+  if (mode == Mode::Explore && showOwnBody) {
+    fp.marker = v.eye;
+    fp.markerFwd = col(v.frame, 2);
+    fp.markerCol = {0.95f, 0.8f, 0.2f, r};
+    fp.markerSkip = r * 3;  // the primary ray starts inside the body
+  } else if (showPlayerMarker && (fp.geo ? geoPlayer.valid : playerPlaced)) {
     View pv = playerView();
     V4 ana = col(v.frame, 3);
     fp.marker = fp.geo ? pv.eye : pv.eye - ana * dot(pv.eye - v.eye, ana);
-    // hidden when the camera is (almost) at the player position, e.g. right after leaving Explore
-    if (length(fp.marker - v.eye) > 0.8) fp.markerCol = {1.0f, 0.85f, 0.2f, 0.22f};
+    V4 f = col(pv.frame, 2);
+    fp.markerFwd = fp.geo ? f : normalize(reject(f, ana));
+    if (length(fp.marker - v.eye) > 0.8) fp.markerCol = {1.0f, 0.85f, 0.2f, r};
     for (double x : pv.eye) key << x << ',';
   }
   std::string k = key.str();
   if (k != lastKey_) {
-    if (k.substr(0, k.find('|')) != lastKey_.substr(0, lastKey_.find('|'))) lastChange_ = now;  // camera moved
+    if (k.substr(0, k.find('|')) != lastKey_.substr(0, lastKey_.find('|'))) lastChange_ = now;
     lastKey_ = k;
     fp.scale = scale;
     renderer->render(mainRT, (int)vpW, (int)vpH, root, reg, world, highlightSet(), fp);
   }
-  // outside thumbnail while in the Geodesic view
   if (fp.geo && showThumbnail) {
     View tv = thumbnailView();
     FrameParams tp;
@@ -776,7 +931,8 @@ void App::renderFrame() {
     tp.fovDeg = 40;
     tp.quality = &quality;
     tp.light = light;
-    tp.marker = thumbnailMarker();
+    tp.marker = v.eye;
+    tp.markerFwd = col(v.frame, 2);
     double R = 3;
     auto bounds = computeBounds(root, reg);
     if (auto it = bounds.find(world); it != bounds.end() && std::isfinite(it->second.r)) R = it->second.r;

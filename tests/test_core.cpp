@@ -131,6 +131,67 @@ int main() {
     }
   }
 
+  // modifier-built shapes equal the old primitive recipes; groups can be extruded too
+  {
+    const char* ids[] = {"cube", "sphere", "torus", "tesseract", "duocylinder", "spheritorus", "tiger", "cylinder"};
+    for (const char* id : ids) {
+      Node shape = makeShape(id, id);
+      Node r = makeGroup(BoolOp::Union, {shape});
+      SceneEvaluator ev(r, reg, "");
+      unsigned seed = 7;
+      auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / double(1 << 24) * 6 - 3; };
+      for (int k = 0; k < 200; k++) {
+        V4 p{rnd(), rnd(), rnd(), rnd()};
+        double ref = evalPrimitive(P(id), p);
+        int dim = primitiveDim(P(id));
+        for (int a = dim; a < 4; a++) ref = opExtrudeD(ref, std::abs(p[a]) - 0.05);
+        CLOSE(ev.evalFull(p).d, ref, 1e-9);
+      }
+    }
+    // a group of two squares extruded along Z == two boxes
+    Node sq1 = makeShape("square", "a", {-2, 0, 0, 0}), sq2 = makeShape("square", "b", {2, 0, 0, 0});
+    sq1.round.reset(); sq2.round.reset();
+    Node g = makeGroup(BoolOp::Union, {sq1, sq2});
+    Modifier ex; ex.type = MOD_EXTRUDE; ex.length = 2;
+    g.mods.push_back(ex);
+    CHECK(nodeDim(g, reg) == 3, "group dim %d", nodeDim(g, reg));
+    Node r = makeGroup(BoolOp::Union, {g});
+    SceneEvaluator ev(r, reg, "");
+    CLOSE(ev.evalFull({2, 0, 0, 0}).d, -0.05, 1e-9);   // thin in W only
+    CLOSE(ev.evalFull({2, 0, 3, 0}).d, 2, 1e-9);       // 1 beyond the extruded Z extent
+    CLOSE(ev.evalFull({-2, 0, 0.99, 0}).d, -0.01, 1e-9);
+    auto cs = compileScene(r, reg, "", false);
+    CHECK(cs.glsl.find("opExtrude(d, abs(t") != std::string::npos, "group extrude in GLSL");
+  }
+
+  // absolute rotation angles <-> matrix
+  {
+    unsigned seed = 3;
+    auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / double(1 << 24) * 300 - 150; };
+    for (int k = 0; k < 200; k++) {
+      double a[6];
+      for (double& x : a) x = rnd() * 0.55;
+      M4 m = rotationFromAngles(a);
+      auto b = anglesFromRotation(m);
+      double bb[6];
+      for (int i = 0; i < 6; i++) bb[i] = b[i];
+      M4 m2 = rotationFromAngles(bb);
+      double err = 0;
+      for (int i = 0; i < 16; i++) err = std::max(err, std::abs(m[i] - m2[i]));
+      CHECK(err < 1e-9, "angle round trip %g", err);
+    }
+  }
+
+  // library: built-in folders hold modifier-built shapes
+  {
+    auto fs = builtinFolders();
+    CHECK(fs.size() == 3 && fs[1].objects.size() >= 5 && fs[2].objects.size() >= 9, "builtin folders");
+    LibraryObject o = makeLibraryObject(makeShape("torus", "T"), reg, "My torus");
+    LibraryFolder f{"custom", "Custom", false, {o}};
+    auto imp = importLibraryJson(libraryToJson({f}));
+    CHECK(imp.folders.size() == 1 && imp.folders[0].objects[0].name == "My torus" && imp.folders[0].objects[0].node.mods.size() == 3, "library json");
+  }
+
   // full camera slice W and frame round trip
   {
     FullCamera cam;

@@ -29,6 +29,9 @@ struct FrameParams {
   V4 light{0.5, 0.8, -0.35, 0.25};
   V4 marker{0, 0, 0, 0};
   std::array<float, 4> markerCol{0, 0, 0, 0};  // rgb, radius (0 = hidden)
+  V4 markerFwd{0, 0, 1, 0};                     // facing direction (draws a small "nose")
+  float markerSkip = 0;                         // primary rays ignore the body for t < skip (first person)
+  std::array<float, 3> skyCol{0.35f, 0.4f, 0.55f};  // Geodesic sky = world surface colour
 };
 
 class Renderer {

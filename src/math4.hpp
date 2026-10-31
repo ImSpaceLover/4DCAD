@@ -85,6 +85,30 @@ inline M4 rotationFromAngles(const double* deg) {
     if (deg[k] != 0) m = mul(m, planeRotation(PLANES[k][0], PLANES[k][1], deg[k] * PI / 180));
   return m;
 }
+/**
+ * Inverse of rotationFromAngles: 6 plane angles (degrees, XY XZ XW YZ YW ZW) with
+ * M = R_XY R_XZ R_XW R_YZ R_YW R_ZW. Derived by peeling the rotations off in order
+ * (first column fixes XY/XZ/XW, then the remaining 3D rotation fixes YZ/YW/ZW).
+ */
+inline std::array<double, 6> anglesFromRotation(const M4& M) {
+  auto el = [](const M4& m, int row, int c) { return m[c * 4 + row]; };
+  std::array<double, 6> a{};
+  double m0 = el(M, 0, 0), m1 = el(M, 1, 0), m2 = el(M, 2, 0), m3 = el(M, 3, 0);
+  double a0 = std::atan2(m1, m0);
+  double x0 = std::hypot(m0, m1);
+  double a1 = std::atan2(m2, x0);
+  double a2 = std::atan2(m3, std::hypot(x0, m2));
+  M4 K = mul(transpose(mul(mul(planeRotation(0, 1, a0), planeRotation(0, 2, a1)), planeRotation(0, 3, a2))), M);
+  double n1 = el(K, 1, 1), n2 = el(K, 2, 1), n3 = el(K, 3, 1);
+  double a3 = std::atan2(n2, n1);
+  double a4 = std::atan2(n3, std::hypot(n1, n2));
+  M4 L = mul(transpose(mul(planeRotation(1, 2, a3), planeRotation(1, 3, a4))), K);
+  double a5 = std::atan2(el(L, 3, 2), el(L, 2, 2));
+  double r[6] = {a0, a1, a2, a3, a4, a5};
+  for (int i = 0; i < 6; i++) a[i] = r[i] * 180 / PI;
+  return a;
+}
+
 inline M4 orthonormalize(const M4& m) {
   V4 c[4] = {col(m, 0), col(m, 1), col(m, 2), col(m, 3)};
   for (int i = 0; i < 4; i++) {

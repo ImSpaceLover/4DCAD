@@ -52,55 +52,51 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 
 **Tab** switches between Edit and Explore. **V** (or the toolbar) switches between Full 4D and Geodesic 3D.
 
-**Edit mode (Blender-like)**
-- **Navigation:** RMB/MMB drag orbits, Shift+drag pans, the wheel or Ctrl+drag zooms, and Alt+drag rotates the view into W (Geodesic: roll).
+**Edit mode, Full 4D view (Blender-like)**
+- **Navigation:** RMB/MMB drag orbits. A **middle-click** on an object sets the **centre of rotation** (shown as a small crosshair; middle-click empty space to reset it). Shift+drag pans, the wheel or Ctrl+drag zooms, and Alt+drag rotates the view into W.
+- **W slider** (left edge of the viewport): moves the visible 3D slice along the camera's 4th axis.
 - **Standard views:** 1 / 3 / 7 / 9 give front / right / top / along W. Shift+W resets the 4D orientation.
-- **W slider** (left edge of the viewport): moves the visible 3D slice along the camera's 4th axis. The "W=0" button resets it.
+
+**Edit mode, Geodesic view (game-like):** hold **RMB** to look around with the mouse. While holding it, WASD flies along the surface, Space/Shift move up/down, Q/E roll, and the wheel sets fly speed. The left mouse button stays free for selecting and the gizmo.
+
+**Editing**
 - **Tools:** **Q** Select, **W** Move, **E** Rotate.
-  - Move and rotate work relative to the camera and **always stay inside the visible slice**.
-  - Move: drag an object across the screen; Shift moves it along the depth axis.
-  - Rotate: drag horizontally or vertically to turn it; Shift rolls it.
-  - Objects attached to a world surface slide along that surface.
-- **Blender-style transforms:** **G** grab, **R** rotate, **S** scale. Then X / Y / Z constrain to screen-right / screen-up / depth. Click or Enter confirms; Esc or RMB cancels.
+- **Gizmo:** it shows the selected object's **own X / Y / Z / W axes**, projected into the visible slice. The axes stay visible however the 4D view is turned; an axis pointing straight out of the slice is hidden.
+  - Move: drag an arrow to move along that axis. Drag the centre square, or the object itself, to move in the screen plane (Shift: along depth).
+  - Rotate: drag a ring to rotate in the plane of two object axes. Ring colours: XY blue, XZ green, YZ red, planes with W purple.
+- **Blender-style transforms:** **G** grab, **R** rotate, **S** scale, then X / Y / Z / W = object axis. For R, one key rotates about that axis and two keys (e.g. `R X W`) rotate in that plane. Click or Enter confirms; Esc or RMB cancels.
+- **Properties:** rotation is shown as 6 absolute angles (XY XZ XW YZ YW ZW).
 - **Selection:** click selects (click again for the parent group), Shift+click multi-selects, A selects all, Esc deselects.
 - **Editing:** Shift+D duplicate, X/Del delete, Ctrl+G group, F focus, Ctrl+Z / Ctrl+Shift+Z undo / redo.
-- **Player sphere:** the yellow sphere is where the Explore player is.
-  - In Full 4D it is projected into the visible slice, and its label shows `dW`, its distance from the slice.
-  - In the Geodesic view it sits on the world surface.
-  - A line shows which way the player faces.
+- **Player sphere:** the yellow sphere with a "nose" shows where the Explore player is and which way it faces.
 
 **Explore mode (game-like)**
+- You always **start where the editor camera currently is**.
 - Click to capture the mouse. Esc releases it; Esc again returns to Edit.
 - WASD moves, Space/Shift move up/down, and the wheel sets speed.
 - Full 4D: Q/E move along W, Z/X turn into W, C/V turn sideways in W, R resets.
-- Geodesic: you move on the world's surface and Q/E roll. Collisions can be turned off in Quality.
-
-The player and the edit camera are separate, so switching modes doesn't move either one.
+- Geodesic: you move on the world's surface and Q/E roll.
+- **Your body** is part of the scene. It casts a shadow, and on closed worlds light comes back around so you can see yourself. On a hypersphere world every ray that misses everything returns to you, so the "sky" is your own back. Toggle it in View > Show own body.
 
 ## Editor
 
+* **Shapes are a point plus modifiers.** The modifier stack is applied top to bottom and works on any object or group:
+  * **Extrude**: adds the next axis (X → Y → Z → W). Finite length, infinite, or half-space.
+  * **Revolve**: adds the next axis by spinning an existing axis into it at a radius. R = 0 makes a disk/sphere; R > 0 makes a torus-like shape.
+  * **Rotate**: rotates the shape built so far within a plane (useful before a Revolve).
+  * **Mirror** and **Repeat** (spacing, copies; 0 = infinite).
+
+  Examples: Point → Extrude → Extrude → Extrude → Extrude is a tesseract. Point → Extrude → Revolve → Extrude (infinite) is an infinite rod. A whole group can be extruded or revolved into the next dimension.
 * **Library** (left):
-  * Built-in 0D–4D primitives, your own primitives, and saved objects.
-  * Drag an item into the viewport (it lands where the ray hits) or onto a tree row, or double-click it.
-  * Right-click an item to edit, export or delete it.
-  * In the Geodesic view, only ≤3D items can be placed, and they attach to the world surface.
-* **Scene tree** (right):
-  * Groups combine their children with union, intersection, subtraction (first child minus the rest) or a smooth version of each.
-  * Drag rows onto groups to move them in, onto objects to union with them, or onto row edges to reorder.
-  * Right-click a row to hide, duplicate, delete, ungroup or group it.
-  * "Save as library object" keeps the subtree for reuse; "Export object" writes it to a file.
-* **Properties**:
-  * name, primitive, colour, thickness (extent along unused axes), rounding, shell
-  * 4D position, scale, and rotation (drag in any of the 6 planes)
-  * modifiers: Mirror, and Repeat with spacing and count (0 = infinite)
-  * Use as world / Attach to / Detach from the world surface
-* **Primitive builder** (`+ Primitive`):
-  * Start from a point and add steps; each Extrude or Revolve adds the next axis (X → Y → Z → W).
-  * *Extrude*: finite length, infinite, or half-space.
-  * *Revolve*: spin an existing axis into the new axis at radius R. R = 0 gives a disk/sphere; R > 0 gives a torus-like shape.
-  * *Rotate*: turns the profile before a later Revolve.
-  * Rounding and shell are applied at the end. A live preview has W-slice and ZW sliders.
-  * Example chains: point → segment → square → cube → tesseract; point → segment → disk → rod.
+  * Built-in folders (Basic, 3D shapes, 4D shapes) are read-only. Their items are just points with modifiers, so you can tweak them after placing.
+  * "Save to library" (scene tree button or right-click) stores the selected object in **Custom**.
+  * **+ Folder** adds folders. Right-click folders and items to rename, move, export or delete.
+  * Drag items onto a folder to move them (built-ins are copied). Drag scene-tree rows onto a folder to save them there.
+  * Drag items into the viewport or onto tree rows to place them. In the Geodesic view only ≤3D items can be placed, and they attach to the world surface.
+* **Scene tree:**
+  * Boolean groups: union, intersection, subtraction (first child minus the rest) and smooth versions.
+  * Drag rows onto groups (into), onto objects (union with it) or onto row edges (reorder).
+* **Geodesic sky:** the sky takes the colour of the world surface you live on. An outside thumbnail shows the world from the outside with your position.
 
 ## Performance
 
@@ -118,14 +114,12 @@ The player and the edit camera are separate, so switching modes doesn't move eit
 * **Quality settings** (toolbar → Quality): resolution, resolution while moving,
   march steps, shadows, AO, geodesic step size.
 
-Limits: about 100 nodes per scene (OpenGL uniform limit), at most 4 modifiers
-are honoured by the bounding logic, and the tree can't nest deeper than the GLSL
-compiler allows.
+Limits: about 100 nodes per scene (OpenGL uniform limit).
 
 ## Code layout
 
 ```
-src/math4.hpp, primitives.*   4D maths, extrude/revolve recipes (CPU eval + GLSL emission)
+src/math4.hpp, primitives.*   4D maths (incl. rotation <-> plane angles), built-in shape recipes
 src/scene.*                   scene tree, JSON (de)serialisation, library objects
 src/evaluator.*               reference CPU SDF + bounding hyperspheres
 src/geodesic.*, surface.*     surface projection, frame transport, picking, anchoring
@@ -142,10 +136,11 @@ tests/                        core and app-level unit tests (ctest)
 * **Scenes** `.4dscene.json` (`format: "4dcad-scene"`): a tree of nodes. Each
   node has `xf: {pos[4], rotm[16], scale}`, `modifiers`, an optional `anchor`,
   and either leaf fields or group fields.
-  * Leaves: `prim`, `color`, `thickness`.
+  * Leaves: `prim` (always `point`; older files with other primitive types are converted), `color`, `thickness`, `round`, `shell`.
+  * `modifiers`: a list of `{type: extrude|revolve|rotate|mirror|repeat, ...}`, applied in order.
   * Groups: `op`, `k`, `children`.
   * Custom primitives are embedded in the file.
   * Files from the earlier browser version (6 rotation angles) still load.
-* **Primitives** `.4dprim.json`, **objects** `.4dobj.json`, and the **library** `.json`.
+* **Objects** `.4dobj.json` and the **library** `.json` (folders of objects). Old `.4dprim.json` primitives and v1 libraries are converted to point + modifier objects on import.
 * Your library and an autosave of the current scene live in `%APPDATA%\4DCAD`
   (Windows) or `~/.config/4dcad` (Linux).

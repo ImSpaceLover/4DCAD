@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include "math4.hpp"
 #include <sstream>
 #include <unordered_map>
 
@@ -31,14 +32,52 @@ float opSS(float a, inout vec4 ma, float b, vec4 mb, float k) {
 }
 )";
 
-static std::string modifierGLSL(const Modifier& m, const char* v) {
-  std::string a = std::string(v) + "." + C[m.axis];
-  if (m.type == 1) return "  " + a + " = abs(" + a + ");\n";
-  if (m.spacing <= 0) return "";
-  std::string s = glslFloat(m.spacing);
-  std::string r = m.count > 0 ? "clamp(floor(" + a + " / " + s + " + 0.5), " + glslFloat(-m.count) + ", " + glslFloat(m.count) + ")"
-                              : "floor(" + a + " / " + s + " + 0.5)";
-  return "  " + a + " -= " + s + " * " + r + ";\n";
+// Coordinate pass of a modifier stack (outermost first). Extrusions capture their
+// coordinate in t<k>; the distance pass (extrudeGLSL) applies them afterwards.
+static std::string modifierCoordsGLSL(const Node& n, const std::vector<ModAxis>& ax, const char* v, const std::string& tag) {
+  std::ostringstream o;
+  auto c = [&](int a) { return std::string(v) + "." + C[a]; };
+  for (int k = (int)n.mods.size() - 1; k >= 0; k--) {
+    const Modifier& m = n.mods[k];
+    if (!ax[k].valid) continue;
+    switch (m.type) {
+      case MOD_MIRROR: o << "  " << c(m.axis) << " = abs(" << c(m.axis) << ");\n"; break;
+      case MOD_REPEAT: {
+        if (m.spacing <= 0) break;
+        std::string a = c(m.axis), s = glslFloat(m.spacing);
+        std::string r = m.count > 0 ? "clamp(floor(" + a + " / " + s + " + 0.5), " + glslFloat(-m.count) + ", " + glslFloat(m.count) + ")"
+                                    : "floor(" + a + " / " + s + " + 0.5)";
+        o << "  " << a << " -= " << s << " * " << r << ";\n";
+        break;
+      }
+      case MOD_ROTATE: {
+        double ang = -m.angle * PI / 180;
+        o << "  " << v << "." << C[m.i] << C[m.j] << " = mat2(" << glslFloat(std::cos(ang)) << ", " << glslFloat(std::sin(ang)) << ", "
+          << glslFloat(-std::sin(ang)) << ", " << glslFloat(std::cos(ang)) << ") * " << v << "." << C[m.i] << C[m.j] << ";\n";
+        break;
+      }
+      case MOD_EXTRUDE:
+        if (m.mode != ExtrudeMode::Infinite) o << "  float t" << tag << k << " = " << c(ax[k].newAxis) << ";\n";
+        o << "  " << c(ax[k].newAxis) << " = 0.0;\n";
+        break;
+      case MOD_REVOLVE:
+        o << "  " << c(ax[k].srcAxis) << " = length(vec2(" << c(ax[k].srcAxis) << ", " << c(ax[k].newAxis) << ")) - " << glslFloat(m.radius) << ";\n";
+        o << "  " << c(ax[k].newAxis) << " = 0.0;\n";
+        break;
+    }
+  }
+  return o.str();
+}
+
+static std::string extrudeGLSL(const Node& n, const std::vector<ModAxis>& ax, const std::string& tag) {
+  std::ostringstream o;
+  for (size_t k = 0; k < n.mods.size(); k++) {
+    const Modifier& m = n.mods[k];
+    if (!ax[k].valid || m.type != MOD_EXTRUDE || m.mode == ExtrudeMode::Infinite) continue;
+    if (m.mode == ExtrudeMode::Half) o << "  d = opExtrude(d, t" << tag << k << ");\n";
+    else o << "  d = opExtrude(d, abs(t" << tag << k << ") - " << glslFloat(m.length / 2) << ");\n";
+  }
+  return o.str();
 }
 
 CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorldIn, bool geo) {
@@ -101,12 +140,14 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     if (anchored) L << "  float nd = q.w;\n";
     if (role == Role::Tangent) L << "  q.w = 0.0;\n";
     if (role == Role::Hug) L << "  q.w = g_world" << wslot(n.anchor->world) << " / (sAcc * s);\n";
-    for (auto& m : n.mods) L << modifierGLSL(m, "q");
+    auto ax = modifierAxes(n, reg);
+    L << modifierCoordsGLSL(n, ax, "q", "");
     std::string reachExpr = "u_col[" + std::to_string(i) + "].w";  // groups: reach stored in colour.w (unused)
     if (n.isLeaf()) {
       L << "  float d = " << primFn[n.prim] << "(q);\n";
-      for (int a = primitiveDim(*def); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * u_par[" << i << "].z);\n";
-      double shell = n.shell.value_or(def->shell), round = n.round.value_or(def->round);
+      for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * u_par[" << i << "].z);\n";
+      L << extrudeGLSL(n, ax, "");
+      double shell = n.shell.value_or(0.0), round = n.round.value_or(0.0);
       if (shell > 0) L << "  d = abs(d) - " << glslFloat(shell) << ";\n";
       if (round != 0) L << "  d -= " << glslFloat(round) << ";\n";
       L << "  m = u_col[" << i << "];\n";
@@ -119,6 +160,8 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       for (size_t c = 1; c < n.children.size(); c++)
         L << "  { float b = " << fnName(n.children[c], ctx) << "(q, g, sAcc * s, mb); d = " << opf[(int)n.op] << "(d, m, b, mb"
           << (isSmooth(n.op) ? ", k" : "") << "); }\n";
+      std::string ex = extrudeGLSL(n, ax, "");
+      if (!ex.empty()) L << "  if (d < INF * 0.5) {\n" << ex << "  }\n";
       if (anchored) L << "  return d >= INF * 0.5 ? d : max(d * s, -nd * s - " << reachExpr << ");\n}\n";
       else L << "  return d >= INF * 0.5 ? d : d * s;\n}\n";
     }
@@ -133,7 +176,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     for (size_t a = 0; a + 1 < path.size(); a++) {
       int i = index[path[a]->id];
       o << "  p = (u_rot[" << i << "] * (p - u_pos[" << i << "])) / u_par[" << i << "].x; s *= u_par[" << i << "].x;\n";
-      for (auto& m : path[a]->mods) o << modifierGLSL(m, "p");
+      o << "  {\n" << modifierCoordsGLSL(*path[a], modifierAxes(*path[a], reg), "p", "w") << "  }\n";
     }
     o << "  return " << fnName(target, EvalCtx::World) << "(p, g, s, m) * s;\n}\n";
   }
@@ -194,12 +237,12 @@ std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const s
   o << world << "|" << geo << "|";
   walkc(root, [&](const Node& n, const Node*, int depth) {
     o << depth << n.id << (n.isLeaf() ? "L" + n.prim : "G" + std::to_string((int)n.op)) << (n.hidden ? "h" : "") << (n.anchor ? "a" + n.anchor->world : "");
-    for (auto& m : n.mods) o << "m" << m.type << m.axis << m.spacing << ":" << m.count;
+    for (auto& m : n.mods) o << "m" << m.type << m.axis << m.spacing << ":" << m.count << ":" << (int)m.mode << m.length << ":" << m.radius << ":" << m.i << m.j << m.angle;
     if (n.round) o << "r" << *n.round;
     if (n.shell) o << "s" << *n.shell;
     o << ";";
   });
-  for (auto& p : reg.custom()) o << primitiveToJson(p, false);
+  for (auto& p : reg.custom()) o << p.id << primitiveGLSL(p, "f");
   return o.str();
 }
 

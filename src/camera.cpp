@@ -10,19 +10,33 @@ void FullCamera::setFromView(const View& v, double dist) {
   target = v.eye + col(rot4, 2) * dist;
 }
 
+// Orbit about orbitCenter(): the frame turns and the eye swings around the centre,
+// so the point under the pivot stays put (no view jump when the pivot != target).
 void FullCamera::orbit(double dx, double dy) {
+  View before = view();
+  V4 c = orbitCenter();
   yaw += dx * 0.008;
   pitch = clampd(pitch - dy * 0.008, -1.55, 1.55);
+  M4 f = frame();
+  V4 eye = c + mul(mul(f, transpose(before.frame)), before.eye - c);
+  target = eye + col(f, 2) * distance;
 }
 void FullCamera::pan(double dx, double dy) {
   M4 f = frame();
   double k = distance * 0.0015;
-  target = target - col(f, 0) * (dx * k) + col(f, 1) * (dy * k);
+  V4 d = col(f, 1) * (dy * k) - col(f, 0) * (dx * k);
+  target = target + d;
+  pivot = pivot + d;
 }
 void FullCamera::zoom(double delta) { distance = clampd(distance * std::exp(delta * 0.1), 0.2, 200); }
 void FullCamera::rotate4(int a, int b, double angle) {
+  View before = view();
+  V4 c = orbitCenter();
   M4 e = e3();
   rot4 = orthonormalize(mul(mul(rot4, e), mul(planeRotation(a, b, angle), transpose(e))));
+  M4 f = frame();
+  V4 eye = c + mul(mul(f, transpose(before.frame)), before.eye - c);
+  target = eye + col(f, 2) * distance;
 }
 void FullCamera::look(double dx, double dy) {
   V4 eye = view().eye;

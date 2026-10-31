@@ -30,14 +30,22 @@ uniform int u_geoIters;
 uniform vec4 u_light;
 uniform vec4 u_marker;     // player marker centre (4D)
 uniform vec4 u_markerCol;  // rgb, radius (0 = hidden)
+uniform vec4 u_markerFwd;  // facing direction of the body
+uniform float u_markerSkip;
+uniform vec3 u_skyCol;     // Geodesic sky colour (= world surface colour)
 
 const float EPS = 0.0015;
+bool g_noBody = false;     // primary ray still inside the player's own body
 
+// scene + the player's body (a sphere with a small "nose" showing where it faces)
 float map(vec4 p, out vec4 m) {
   float d = mapScene(p, m);
-  if (u_markerCol.w > 0.0) {
-    float dm = length(p - u_marker) - u_markerCol.w;
-    if (dm < d) { d = dm; m = vec4(u_markerCol.rgb, 0.0); }
+  if (u_markerCol.w > 0.0 && !g_noBody) {
+    float r = u_markerCol.w;
+    float body = length(p - u_marker) - r;
+    float nose = length(p - (u_marker + u_markerFwd * r * 0.95)) - r * 0.4;
+    float dm = min(body, nose);
+    if (dm < d) { d = dm; m = vec4(nose < body ? u_markerCol.rgb * 0.55 : u_markerCol.rgb, 0.0); }
   }
   return d;
 }
@@ -68,8 +76,9 @@ const float MAX_DIST = 120.0;
 
 vec3 sky(vec4 dir) {
 #ifdef VIEW_GEO
-  vec3 c = 0.5 + 0.5 * dir.xyz;
-  return mix(vec3(0.07, 0.08, 0.12), c * vec3(0.35, 0.4, 0.55), 0.6 + 0.2 * dir.w);
+  // the sky of a world surface takes the surface's own colour, lit softly by direction
+  float l = 0.5 + 0.5 * dot(dir, normalize(u_light));
+  return u_skyCol * (0.45 + 0.4 * l);
 #else
   return mix(vec3(0.16, 0.17, 0.2), vec3(0.32, 0.38, 0.5), clamp(dir.y * 0.5 + 0.5, 0.0, 1.0)) + 0.05 * dir.w;
 #endif
@@ -111,6 +120,7 @@ void main() {
 
     vec4 mm;
     g_exact = phase == AO || phase == SHADOW;
+    g_noBody = phase == MARCH && t < u_markerSkip;
     float d = map(q, mm);   // the only scene evaluation site
 
     bool advance = false;

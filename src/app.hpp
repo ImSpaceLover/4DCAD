@@ -1,6 +1,7 @@
 // Application state and logic (no ImGui here): scene + undo, cameras, picking,
-// placement, transform tools, explore movement, frame rendering.
+// placement, gizmo / transform tools, explore movement, frame rendering.
 #pragma once
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,18 +20,27 @@ enum class Mode { Edit, Explore };
 enum class Tool { Select, Move, Rotate };
 enum class Modal { None, Grab, Rotate, Scale };
 
-struct LibraryItem { bool object = false; std::string id; };
-
 /** Abstract per-frame input, filled by the UI layer from GLFW / ImGui. */
 struct InputState {
-  bool vpHovered = false;         // mouse over the 3D viewport (and not over an overlay widget)
-  double mx = 0, my = 0;          // mouse position (window pixels)
-  double dx = 0, dy = 0;          // mouse delta since last frame
-  bool down[3] = {false, false, false}, pressed[3] = {false, false, false}, released[3] = {false, false, false};
+  bool vpHovered = false;
+  double mx = 0, my = 0, dx = 0, dy = 0;
+  bool down[3] = {false, false, false}, pressed[3] = {false, false, false}, released[3] = {false, false, false};  // left, right, middle
   double wheel = 0;
   bool shift = false, ctrl = false, alt = false;
-  bool keysEnabled = true;        // false while a text field has focus
+  bool keysEnabled = true;
   std::function<bool(int)> keyDown;  // GLFW key code -> held?
+};
+
+/** Screen-space gizmo geometry for drawing and hit testing. */
+struct Gizmo {
+  bool visible = false;
+  double cx = 0, cy = 0;           // centre (window pixels)
+  struct Axis { bool visible = false; int axis = 0; V4 dir{}; double ex = 0, ey = 0; };
+  Axis axes[4];                    // object X, Y, Z, W projected into the visible slice
+  struct Ring { int a = 0, b = 0; V4 u{}, v{}; std::vector<std::pair<double, double>> pts; double orient = 1; };
+  std::vector<Ring> rings;         // rotation planes between visible axes
+  double worldLen = 1;             // world length of an arrow
+  int hot = -1;                    // hovered handle: 0..3 arrows, 4 centre, 10+ rings
 };
 
 class App {
@@ -39,8 +49,8 @@ class App {
   // --- scene ---
   Node root;
   PrimitiveRegistry reg;
-  LibraryStore lib{reg};
-  std::string world;  // active world id ("" = none)
+  LibraryStore lib;
+  std::string world;
   std::vector<std::string> selection;
   std::unique_ptr<SceneEvaluator> ev;
   std::string currentFile;
@@ -50,28 +60,27 @@ class App {
   bool geo = false;
   Tool tool = Tool::Select;
   FullCamera editCam, playerCam;
-  GeoCamera geoEdit, geoPlayer;
+  GeoCamera geoEdit, geoPlayer;  // geodesic edit camera is first-person (hold RMB to fly)
   bool playerPlaced = false;
   QualitySettings quality;
   double fov = 60;
   V4 light{0.5, 0.8, -0.35, 0.25};
   bool collide = true;
-  double moveSpeed = 3;
-  bool showThumbnail = true, showPlayerMarker = true;
+  double moveSpeed = 3, editFlySpeed = 2;
+  bool showThumbnail = true, showPlayerMarker = true, showOwnBody = true;
   double thumbYaw = 0.4, thumbPitch = -0.9, thumbZoom = 1;
-  bool mouseCaptured = false;  // explore mouse look
-  bool wantCapture = false, wantRelease = false;
+  double avatarRadius = 0.22;
+  bool mouseCaptured = false, wantCapture = false, wantRelease = false;
 
-  // --- viewport (window pixels), set by the UI each frame ---
+  // --- viewport (window pixels) ---
   float vpX = 0, vpY = 0, vpW = 1, vpH = 1;
   RenderTarget mainRT, thumbRT;
   int thumbW = 300, thumbH = 225;
   std::unique_ptr<Renderer> renderer;
-  double fps = 0;
-  std::string status;
+  double fps = 0, now = 0;
 
   // --- lifecycle ---
-  void init();  // after the GL context exists
+  void init();
   void loadScene(SceneFile f);
   bool loadSceneFile(const std::string& path, std::string& err);
   bool saveSceneFile(const std::string& path, std::string& err);
@@ -86,7 +95,6 @@ class App {
   void autosave();
 
   // --- selection & tree ---
-  void select(std::vector<std::string> ids) { selection = std::move(ids); }
   Node* selected();
   std::unordered_set<std::string> highlightSet();
   void deleteSelection();
@@ -98,6 +106,8 @@ class App {
   void setWorld(const std::string& id);
   void attachToWorld(const std::string& id);
   void detach(const std::string& id);
+  V4 nodeWorldPos(const std::string& id);
+  M4 nodeWorldFrame(const std::string& id);  // columns = the object's X, Y, Z, W axes in world space
 
   // --- modes & views ---
   void setMode(Mode m);
@@ -105,45 +115,44 @@ class App {
   View currentView();
   View playerView();
   double tanHalf() const { return std::tan(fov * PI / 360); }
-  /** Screen ray through window pixel (x, y) in the current view. */
   V4 screenRay(double x, double y, const View& v) const;
-  /** Window pixel of a 4D point projected into the current view (false if behind). */
   bool project(const V4& p, const View& v, double& sx, double& sy) const;
   std::optional<RayHit> pick(double x, double y);
   void focusSelection();
-  void standardView(int which);  // 0 front, 1 right, 2 top, 3 along W
+  void standardView(int which);
 
-  // --- placement ---
-  bool canPlace(const LibraryItem& it, std::string* reason);
-  int itemDim(const LibraryItem& it);
-  void placeItem(const LibraryItem& it, std::optional<std::pair<double, double>> screen);
+  // --- placement (library objects) ---
+  bool canPlace(const std::string& objectId, std::string* reason);
+  int itemDim(const std::string& objectId);
+  void placeItem(const std::string& objectId, std::optional<std::pair<double, double>> screen);
 
   // --- transforms ---
   Modal modal = Modal::None;
-  std::vector<int> modalAxes;  // camera axes: 0 right, 1 up, 2 forward (depth)
+  std::vector<int> modalAxes;  // object axes (0..3) for G / R constraints
   std::string transformHint() const;
   void startModal(Modal m);
   void confirmModal();
   void cancelModal();
-  /** Move by a world-space delta (restricted by callers to the visible slice). */
   void translateNodes(const std::vector<std::string>& ids, const V4& delta);
-  /** Rotate nodes about their own origin by a world-space rotation. */
   void rotateNodes(const std::vector<std::string>& ids, const M4& q);
+  /** Gizmo for the current selection (Move / Rotate tool), in screen space. */
+  Gizmo gizmo();
+  bool gizmoDragging() const { return gizmoHandle_ >= 0; }
+  bool flying() const { return drag_ == Drag::Fly; }
+  int gizmoHandle() const { return gizmoHandle_; }
 
   // --- per frame ---
   void handleInput(const InputState& in, double dt);
   void handleKey(int key, bool shift, bool ctrl);
   void renderFrame();
-  /** Outside (Full 4D) view used by the thumbnail while in the Geodesic view. */
   View thumbnailView();
-  V4 thumbnailMarker();
   double sliceW() { return editCam.sliceW(); }
   void setSliceW(double w) { editCam.setSliceW(w); }
+  std::array<float, 3> worldColor();
   void toast(const std::string& msg, bool error = false);
   std::string toastMsg;
   bool toastError = false;
   double toastUntil = 0;
-  double now = 0;
 
  private:
   std::vector<std::string> history_, future_;
@@ -151,25 +160,27 @@ class App {
   int version_ = 0;
   std::string lastKey_, lastThumbKey_;
   double lastChange_ = 0;
-  // drag / modal state
   struct Orig { Transform xf; std::optional<Anchor> anchor; };
   std::vector<std::pair<std::string, Orig>> orig_;
   double modalX0_ = 0, modalY0_ = 0, modalX_ = 0, modalY_ = 0;
   View modalView_;
-  enum class Drag { None, Orbit, Pan, Zoom, Rot4, ToolMove, ToolRotate };
+  enum class Drag { None, Orbit, Pan, Zoom, Rot4, Fly, FreeMove, Gizmo, Click };
   Drag drag_ = Drag::None;
   int dragButton_ = -1;
   double pressX_ = 0, pressY_ = 0, lastMx_ = 0, lastMy_ = 0;
   bool dragMoved_ = false;
+  int gizmoHandle_ = -1;
+  Gizmo gizmoAtPress_;
   std::string snapshot();
   void restore(const std::string& s);
   void captureOrig();
   void restoreOrig();
   void applyModal();
   M4 parentWorldRotation(const std::string& id, double* scaleAcc);
+  V4 gizmoAxisDir(const std::string& id, int axis, const View& v);
   SurfaceField field() { return worldField(*ev); }
-  void syncPlayerFromEdit();
   void updateExplore(const InputState& in, double dt);
+  void flyGeoEdit(const InputState& in, double dt);
 };
 
 }  // namespace fd

@@ -17,13 +17,11 @@ static const ImVec4 DIM_COL[5] = {{0.4f, 0.4f, 0.4f, 1}, {0.4f, 0.4f, 0.4f, 1}, 
 static const char* OP_ICON[6] = {"U", "I", "-", "~U", "~I", "~-"};
 static const float LEFT_W = 250, RIGHT_W = 340, TOOLBAR_H = 38;
 
-struct LibPayload { bool object; char id[96]; };
+struct LibPayload { char id[96]; };
 
 static ImTextureID tex(GLuint t) { return (ImTextureID)(intptr_t)t; }
 
 UI::UI(App& a, GLFWwindow* w) : app(a), win_(w) {
-  previewCam_.target = {0, 0, 0, 0};
-  previewCam_.distance = 6;
 }
 
 // ============================================================ frame
@@ -35,7 +33,6 @@ void UI::frame(double dt) {
   treePanel();
   propertiesPanel();
   viewport(dt);
-  if (showBuilder_) builderWindow();
   if (showQuality_) qualityWindow();
   if (showHelp_) helpWindow();
   pathPrompt();
@@ -58,7 +55,6 @@ void UI::onKey(int key, int action, int mods) {
   if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
   ImGuiIO& io = ImGui::GetIO();
   if (io.WantTextInput && !app.mouseCaptured) return;
-  if (showBuilder_ && !app.mouseCaptured && key != GLFW_KEY_ESCAPE) return;
   bool ctrl = (mods & GLFW_MOD_CONTROL) || (mods & GLFW_MOD_SUPER);
   bool shift = mods & GLFW_MOD_SHIFT;
   if (action == GLFW_REPEAT && !(ctrl && (key == GLFW_KEY_Z || key == GLFW_KEY_Y))) return;
@@ -70,12 +66,12 @@ void UI::onKey(int key, int action, int mods) {
 
 // ============================================================ file actions
 void UI::fileAction(int action) {
-  const char* titles[] = {"", "Open scene", "Save scene", "Import library item", "Export library", "Export object", "Export primitive"};
+  const char* titles[] = {"", "Open scene", "Save scene", "Import library item", "Export library", "Export object", "Export library object"};
   std::string def;
   if (action == 2) def = app.currentFile.empty() ? "scene.4dscene.json" : app.currentFile;
   if (action == 4) def = "4dcad-library.json";
   if (action == 5) def = (app.selected() ? app.selected()->name : std::string("object")) + ".4dobj.json";
-  if (action == 6) def = "primitive.4dprim.json";
+  if (action == 6) { auto* o = app.lib.find(exportPrimId_); def = (o ? o->name : std::string("object")) + ".4dobj.json"; }
   if (!nativeDialogsAvailable()) {
     pendingAction_ = action;
     std::snprintf(pathBuf_, sizeof pathBuf_, "%s", def.c_str());
@@ -94,7 +90,7 @@ void UI::doFileAction(int action, const std::string& path) {
     case 3: {
       std::string text;
       if (!readFile(path, text)) { app.toast("Cannot read " + path, true); break; }
-      try { app.toast("Imported " + app.lib.importText(text)); app.rebuild(); } catch (const std::exception& e) { app.toast(e.what(), true); }
+      try { app.toast("Imported " + app.lib.importText(text) + " into the library"); } catch (const std::exception& e) { app.toast(e.what(), true); }
       break;
     }
     case 4: writeFile(path, app.lib.exportText()) ? app.toast("Exported library") : app.toast("Cannot write " + path, true); break;
@@ -105,7 +101,7 @@ void UI::doFileAction(int action, const std::string& path) {
       break;
     }
     case 6: {
-      if (auto* p = app.reg.get(exportPrimId_)) writeFile(path, primitiveToJson(*p, true)) ? app.toast("Exported primitive") : app.toast("Cannot write", true);
+      if (auto* o = app.lib.find(exportPrimId_)) writeFile(path, libraryObjectToJson(*o)) ? app.toast("Exported " + o->name) : app.toast("Cannot write", true);
       break;
     }
   }
@@ -135,7 +131,7 @@ void UI::menuBar() {
       ImGui::EndMenu();
     }
     ImGui::Separator();
-    if (ImGui::MenuItem("Import primitive / object / library...")) fileAction(3);
+    if (ImGui::MenuItem("Import object / library...")) fileAction(3);
     if (ImGui::MenuItem("Export library...")) fileAction(4);
     if (ImGui::MenuItem("Export selected object...", nullptr, false, app.selected() != nullptr)) fileAction(5);
     ImGui::Separator();
@@ -152,7 +148,6 @@ void UI::menuBar() {
       for (int i = 0; i < 6; i++) if (ImGui::MenuItem(BOOL_OP_LABELS[i])) app.groupSelection((BoolOp)i);
       ImGui::EndMenu();
     }
-    if (ImGui::MenuItem("New primitive...")) openBuilder(nullptr, false);
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("View")) {
@@ -164,6 +159,7 @@ void UI::menuBar() {
     ImGui::Separator();
     ImGui::MenuItem("Outside thumbnail (Geodesic)", nullptr, &app.showThumbnail);
     ImGui::MenuItem("Show player sphere (Edit)", nullptr, &app.showPlayerMarker);
+    ImGui::MenuItem("Show own body (Explore)", nullptr, &app.showOwnBody);
     if (ImGui::MenuItem("Reset 4D orientation", "Shift+W")) app.editCam.reset4();
     if (ImGui::MenuItem("Front / Right / Top / Along W", "1 3 7 9")) app.standardView(0);
     ImGui::Separator();
@@ -216,9 +212,9 @@ void UI::toolbar() {
     ImGui::SameLine();
     if (toggleButton("Select", app.tool == Tool::Select, "Q: click to select")) app.tool = Tool::Select;
     ImGui::SameLine(0, 2);
-    if (toggleButton("Move", app.tool == Tool::Move, "W: drag an object to move it in the visible slice (Shift: along depth)")) app.tool = Tool::Move;
+    if (toggleButton("Move", app.tool == Tool::Move, "W: gizmo arrows along the object's axes (projected into the visible slice)")) app.tool = Tool::Move;
     ImGui::SameLine(0, 2);
-    if (toggleButton("Rotate", app.tool == Tool::Rotate, "E: drag an object to rotate it within the visible slice (Shift: roll)")) app.tool = Tool::Rotate;
+    if (toggleButton("Rotate", app.tool == Tool::Rotate, "E: gizmo rings for the planes of the object's axes")) app.tool = Tool::Rotate;
   }
   ImGui::SameLine(0, 16);
   if (ImGui::Button("Undo")) app.undo();
@@ -238,64 +234,112 @@ void UI::libraryPanel() {
   ImGui::SetNextWindowPos({0, top});
   ImGui::SetNextWindowSize({LEFT_W, io.DisplaySize.y - top});
   ImGui::Begin("Library", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-  if (ImGui::Button("+ Primitive")) openBuilder(nullptr, false);
+  if (ImGui::Button("+ Folder")) { std::string id = app.lib.addFolder("New folder"); renameId_ = "f:" + id; std::snprintf(renameBuf_, sizeof renameBuf_, "New folder"); }
   ImGui::SameLine();
   if (ImGui::Button("Import")) fileAction(3);
   ImGui::SameLine();
   if (ImGui::Button("Export")) fileAction(4);
   ImGui::TextDisabled(app.geo ? "Geodesic: drag 3D items onto the surface" : "Drag items into the viewport");
 
-  auto item = [&](const LibraryItem& it, const std::string& name, const std::string& desc, int dim, const std::function<void()>& ctx) {
-    std::string why;
-    bool ok = app.canPlace(it, &why) || app.mode != Mode::Edit;
-    ImGui::PushID(((it.object ? "o" : "p") + it.id).c_str());
-    ImGui::PushStyleColor(ImGuiCol_Button, DIM_COL[dim]);
-    ImGui::SmallButton(DIM_LABEL[dim]);
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    if (!ok) ImGui::BeginDisabled();
-    ImGui::Selectable(name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
-    if (ok && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) app.placeItem(it, std::nullopt);
-    if (ok && ImGui::BeginDragDropSource()) {
-      LibPayload p{it.object, {}};
-      std::snprintf(p.id, sizeof p.id, "%s", it.id.c_str());
-      ImGui::SetDragDropPayload("FD_LIB", &p, sizeof p);
-      ImGui::Text("%s", name.c_str());
-      ImGui::EndDragDropSource();
+  std::function<void()> deferred;
+  for (auto& f : app.lib.folders) {
+    std::string fid = f.id;
+    bool renamingFolder = renameId_ == "f:" + fid;
+    ImGui::PushID(fid.c_str());
+    bool open;
+    if (renamingFolder) {
+      open = true;
+      ImGui::SetNextItemWidth(-1);
+      ImGui::SetKeyboardFocusHere();
+      if (ImGui::InputText("##rn", renameBuf_, sizeof renameBuf_, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll) || ImGui::IsItemDeactivated()) {
+        deferred = [this, fid] { if (renameBuf_[0]) app.lib.renameFolder(fid, renameBuf_); renameId_.clear(); };
+      }
+    } else {
+      std::string label = f.name + (f.builtin ? "  (built-in)" : "") + "###folder";
+      open = ImGui::CollapsingHeader(label.c_str(), f.builtin ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_DefaultOpen);
     }
-    if (!ok) ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s%s%s", desc.c_str(), ok ? "" : "\n", ok ? "" : why.c_str());
-    if (ImGui::BeginPopupContextItem("ctx")) { ctx(); ImGui::EndPopup(); }
+    // drop library items onto a (user) folder to move them there
+    if (!f.builtin && ImGui::BeginDragDropTarget()) {
+      if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("FD_LIB")) {
+        std::string oid = ((const LibPayload*)p->Data)->id;
+        deferred = [this, oid, fid] { app.lib.moveObject(oid, fid); };
+      }
+      if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("FD_NODE")) {  // scene object -> save into folder
+        std::string nid((const char*)p->Data);
+        deferred = [this, nid, fid] {
+          if (Node* n = findNode(app.root, nid)) { app.lib.saveObject(makeLibraryObject(*n, app.reg, n->name), fid); app.toast("Saved \"" + n->name + "\""); }
+        };
+      }
+      ImGui::EndDragDropTarget();
+    }
+    if (!renamingFolder && ImGui::BeginPopupContextItem("fctx")) {
+      if (f.builtin) ImGui::TextDisabled("Built-in folders are read-only.\nDrag items into your folders to copy them.");
+      else {
+        if (ImGui::MenuItem("Rename")) { renameId_ = "f:" + fid; std::snprintf(renameBuf_, sizeof renameBuf_, "%s", f.name.c_str()); }
+        if (ImGui::MenuItem("Delete folder", nullptr, false, fid != LibraryStore::CUSTOM)) deferred = [this, fid] { app.lib.deleteFolder(fid); };
+      }
+      ImGui::EndPopup();
+    }
+    if (open) {
+      if (f.objects.empty()) ImGui::TextDisabled("  (empty: right-click an object in the scene tree > Save to library)");
+      for (auto& o : f.objects) {
+        std::string oid = o.id;
+        int dim = nodeDim(o.node, app.reg);
+        std::string why;
+        bool ok = app.canPlace(oid, &why) || app.mode != Mode::Edit;
+        ImGui::PushID(oid.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Button, DIM_COL[dim]);
+        ImGui::SmallButton(DIM_LABEL[dim]);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        if (renameId_ == "o:" + oid) {
+          ImGui::SetNextItemWidth(-1);
+          ImGui::SetKeyboardFocusHere();
+          if (ImGui::InputText("##rn", renameBuf_, sizeof renameBuf_, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll) || ImGui::IsItemDeactivated())
+            deferred = [this, oid] { if (renameBuf_[0]) app.lib.renameObject(oid, renameBuf_); renameId_.clear(); };
+          ImGui::PopID();
+          continue;
+        }
+        if (!ok) ImGui::BeginDisabled();
+        ImGui::Selectable(o.name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+        if (ok && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) deferred = [this, oid] { app.placeItem(oid, std::nullopt); };
+        if (ok && ImGui::BeginDragDropSource()) {
+          LibPayload p{};
+          std::snprintf(p.id, sizeof p.id, "%s", oid.c_str());
+          ImGui::SetDragDropPayload("FD_LIB", &p, sizeof p);
+          ImGui::Text("%s", o.name.c_str());
+          ImGui::EndDragDropSource();
+        }
+        if (!ok) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+          std::string mods;
+          for (auto& m : o.node.mods) mods += std::string(mods.empty() ? "" : " > ") + MOD_NAMES[m.type];
+          ImGui::SetTooltip("%dD %s%s%s%s", dim, o.node.isLeaf() ? "shape" : "group", mods.empty() ? "" : "\npoint > ", mods.c_str(), ok ? "" : ("\n" + why).c_str());
+        }
+        if (ImGui::BeginPopupContextItem("octx")) {
+          if (!f.builtin) {
+            if (ImGui::MenuItem("Rename")) { renameId_ = "o:" + oid; std::snprintf(renameBuf_, sizeof renameBuf_, "%s", o.name.c_str()); }
+            if (ImGui::BeginMenu("Move to folder")) {
+              for (auto& f2 : app.lib.folders)
+                if (!f2.builtin && f2.id != fid && ImGui::MenuItem(f2.name.c_str())) { std::string tid = f2.id; deferred = [this, oid, tid] { app.lib.moveObject(oid, tid); }; }
+              ImGui::EndMenu();
+            }
+          } else if (ImGui::BeginMenu("Copy to folder")) {
+            for (auto& f2 : app.lib.folders)
+              if (!f2.builtin && ImGui::MenuItem(f2.name.c_str())) { std::string tid = f2.id; deferred = [this, oid, tid] { app.lib.moveObject(oid, tid); }; }
+            ImGui::EndMenu();
+          }
+          if (ImGui::MenuItem("Export...")) { exportPrimId_ = oid; fileAction(6); }
+          if (!f.builtin && ImGui::MenuItem("Delete")) deferred = [this, oid] { app.lib.deleteObject(oid); };
+          ImGui::EndPopup();
+        }
+        ImGui::PopID();
+      }
+    }
     ImGui::PopID();
-  };
-
-  for (int d = 0; d <= 4; d++) {
-    std::vector<const PrimitiveDef*> list;
-    for (auto* p : app.reg.all()) if (primitiveDim(*p) == d) list.push_back(p);
-    if (list.empty()) continue;
-    if (!ImGui::CollapsingHeader((std::string(DIM_LABEL[d]) + " primitives").c_str(), d >= 3 ? ImGuiTreeNodeFlags_DefaultOpen : 0)) continue;
-    for (auto* p : list) {
-      std::string id = p->id;
-      bool builtin = p->builtin;
-      item({false, id}, p->name, p->description, d, [&, id, builtin] {
-        const PrimitiveDef* q = app.reg.get(id);
-        if (!q) return;
-        if (ImGui::MenuItem(builtin ? "Copy into builder" : "Edit")) openBuilder(q, !builtin);
-        if (!builtin && ImGui::MenuItem("Export...")) { exportPrimId_ = id; fileAction(6); }
-        if (!builtin && ImGui::MenuItem("Delete")) { app.lib.deletePrimitive(id); app.reg.erase(id); app.rebuild(); }
-      });
-    }
-  }
-  if (!app.lib.objects.empty() && ImGui::CollapsingHeader("Saved objects", ImGuiTreeNodeFlags_DefaultOpen)) {
-    for (size_t i = 0; i < app.lib.objects.size(); i++) {
-      auto& o = app.lib.objects[i];
-      std::string id = o.id;
-      item({true, id}, o.name, "Saved object", nodeDim(o.node, app.reg), [&, id] {
-        if (ImGui::MenuItem("Delete")) app.lib.deleteObject(id);
-      });
-    }
   }
   ImGui::End();
+  if (deferred) deferred();
 }
 
 // ============================================================ scene tree
@@ -315,10 +359,10 @@ void UI::treePanel() {
   if (ImGui::Button("Dup")) app.duplicateSelection();
   ImGui::SameLine();
   if (ImGui::Button("Del")) app.deleteSelection();
-  if (ImGui::Button("Save as library object") && app.selected()) {
+  if (ImGui::Button("Save to library") && app.selected()) {
     Node* n = app.selected();
     app.lib.saveObject(makeLibraryObject(*n, app.reg, n->name));
-    app.toast("Saved \"" + n->name + "\" to the library");
+    app.toast("Saved \"" + n->name + "\" to Custom (rename / move it in the library)");
   }
   ImGui::SameLine();
   if (ImGui::Button("Export object") && app.selected()) fileAction(5);
@@ -337,12 +381,12 @@ void UI::treeNode(Node& n, int depth) {
   if (n.isLeaf() || n.children.empty()) fl |= ImGuiTreeNodeFlags_Leaf;
   if (sel) fl |= ImGuiTreeNodeFlags_Selected;
   std::string label;
-  if (n.isLeaf()) { auto* p = app.reg.get(n.prim); label = std::string("[") + DIM_LABEL[p ? primitiveDim(*p) : 0] + "] "; }
+  if (n.isLeaf()) label = std::string("[") + DIM_LABEL[nodeDim(n, app.reg)] + "] ";
   else label = std::string("(") + OP_ICON[(int)n.op] + ") ";
   label += n.name;
   if (n.id == app.world) label += "  [world]";
   if (n.anchor) label += "  [on surface]";
-  if (!n.mods.empty()) label += "  *";
+
   if (n.hidden) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
   bool open = ImGui::TreeNodeEx(n.id.c_str(), fl, "%s", label.c_str());
   if (n.hidden) ImGui::PopStyleColor();
@@ -377,7 +421,7 @@ void UI::treeNode(Node& n, int depth) {
       LibPayload lp = *(const LibPayload*)p->Data;
       deferred = [this, lp, id, where] {
         size_t before = app.root.children.size();
-        app.placeItem({lp.object, lp.id}, std::nullopt);
+        app.placeItem(lp.id, std::nullopt);
         if (app.root.children.size() > before) app.reparent(app.root.children.back().id, id, where);
       };
     }
@@ -388,6 +432,9 @@ void UI::treeNode(Node& n, int depth) {
     if (ImGui::MenuItem(n.hidden ? "Show" : "Hide", nullptr, false, !isRoot)) deferred = [this, id] { if (Node* m = findNode(app.root, id)) { m->hidden = !m->hidden; app.commit(); } };
     if (ImGui::MenuItem("Duplicate", nullptr, false, !isRoot)) deferred = [this] { app.duplicateSelection(); };
     if (ImGui::MenuItem("Delete", nullptr, false, !isRoot)) deferred = [this] { app.deleteSelection(); };
+    if (ImGui::MenuItem("Save to library", nullptr, false, !isRoot)) deferred = [this, id] {
+      if (Node* m = findNode(app.root, id)) { app.lib.saveObject(makeLibraryObject(*m, app.reg, m->name)); app.toast("Saved \"" + m->name + "\" to Custom"); }
+    };
     if (!n.isLeaf() && ImGui::MenuItem("Ungroup", nullptr, false, !isRoot)) deferred = [this, id] { app.ungroup(id); };
     if (ImGui::BeginMenu("Group as", !isRoot)) {
       for (int i = 0; i < 6; i++) if (ImGui::MenuItem(BOOL_OP_LABELS[i])) deferred = [this, i] { app.groupSelection((BoolOp)i); };
@@ -425,26 +472,21 @@ void UI::propertiesPanel() {
   std::snprintf(nameBuf, sizeof nameBuf, "%s", n->name.c_str());
   if (ImGui::InputText("Name", nameBuf, sizeof nameBuf)) n->name = nameBuf;
   track();
+  int dim = nodeDim(*n, app.reg);
+  ImGui::TextDisabled("%dD %s", dim, n->isLeaf() ? "shape (point + modifiers)" : "group");
 
   if (n->isLeaf()) {
-    ImGui::SeparatorText("Primitive");
-    auto* def = app.reg.get(n->prim);
-    if (ImGui::BeginCombo("Type", def ? def->name.c_str() : n->prim.c_str())) {
-      for (auto* p : app.reg.all())
-        if (ImGui::Selectable((p->name + " (" + DIM_LABEL[primitiveDim(*p)] + ")").c_str(), p->id == n->prim)) { n->prim = p->id; done = true; }
-      ImGui::EndCombo();
-    }
+    ImGui::SeparatorText("Shape");
     float c[3] = {(float)n->color[0], (float)n->color[1], (float)n->color[2]};
     if (ImGui::ColorEdit3("Color", c)) for (int i = 0; i < 3; i++) n->color[i] = c[i];
     track();
-    int dim = def ? primitiveDim(*def) : 4;
     if (dim < 4) {
       float th = (float)n->thickness;
       if (ImGui::DragFloat("Thickness", &th, 0.005f, 0.001f, 10.f)) n->thickness = std::max(0.001f, th);
       track();
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Extent along the unused axes%s", n->anchor ? " (here: across the world surface)" : "");
     }
-    float rd = (float)n->round.value_or(def ? def->round : 0), sh = (float)n->shell.value_or(def ? def->shell : 0);
+    float rd = (float)n->round.value_or(0), sh = (float)n->shell.value_or(0);
     if (ImGui::DragFloat("Rounding", &rd, 0.005f, -2.f, 5.f)) n->round = rd;
     track();
     if (ImGui::DragFloat("Shell", &sh, 0.005f, 0.f, 5.f)) n->shell = std::max(0.f, sh);
@@ -462,60 +504,134 @@ void UI::propertiesPanel() {
     float pos[4] = {(float)n->xf.pos[0], (float)n->xf.pos[1], (float)n->xf.pos[2], (float)n->xf.pos[3]};
     if (ImGui::DragFloat4("Position XYZW", pos, 0.02f)) for (int i = 0; i < 4; i++) n->xf.pos[i] = pos[i];
     track();
-    if (n->anchor) ImGui::TextDisabled("Anchor point; use Move (W) or G to slide along the surface.");
+    if (n->anchor) ImGui::TextDisabled("Anchor point; drag the gizmo or press G to slide along the surface.");
+    // absolute rotation as 6 plane angles (decomposed from the stored rotation matrix)
+    auto ang = anglesFromRotation(n->xf.rot);
+    float a[6];
+    for (int k = 0; k < 6; k++) a[k] = (float)ang[k];
+    bool rotChanged = false;
+    ImGui::TextUnformatted("Rotation (degrees per plane)");
+    for (int k = 0; k < 6; k++) {
+      bool hide = n->anchor && (k == 2 || k == 4 || k == 5);  // stay in the surface's tangent space
+      if (hide) continue;
+      ImGui::PushID(k);
+      ImGui::SetNextItemWidth(68);
+      if (ImGui::DragFloat(PLANE_NAMES[k], &a[k], 0.5f, -180.f, 180.f, "%.1f")) rotChanged = true;
+      track();
+      ImGui::PopID();
+      if (k % 3 != 2 && !(n->anchor && k == 3)) ImGui::SameLine();
+    }
+    if (rotChanged) {
+      double d[6];
+      for (int k = 0; k < 6; k++) d[k] = a[k];
+      n->xf.rot = rotationFromAngles(d);
+    }
+    if (ImGui::Button("Reset rotation")) { n->xf.rot = identity(); done = true; }
     float sc = (float)n->xf.scale;
     if (ImGui::DragFloat("Scale", &sc, 0.01f, 0.01f, 100.f)) n->xf.scale = std::max(0.01f, sc);
     track();
-    ImGui::TextUnformatted("Rotate (drag) in plane:");
-    for (int k = 0; k < 6; k++) {
-      if (n->anchor && (k == 2 || k == 4 || k == 5)) continue;  // stay within the surface's 3D tangent space
-      float delta = 0;
-      ImGui::PushID(k);
-      ImGui::SetNextItemWidth(70);
-      if (ImGui::DragFloat(PLANE_NAMES[k], &delta, 0.5f, 0, 0, "drag")) {
-        n->xf.rot = orthonormalize(mul(n->xf.rot, planeRotation(PLANES[k][0], PLANES[k][1], delta * PI / 180)));
-        live = true;
-      }
-      if (ImGui::IsItemDeactivated()) done = true;
-      ImGui::PopID();
-      if (k % 3 != 2) ImGui::SameLine();
-    }
-    ImGui::NewLine();
-    if (ImGui::Button("Reset rotation")) { n->xf.rot = identity(); done = true; }
   }
 
-  ImGui::SeparatorText("Modifiers");
-  int removeMod = -1;
+  // ---- modifier stack ----
+  ImGui::SeparatorText("Modifiers (applied top to bottom)");
+  auto problems = modifierProblems(*n, app.reg);
+  auto axes = modifierAxes(*n, app.reg);
+  int remove = -1, moveUp = -1;
+  const char* axn[] = {"X", "Y", "Z", "W"};
   for (size_t i = 0; i < n->mods.size(); i++) {
     auto& m = n->mods[i];
     ImGui::PushID((int)i);
-    ImGui::TextUnformatted(m.type == 1 ? "Mirror" : "Repeat");
-    ImGui::SameLine(70);
-    ImGui::SetNextItemWidth(50);
-    const char* axes[] = {"X", "Y", "Z", "W"};
-    if (ImGui::Combo("##ax", &m.axis, axes, 4)) done = true;
-    if (m.type == 2) {
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(70);
-      float sp = (float)m.spacing;
-      if (ImGui::DragFloat("##sp", &sp, 0.05f, 0.01f, 100.f, "d %.2f")) m.spacing = std::max(0.01f, sp);
-      if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(60);
-      if (ImGui::DragInt("##n", &m.count, 0.1f, 0, 100, m.count == 0 ? "inf" : "+-%d")) m.count = std::max(0, m.count);
-      if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+    std::string title = MOD_NAMES[m.type];
+    if (m.raises() && axes[i].valid) title += std::string(" -> ") + AXIS[axes[i].newAxis];
+    ImGui::TextColored(m.raises() ? ImVec4(0.6f, 0.85f, 1, 1) : ImVec4(0.9f, 0.9f, 0.9f, 1), "%s", title.c_str());
+    ImGui::SameLine(RIGHT_W - 75);
+    if (i > 0 && ImGui::SmallButton("^")) moveUp = (int)i;
+    ImGui::SameLine(RIGHT_W - 50);
+    if (ImGui::SmallButton("x")) remove = (int)i;
+    ImGui::Indent(10);
+    switch (m.type) {
+      case MOD_MIRROR:
+        ImGui::SetNextItemWidth(60);
+        if (ImGui::Combo("Axis", &m.axis, axn, 4)) done = true;
+        break;
+      case MOD_REPEAT: {
+        ImGui::SetNextItemWidth(60);
+        if (ImGui::Combo("Axis", &m.axis, axn, 4)) done = true;
+        float sp = (float)m.spacing;
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragFloat("Spacing", &sp, 0.05f, 0.01f, 100.f)) m.spacing = std::max(0.01f, sp);
+        track();
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragInt("Copies +-", &m.count, 0.1f, 0, 100, m.count == 0 ? "infinite" : "%d")) m.count = std::max(0, m.count);
+        track();
+        break;
+      }
+      case MOD_EXTRUDE: {
+        int md = (int)m.mode;
+        const char* modes[] = {"finite", "infinite", "half-space (<= 0)"};
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::Combo("Mode", &md, modes, 3)) { m.mode = (ExtrudeMode)md; done = true; }
+        if (m.mode == ExtrudeMode::Finite) {
+          float L = (float)m.length;
+          ImGui::SetNextItemWidth(120);
+          if (ImGui::DragFloat("Length", &L, 0.02f, 0.001f, 100.f)) m.length = std::max(0.001f, L);
+          track();
+        }
+        break;
+      }
+      case MOD_REVOLVE: {
+        int base = axes[i].valid ? axes[i].newAxis : 0;
+        std::string cur = m.axis < 0 ? "newest axis" : std::string("spin ") + AXIS[m.axis];
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::BeginCombo("Profile axis", cur.c_str())) {
+          if (ImGui::Selectable("newest axis", m.axis < 0)) { m.axis = -1; done = true; }
+          for (int k = 0; k < std::max(base, 1); k++)
+            if (ImGui::Selectable((std::string("spin ") + AXIS[k]).c_str(), m.axis == k)) { m.axis = k; done = true; }
+          ImGui::EndCombo();
+        }
+        float R = (float)m.radius;
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragFloat("Radius", &R, 0.02f, 0.f, 100.f)) m.radius = std::max(0.f, R);
+        track();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Radius of revolution: 0 = around the centre (disk/sphere), > 0 = torus-like");
+        break;
+      }
+      case MOD_ROTATE: {
+        std::string pl = std::string(1, AXIS[m.i]) + AXIS[m.j];
+        ImGui::SetNextItemWidth(70);
+        if (ImGui::BeginCombo("Plane", pl.c_str())) {
+          for (int p = 0; p < 6; p++)
+            if (ImGui::Selectable(PLANE_NAMES[p], m.i == PLANES[p][0] && m.j == PLANES[p][1])) { m.i = PLANES[p][0]; m.j = PLANES[p][1]; done = true; }
+          ImGui::EndCombo();
+        }
+        float an = (float)m.angle;
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragFloat("Angle", &an, 0.5f)) m.angle = an;
+        track();
+        break;
+      }
     }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("x")) removeMod = (int)i;
+    for (auto& [k, msg] : problems) if (k == (int)i) ImGui::TextColored({1, 0.7f, 0.3f, 1}, "%s", msg.c_str());
+    ImGui::Unindent(10);
     ImGui::PopID();
   }
-  if (removeMod >= 0) { n->mods.erase(n->mods.begin() + removeMod); done = true; }
-  if (ImGui::Button("+ Mirror")) { n->mods.push_back({1, 0, 0, 0}); done = true; }
-  ImGui::SameLine();
-  if (ImGui::Button("+ Repeat")) { n->mods.push_back({2, 0, 3, 2}); done = true; }
+  if (remove >= 0) { n->mods.erase(n->mods.begin() + remove); done = true; }
+  if (moveUp > 0) { std::swap(n->mods[moveUp], n->mods[moveUp - 1]); done = true; }
+  if (ImGui::Button("+ Add modifier")) ImGui::OpenPopup("addmod");
+  if (ImGui::BeginPopup("addmod")) {
+    auto add = [&](int type, const char* label, const char* tip) {
+      if (ImGui::MenuItem(label)) { Modifier m; m.type = type; if (type == MOD_REVOLVE) { m.axis = -1; m.radius = 0; } n->mods.push_back(m); done = true; }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+    };
+    add(MOD_EXTRUDE, "Extrude", "Adds the next axis: sweeps the shape along it (finite, infinite or half-space)");
+    add(MOD_REVOLVE, "Revolve", "Adds the next axis: spins an existing axis into it at a radius");
+    add(MOD_ROTATE, "Rotate", "Rotates the shape built so far within one plane (e.g. before a Revolve)");
+    add(MOD_MIRROR, "Mirror", "Mirrors the shape built so far across an axis");
+    add(MOD_REPEAT, "Repeat", "Repeats the shape built so far along an axis");
+    ImGui::EndPopup();
+  }
 
   ImGui::SeparatorText("World surface");
-  int dim = nodeDim(*n, app.reg);
   if (n->id == app.world) {
     ImGui::TextWrapped("This object is the world: its 3D boundary is the space of the Geodesic view.");
     if (ImGui::Button("Stop using as world")) { app.setWorld(""); ImGui::End(); return; }
@@ -553,7 +669,7 @@ void UI::viewport(double dt) {
   if (ImGui::BeginDragDropTarget()) {
     if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("FD_LIB")) {
       LibPayload lp = *(const LibPayload*)p->Data;
-      app.placeItem({lp.object, lp.id}, std::make_pair((double)io.MousePos.x, (double)io.MousePos.y));
+      app.placeItem(lp.id, std::make_pair((double)io.MousePos.x, (double)io.MousePos.y));
     }
     ImGui::EndDragDropTarget();
   }
@@ -604,7 +720,7 @@ void UI::viewport(double dt) {
   }
   // don't start viewport interactions while ImGui is dragging a payload or a popup is open
   bool blocked = ImGui::GetDragDropPayload() != nullptr || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
-  in.vpHovered = vpHovered_ && !blocked && !(showBuilder_ && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) && !vpHovered_);
+  in.vpHovered = vpHovered_ && !blocked;
   if (!in.vpHovered) for (int b = 0; b < 3; b++) in.pressed[b] = false;
   in.wheel = (vpHovered_ && !blocked) ? wheel_ : 0;
   wheel_ = 0;
@@ -652,10 +768,11 @@ void UI::overlays(ImDrawList* dl) {
     else lines.push_back("WASD move | Space/Shift up/down (tangent) | Q/E roll | wheel speed | Esc release");
   } else if (app.modal != Modal::None) lines.push_back(app.transformHint());
   else {
-    const char* tool = app.tool == Tool::Move ? "Move tool: drag objects in the visible slice (Shift = depth)"
-                       : app.tool == Tool::Rotate ? "Rotate tool: drag objects (Shift = roll)" : "Select tool: click to select";
+    const char* tool = app.tool == Tool::Move ? "Move: drag an arrow (object axis) or the centre square; drag the object to move it in the screen plane"
+                       : app.tool == Tool::Rotate ? "Rotate: drag a ring (rotation plane of two object axes)" : "Select: click to select";
     lines.push_back(tool);
-    lines.push_back("RMB/MMB orbit | Shift+drag pan | Alt+drag rotate into W | wheel zoom | G/R/S | Tab explore | V view");
+    if (app.geo) lines.push_back("Hold RMB: look + WASD fly, Space/Shift up/down, Q/E roll | wheel: fly speed | G/R/S | Tab explore | V view");
+    else lines.push_back("RMB/MMB drag orbit | MMB click: set centre of rotation | Shift+drag pan | Alt+drag rotate into W | wheel zoom | G/R/S | Tab | V");
   }
   float ty = y0 + 8;
   float tx = x0 + (app.mode == Mode::Edit && !app.geo ? 60 : 8);
@@ -706,185 +823,58 @@ void UI::overlays(ImDrawList* dl) {
     }
   }
 
-  // tool gizmo at the selection
-  if (Node* n = app.selected(); n && n->id != app.root.id && app.tool != Tool::Select && app.modal == Modal::None) {
-    V4 p{0, 0, 0, 0};
-    for (Node* a : pathTo(app.root, n->id)) p = p + a->xf.pos;
-    double sx, sy;
-    if (app.project(p, v, sx, sy)) {
-      ImVec2 c = {(float)sx, (float)sy};
-      if (app.tool == Tool::Move) {
-        dl->AddLine(c, {c.x + 45, c.y}, IM_COL32(230, 90, 90, 255), 3);
-        dl->AddTriangleFilled({c.x + 52, c.y}, {c.x + 42, c.y - 5}, {c.x + 42, c.y + 5}, IM_COL32(230, 90, 90, 255));
-        dl->AddLine(c, {c.x, c.y - 45}, IM_COL32(100, 210, 100, 255), 3);
-        dl->AddTriangleFilled({c.x, c.y - 52}, {c.x - 5, c.y - 42}, {c.x + 5, c.y - 42}, IM_COL32(100, 210, 100, 255));
-        dl->AddCircleFilled(c, 5, IM_COL32(90, 140, 240, 255));
-      } else {
-        dl->AddCircle(c, 40, IM_COL32(240, 200, 80, 220), 48, 2.5f);
-        dl->AddCircle(c, 30, IM_COL32(90, 140, 240, 160), 48, 1.5f);
-      }
+  // centre of rotation (set with a middle-click)
+  if (!app.geo && app.editCam.pivotSet) {
+    double px, py;
+    if (app.project(app.editCam.pivot, v, px, py)) {
+      ImVec2 c = {(float)px, (float)py};
+      dl->AddCircle(c, 6, IM_COL32(255, 255, 255, 220), 16, 1.5f);
+      dl->AddLine({c.x - 10, c.y}, {c.x + 10, c.y}, IM_COL32(255, 255, 255, 160));
+      dl->AddLine({c.x, c.y - 10}, {c.x, c.y + 10}, IM_COL32(255, 255, 255, 160));
     }
   }
-}
 
-// ============================================================ builder
-void UI::openBuilder(const PrimitiveDef* base, bool editing) {
-  if (base) {
-    draft_ = *base;
-    if (!editing) { draft_.id.clear(); draft_.name += " copy"; draft_.builtin = false; }
-  } else {
-    draft_ = PrimitiveDef{};
-    draft_.name = "My primitive";
-    draft_.steps.push_back(Step{});
-  }
-  draftEditing_ = editing;
-  showBuilder_ = true;
-  previewCam_ = FullCamera();
-  previewCam_.target = {0, 0, 0, 0};
-  previewCam_.distance = 6;
-  previewW_ = previewZW_ = 0;
-}
-
-void UI::builderWindow() {
-  ImGui::SetNextWindowSize({980, 560}, ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, {0.5f, 0.5f});
-  if (!ImGui::Begin(draftEditing_ ? "Edit primitive" : "New primitive", &showBuilder_)) { ImGui::End(); return; }
-  ImGui::BeginChild("left", {520, -40});
-  char nameBuf[128];
-  std::snprintf(nameBuf, sizeof nameBuf, "%s", draft_.name.c_str());
-  if (ImGui::InputText("Name", nameBuf, sizeof nameBuf)) draft_.name = nameBuf;
-  ImGui::TextDisabled("Each Extrude / Revolve adds the next axis: X -> Y -> Z -> W.");
-  ImGui::TextUnformatted("Point (0D start)");
-  int dim = 0, remove = -1, moveUp = -1;
-  for (size_t k = 0; k < draft_.steps.size(); k++) {
-    auto& s = draft_.steps[k];
-    ImGui::PushID((int)k);
-    ImGui::Separator();
-    if (s.op == StepOp::Extrude) {
-      ImGui::Text("Extrude -> %c", dim < 4 ? AXIS[dim] : '?');
-      ImGui::SameLine(130);
-      int mode = (int)s.mode;
-      ImGui::SetNextItemWidth(130);
-      const char* modes[] = {"finite", "infinite", "half-space (<= 0)"};
-      if (ImGui::Combo("##mode", &mode, modes, 3)) s.mode = (ExtrudeMode)mode;
-      if (s.mode == ExtrudeMode::Finite) {
-        ImGui::SameLine();
-        float L = (float)s.length;
-        ImGui::SetNextItemWidth(110);
-        if (ImGui::DragFloat("Length", &L, 0.02f, 0.001f, 100.f)) s.length = std::max(0.001f, L);
+  // Blender-like gizmo: the object's own X/Y/Z/W axes projected into the visible slice
+  Gizmo g = app.gizmo();
+  if (g.visible) {
+    const ImU32 cols[4] = {IM_COL32(230, 80, 80, 255), IM_COL32(100, 210, 100, 255), IM_COL32(80, 130, 240, 255), IM_COL32(200, 100, 235, 255)};
+    ImVec2 c = {(float)g.cx, (float)g.cy};
+    auto bright = [](ImU32 col) { return col | IM_COL32(60, 60, 60, 0); };
+    if (app.tool == Tool::Move) {
+      for (int a = 0; a < 4; a++) {
+        auto& ax = g.axes[a];
+        if (!ax.visible) continue;
+        bool hot = g.hot == a;
+        ImU32 col = hot ? IM_COL32(255, 230, 120, 255) : cols[a];
+        ImVec2 e = {(float)ax.ex, (float)ax.ey};
+        float dx = e.x - c.x, dy = e.y - c.y, l = std::sqrt(dx * dx + dy * dy);
+        if (l < 1) continue;
+        float ux = dx / l, uy = dy / l;
+        dl->AddLine(c, {e.x - ux * 10, e.y - uy * 10}, col, hot ? 4.f : 3.f);
+        dl->AddTriangleFilled(e, {e.x - ux * 14 - uy * 6, e.y - uy * 14 + ux * 6}, {e.x - ux * 14 + uy * 6, e.y - uy * 14 - ux * 6}, col);
+        char l1[2] = {AXIS[a], 0};
+        dl->AddText({e.x + ux * 6 - 4, e.y + uy * 6 - 7}, col, l1);
       }
-      dim++;
-    } else if (s.op == StepOp::Revolve) {
-      ImGui::Text("Revolve -> %c", dim < 4 ? AXIS[dim] : '?');
-      ImGui::SameLine(130);
-      if (dim > 0) {
-        int a = s.axis < 0 ? dim - 1 : s.axis;
-        std::string preview = std::string("spin ") + AXIS[a] + " into " + AXIS[std::min(dim, 3)];
-        ImGui::SetNextItemWidth(130);
-        if (ImGui::BeginCombo("##axis", preview.c_str())) {
-          for (int i = 0; i < dim; i++)
-            if (ImGui::Selectable((std::string("spin ") + AXIS[i] + " into " + AXIS[std::min(dim, 3)]).c_str(), i == a)) s.axis = i;
-          ImGui::EndCombo();
+      dl->AddRectFilled({c.x - 6, c.y - 6}, {c.x + 6, c.y + 6}, g.hot == 4 ? IM_COL32(255, 230, 120, 255) : IM_COL32(230, 230, 230, 200), 2);
+    } else {
+      for (size_t r = 0; r < g.rings.size(); r++) {
+        auto& ring = g.rings[r];
+        bool hot = g.hot == 10 + (int)r;
+        // ring colour: the axis it rotates "about" in 3D terms (XY->Z blue, XZ->Y green, YZ->X red), W planes purple
+        int about = (ring.a == 3 || ring.b == 3) ? 3 : 3 - ring.a - ring.b;
+        ImU32 col = hot ? IM_COL32(255, 230, 120, 255) : bright(cols[about]);
+        std::vector<ImVec2> pts;
+        for (auto& p : ring.pts) pts.push_back({(float)p.first, (float)p.second});
+        dl->AddPolyline(pts.data(), (int)pts.size(), col, 0, hot ? 3.5f : 2.f);
+        if (hot) {
+          char lbl[8];
+          std::snprintf(lbl, sizeof lbl, "%c%c", AXIS[ring.a], AXIS[ring.b]);
+          dl->AddText({pts[8].x + 6, pts[8].y - 6}, col, lbl);
         }
       }
-      ImGui::SameLine();
-      float R = (float)s.radius;
-      ImGui::SetNextItemWidth(110);
-      if (ImGui::DragFloat("Radius", &R, 0.02f, 0.f, 100.f)) s.radius = std::max(0.f, R);
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Radius of revolution (0 = around the centre)");
-      dim++;
-    } else {
-      ImGui::TextUnformatted("Rotate");
-      ImGui::SameLine(130);
-      std::string pl = std::string(1, AXIS[s.i]) + AXIS[s.j];
-      ImGui::SetNextItemWidth(80);
-      if (ImGui::BeginCombo("##plane", pl.c_str())) {
-        for (int a = 0; a < dim; a++)
-          for (int b = a + 1; b < dim; b++)
-            if (ImGui::Selectable((std::string(1, AXIS[a]) + AXIS[b]).c_str(), s.i == a && s.j == b)) { s.i = a; s.j = b; }
-        ImGui::EndCombo();
-      }
-      ImGui::SameLine();
-      float ang = (float)s.angle;
-      ImGui::SetNextItemWidth(110);
-      if (ImGui::DragFloat("Angle", &ang, 0.5f)) s.angle = ang;
+      dl->AddCircleFilled(c, 3, IM_COL32(230, 230, 230, 220));
     }
-    ImGui::SameLine(460);
-    if (k > 0 && ImGui::SmallButton("^")) moveUp = (int)k;
-    ImGui::SameLine();
-    if (ImGui::SmallButton("x")) remove = (int)k;
-    ImGui::PopID();
   }
-  if (remove >= 0) draft_.steps.erase(draft_.steps.begin() + remove);
-  if (moveUp > 0) std::swap(draft_.steps[moveUp], draft_.steps[moveUp - 1]);
-  ImGui::Separator();
-  int cd = primitiveDim(draft_);
-  if (ImGui::Button("+ Extrude") && cd < 4) draft_.steps.push_back(Step{});
-  ImGui::SameLine();
-  if (ImGui::Button("+ Revolve") && cd >= 1 && cd < 4) { Step s; s.op = StepOp::Revolve; s.radius = 0; draft_.steps.push_back(s); }
-  ImGui::SameLine();
-  if (ImGui::Button("+ Rotate") && cd >= 2) { Step s; s.op = StepOp::Rotate; s.i = 0; s.j = 1; s.angle = 45; draft_.steps.push_back(s); }
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rotate the profile within its own space (matters before a Revolve)");
-  float rd = (float)draft_.round, sh = (float)draft_.shell;
-  if (ImGui::DragFloat("Rounding", &rd, 0.005f, -2, 5)) draft_.round = rd;
-  if (ImGui::DragFloat("Shell", &sh, 0.005f, 0, 5)) draft_.shell = std::max(0.f, sh);
-  auto errs = validatePrimitive(draft_);
-  if (!errs.empty()) ImGui::TextColored({1, 0.7f, 0.3f, 1}, "%s", errs[0].c_str());
-  else ImGui::TextDisabled("Result: %dD primitive%s", cd, cd < 4 ? " (thin along the remaining axes when placed in 4D)" : "");
-  ImGui::EndChild();
-
-  ImGui::SameLine();
-  ImGui::BeginChild("right", {0, -40});
-  ImVec2 psz = {std::max(200.f, ImGui::GetContentRegionAvail().x), 340};
-  ImVec2 pp = ImGui::GetCursorScreenPos();
-  ImGui::InvisibleButton("##preview", psz);
-  if (ImGui::IsItemActive()) previewCam_.orbit(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
-  if (ImGui::IsItemHovered() && wheel_ != 0) { previewCam_.zoom(-wheel_); wheel_ = 0; }
-  if (errs.empty()) {
-    static PrimitiveRegistry previewReg;
-    PrimitiveDef d = draft_;
-    d.id = "__draft";
-    d.builtin = false;
-    previewReg.set(d);
-    static Node previewRoot = makeGroup(BoolOp::Union, {makeLeaf("__draft", "draft", {0, 0, 0, 0}, {0.9, 0.6, 0.3})});
-    previewCam_.reset4();
-    previewCam_.rotate4(2, 3, previewZW_ * PI / 180);
-    FrameParams fp;
-    fp.view = previewCam_.view();
-    fp.view.eye[3] += previewW_;
-    fp.geo = false;
-    fp.grid = true;
-    fp.fovDeg = 50;
-    fp.quality = &app.quality;
-    fp.scale = 1;
-    app.renderer->render(previewRT_, (int)psz.x, (int)psz.y, previewRoot, previewReg, "", {}, fp);
-    ImGui::GetWindowDrawList()->AddImage(tex(previewRT_.tex), pp, {pp.x + psz.x, pp.y + psz.y}, {0, 1}, {1, 0});
-  }
-  ImGui::SliderFloat("W slice", &previewW_, -2, 2);
-  ImGui::SliderFloat("ZW turn", &previewZW_, -180, 180, "%.0f deg");
-  ImGui::TextDisabled("Drag to orbit, wheel to zoom. 4D shapes show as the 3D slice at W.");
-  ImGui::EndChild();
-
-  bool ok = errs.empty();
-  if (!ok) ImGui::BeginDisabled();
-  auto save = [&](bool place) {
-    PrimitiveDef out = draft_;
-    if (!draftEditing_ || out.id.empty()) out.id = newId("p");
-    out.builtin = false;
-    if (out.description.empty()) out.description = std::to_string(primitiveDim(out)) + "D custom primitive";
-    app.lib.savePrimitive(out);
-    app.rebuild();
-    app.toast("Saved primitive \"" + out.name + "\"");
-    showBuilder_ = false;
-    if (place) app.placeItem({false, out.id}, std::nullopt);
-  };
-  if (ImGui::Button("Save to library")) save(false);
-  ImGui::SameLine();
-  if (ImGui::Button("Save & place")) save(true);
-  if (!ok) ImGui::EndDisabled();
-  ImGui::SameLine();
-  if (ImGui::Button("Cancel")) showBuilder_ = false;
-  ImGui::End();
 }
 
 // ============================================================ quality / help
@@ -907,31 +897,38 @@ void UI::qualityWindow() {
   ImGui::Checkbox("Collisions (Explore)", &app.collide);
   ImGui::Checkbox("Outside thumbnail (Geodesic)", &app.showThumbnail);
   ImGui::Checkbox("Player sphere (Edit)", &app.showPlayerMarker);
+  ImGui::Checkbox("Own body (Explore)", &app.showOwnBody);
   if (!app.renderer->lastError.empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "Last shader error:\n%.300s", app.renderer->lastError.c_str());
   ImGui::TextDisabled("Last shader compile: %.0f ms", app.renderer->lastCompileMs);
   ImGui::End();
 }
 
 void UI::helpWindow() {
-  ImGui::SetNextWindowSize({620, 520}, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize({640, 560}, ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Help", &showHelp_)) { ImGui::End(); return; }
   ImGui::SeparatorText("Modes");
   ImGui::TextWrapped("Tab: Edit / Explore.  V: Full 4D / Geodesic 3D (needs a world object: World menu in the toolbar, or Properties > Use as world).");
-  ImGui::SeparatorText("Edit (Blender-like)");
-  ImGui::BulletText("RMB/MMB drag: orbit | Shift+drag: pan | Ctrl+drag or wheel: zoom | Alt+drag: rotate the view into W (Geodesic: roll)");
+  ImGui::SeparatorText("Edit, Full 4D (Blender-like)");
+  ImGui::BulletText("RMB/MMB drag: orbit | MMB click on an object: set the centre of rotation (click empty space to reset)");
+  ImGui::BulletText("Shift+drag: pan | Ctrl+drag or wheel: zoom | Alt+drag: rotate the view into W");
   ImGui::BulletText("W slider (left edge of the viewport): moves the visible 3D slice along the camera's 4th axis");
-  ImGui::BulletText("Tools: Q select, W move, E rotate. Move/rotate are relative to the camera and stay inside the visible slice (Shift: depth / roll)");
-  ImGui::BulletText("G grab, R rotate, S scale; then X / Y / Z = screen-right / screen-up / depth; click or Enter confirms, Esc or RMB cancels");
-  ImGui::BulletText("Click: select (again: parent group) | Shift+click: multi-select | A: all | Esc: none | Shift+D duplicate | X/Del delete | Ctrl+G group | F focus");
   ImGui::BulletText("1 / 3 / 7 / 9: front / right / top / along W | Shift+W: reset 4D orientation");
-  ImGui::BulletText("The yellow sphere is the Explore player (projected into the visible slice; dW = its distance from the slice)");
+  ImGui::SeparatorText("Edit, Geodesic 3D (game-like)");
+  ImGui::BulletText("Hold RMB: mouse look + WASD fly along the surface, Space/Shift up/down, Q/E roll; wheel = fly speed");
+  ImGui::SeparatorText("Editing");
+  ImGui::BulletText("Tools: Q select, W move, E rotate. The gizmo shows the object's own X/Y/Z/W axes projected into the visible slice");
+  ImGui::BulletText("Move: drag an arrow to move along that axis, the centre square (or the object) to move in the screen plane");
+  ImGui::BulletText("Rotate: drag a ring to rotate in the plane of two object axes");
+  ImGui::BulletText("G grab, R rotate, S scale; then X/Y/Z/W = object axis (R: one axis = about it, two = that plane); Enter/click confirm, Esc cancel");
+  ImGui::BulletText("Click: select (again: parent group) | Shift+click: multi | A all | Esc none | Shift+D duplicate | X/Del delete | Ctrl+G group | F focus");
+  ImGui::BulletText("Shapes are a point plus modifiers: Extrude / Revolve add the next axis (X, Y, Z, W); Rotate, Mirror, Repeat reshape");
   ImGui::SeparatorText("Explore (game-like)");
-  ImGui::BulletText("Click to capture the mouse, Esc releases (Esc again returns to Edit). WASD, Space/Shift up/down, wheel = speed");
-  ImGui::BulletText("Full 4D: Q/E move along W, Z/X turn into W, C/V turn sideways in W, R reset");
-  ImGui::BulletText("Geodesic: you move on the world's 3D surface; Q/E roll. The thumbnail shows you from outside");
-  ImGui::SeparatorText("Library & tree");
-  ImGui::BulletText("Drag library items into the viewport or onto tree rows. Right-click items for edit/export/delete");
-  ImGui::BulletText("Drag tree rows onto groups (into), onto objects (union with it) or onto row edges (reorder). Right-click for more");
+  ImGui::BulletText("You start where the editor camera is. Click to capture the mouse, Esc releases (again: back to Edit)");
+  ImGui::BulletText("WASD, Space/Shift up/down, wheel = speed. Full 4D: Q/E along W, Z/X turn into W, C/V sideways in W, R reset");
+  ImGui::BulletText("Your body (yellow sphere) is part of the scene: it casts a shadow, and on closed worlds you can see yourself");
+  ImGui::SeparatorText("Library");
+  ImGui::BulletText("Built-in folders are read-only; saved objects go to Custom. '+ Folder' adds folders; right-click to rename / move / delete");
+  ImGui::BulletText("Drag items into the viewport, onto tree rows, or onto a folder. Drag tree rows onto a folder to save them there");
   ImGui::End();
 }
 
