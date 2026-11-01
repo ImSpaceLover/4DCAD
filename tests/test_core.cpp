@@ -192,6 +192,31 @@ int main() {
     CHECK(imp.folders.size() == 1 && imp.folders[0].objects[0].name == "My torus" && imp.folders[0].objects[0].node.mods.size() == 3, "library json");
   }
 
+  // materials and custom SDFs: JSON round trip, CPU bounding-box approximation, code renaming, code view
+  {
+    Node cust = makeCustom("C");
+    cust.codeBound = 2;
+    cust.mat.emissive = 0.5;
+    cust.mat.texture = TEX_CHECKER;
+    cust.mat.color2 = {0.1, 0.2, 0.3};
+    Node back = nodeFromJson(nodeToJson(cust));
+    CHECK(back.isCustom() && back.code == cust.code && back.codeBound == 2 && back.mat.emissive == 0.5 && back.mat.texture == TEX_CHECKER &&
+          back.mat.color2[2] == 0.3, "material/custom json");
+    CHECK(nodeDim(back, reg) == 4, "custom SDFs are 4D");
+    Node r = makeGroup(BoolOp::Union, {back});
+    SceneEvaluator ev(r, reg, "");
+    CLOSE(ev.evalFull({3, 0, 0, 0}).d, 1, 1e-9);  // box of half size 2
+    std::string ren = renameCustomCode("float helper(float x) { return x; }\nfloat sdf(vec4 p) { return helper(length(p)) - 1.0; }", "_c7");
+    CHECK(ren.find("float sdf_c7(vec4 p)") != std::string::npos && ren.find("helper_c7(length") != std::string::npos, "rename: %s", ren.c_str());
+    auto cs = compileScene(r, reg, "", false);
+    CHECK(cs.glsl.find("sdf_c1(") != std::string::npos, "custom function in scene");
+    std::unordered_set<std::string> bad{back.code};
+    auto cs2 = compileScene(r, reg, "", false, &bad);
+    CHECK(cs2.glsl.find("custom SDF:") == std::string::npos, "bad code replaced by its box");
+    std::string sa = standaloneGLSL(playgroundScene().root, reg);
+    CHECK(sa.find("float sdf(vec4 p)") != std::string::npos && sa.find("sU(") != std::string::npos, "standalone code");
+  }
+
   // full camera slice W and frame round trip
   {
     FullCamera cam;

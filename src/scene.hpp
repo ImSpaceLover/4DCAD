@@ -49,6 +49,27 @@ struct Anchor {
   double reach = 1e4;    // validity radius of the tangent-space approximation
 };
 
+// Surface material of a leaf. Textures are procedural 4D solid textures evaluated in
+// the object's local coordinates, so they move and rotate with the object.
+enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, TEX_RINGS, TEX_COUNT };
+inline const char* TEXTURE_NAMES[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings"};
+struct Material {
+  double emissive = 0;   // 0..1: always lit, casts no shadow, does not light others
+  int texture = TEX_NONE;
+  double texScale = 1;   // pattern cells per unit
+  double texStrength = 0.7;
+  std::array<double, 3> color2{0.12, 0.12, 0.14};  // second texture colour
+};
+
+/** Default code of a custom SDF leaf (GLSL). */
+inline const char* DEFAULT_CUSTOM_SDF =
+    "// Signed distance in the object's local 4D space.\n"
+    "// Helpers: opExtrude(d, h), sU/sI/sS(a, b, k) smooth booleans, INF.\n"
+    "float sdf(vec4 p) {\n"
+    "  // a hypersphere of radius 1 with a wavy surface\n"
+    "  return length(p) - 1.0 + 0.05 * sin(8.0 * p.x) * sin(8.0 * p.y);\n"
+    "}\n";
+
 struct Node {
   std::string id, name;
   NodeKind kind = NodeKind::Leaf;
@@ -61,6 +82,10 @@ struct Node {
   std::array<double, 3> color{0.8, 0.5, 0.3};
   double thickness = 0.1;  // extent along unused axes for objects with dim < 4
   std::optional<double> round, shell;
+  Material mat;
+  std::string code;        // custom SDF (prim == "custom"): GLSL defining float sdf(vec4 p)
+  double codeBound = 1.5;  // custom SDF: half size of its bounding box (used for picking / collisions)
+  bool isCustom() const { return kind == NodeKind::Leaf && prim == "custom"; }
   // group
   BoolOp op = BoolOp::Union;
   double k = 0.3;
@@ -75,12 +100,25 @@ struct CameraState {
   M4 rot4 = identity();
 };
 
+/** Ray-marching / rendering settings. */
 struct QualitySettings {
   float resolutionScale = 1.0f;   // when idle
   float motionScale = 0.5f;       // while the camera / objects move
   int maxSteps = 160;
+  float maxDistFull = 120;        // Full 4D: rays longer than this show the sky
+  float maxDistGeo = 60;          // Geodesic: same, measured along the surface
+  float eps = 0.0015f;            // surface hit precision
+  float stepScale = 1.0f;         // < 1 = safer marching for inexact SDFs (custom code, repeats)
   bool shadows = true;
+  float shadowK = 10;             // shadow sharpness
+  float shadowMax = 12;           // shadow ray length
   bool ao = true;
+  float aoStrength = 1.5f;
+  float fog = 1.0f;
+  float ambient = 0.18f;
+  float lightYaw = 2.18f, lightPitch = 0.93f, lightW = 0.25f;  // light direction
+  std::array<float, 3> skyTop{0.32f, 0.38f, 0.5f}, skyBottom{0.16f, 0.17f, 0.2f};
+  bool grid = true;               // ground grid in Edit mode
   float geoMaxStep = 0.25f;
   int geoProjectIters = 1;
 };
@@ -88,6 +126,7 @@ struct QualitySettings {
 std::string newId(const char* prefix = "n");
 Node makeLeaf(const std::string& prim, const std::string& name, V4 pos = {0, 0, 0, 0}, std::array<double, 3> color = {0.8, 0.5, 0.3});
 Node makeGroup(BoolOp op, std::vector<Node> children, const std::string& name = "");
+Node makeCustom(const std::string& name, const std::string& code = DEFAULT_CUSTOM_SDF);
 
 /** Full rotation of a node: anchor basis (if any) followed by its own rotation. */
 M4 nodeRotation(const Node& n);

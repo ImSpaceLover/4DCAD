@@ -19,10 +19,18 @@ struct CompiledScene {
   bool hasWorld = false;
 };
 
-CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorld, bool geo);
+/** badCode: custom SDF sources known not to compile (replaced by their bounding box). */
+CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorld, bool geo,
+                           const std::unordered_set<std::string>* badCode = nullptr);
+/** Helper functions (opExtrude, sU, sI, sS, INF) that custom SDF code may use. */
+const char* sdfHelpersGLSL();
+/** Renames the functions defined in custom SDF code by appending a suffix (sdf -> sdf<suffix>). */
+std::string renameCustomCode(const std::string& code, const std::string& suffix);
+/** Self-contained GLSL `float sdf(vec4 p)` of a node in its local space (for viewing / copying). */
+std::string standaloneGLSL(const Node& n, const PrimitiveRegistry& reg);
 
 struct PackedUniforms {
-  std::vector<float> rot, pos, par, col, bc, br;
+  std::vector<float> rot, pos, par, col, bc, br, mat, col2;
 };
 PackedUniforms packUniforms(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight);
 

@@ -56,6 +56,13 @@ double opExtrudeD(double d, double wy) {
 }
 
 static Sample combine(BoolOp op, double k, const Sample& a, const Sample& b) {
+  // empty operands (>= INF/2): keep the smooth formulas away from them
+  bool ea = a.d >= INF * 0.5, eb = b.d >= INF * 0.5;
+  if (ea || eb) {
+    if (op == BoolOp::SmoothUnion) return ea ? b : a;
+    if (op == BoolOp::SmoothIntersection) return Sample{};
+    if (op == BoolOp::SmoothSubtraction) return a;
+  }
   auto mixc = [](const std::array<double, 3>& x, const std::array<double, 3>& y, double t) {
     return std::array<double, 3>{mixd(x[0], y[0], t), mixd(x[1], y[1], t), mixd(x[2], y[2], t)};
   };
@@ -94,7 +101,8 @@ std::unordered_map<std::string, Bound> computeBounds(const Node& root, const Pri
     std::array<double, 4> e{0, 0, 0, 0};
     auto ax = modifierAxes(n, reg);
     int dimFinal = nodeDim(n, reg);
-    if (n.isLeaf()) {
+    if (n.isCustom()) e = {n.codeBound, n.codeBound, n.codeBound, n.codeBound};
+    else if (n.isLeaf()) {
       if (auto* def = reg.get(n.prim)) e = primitiveExtents(*def);
       for (int a = dimFinal; a < 4; a++) e[a] = n.thickness / 2;
     } else {
@@ -152,10 +160,10 @@ V4 SceneEvaluator::toLocal(const Node& n, const V4& p) const {
 Sample SceneEvaluator::evalFull(const V4& p) const { wcache_.clear(); return evalNode(root_, p, p, 1, EvalCtx::Full); }
 Sample SceneEvaluator::evalGeo(const V4& p) const { wcache_.clear(); return evalNode(root_, p, p, 1, EvalCtx::Geo); }
 
-double SceneEvaluator::worldDist(const V4& g, const std::string& worldId) const {
-  if (worldId.empty()) return INF;
+Sample SceneEvaluator::worldSample(const V4& g, const std::string& worldId) const {
+  if (worldId.empty()) return {};
   auto path = pathTo(root_, worldId);
-  if (path.empty()) return INF;
+  if (path.empty()) return {};
   V4 p = g;
   double s = 1;
   for (size_t i = 0; i + 1 < path.size(); i++) {
@@ -164,8 +172,12 @@ double SceneEvaluator::worldDist(const V4& g, const std::string& worldId) const 
     double t[64];
     if (path[i]->mods.size() <= 64) modifierCoords(*path[i], prep_.at(path[i]->id).axes, p, t);
   }
-  return evalNode(*path.back(), p, g, s, EvalCtx::World).d * s;
+  Sample r = evalNode(*path.back(), p, g, s, EvalCtx::World);
+  if (r.d < INF * 0.5) r.d *= s;
+  return r;
 }
+
+double SceneEvaluator::worldDist(const V4& g, const std::string& worldId) const { return worldSample(g, worldId).d; }
 
 V4 SceneEvaluator::worldGrad(const V4& g, const std::string& worldId) const {
   const double e = 1e-4;
@@ -197,7 +209,12 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
   Sample r;
   if (n.isLeaf()) {
     if (!pr.prim) return {};
-    double d = evalPrimitive(*pr.prim, q);
+    double d;
+    if (n.isCustom()) {  // GLSL code cannot run on the CPU: use its bounding box
+      double e[4], o = 0, in = -1e9;
+      for (int a = 0; a < 4; a++) { e[a] = std::abs(q[a]) - n.codeBound; o += std::max(e[a], 0.0) * std::max(e[a], 0.0); in = std::max(in, e[a]); }
+      d = std::sqrt(o) + std::min(in, 0.0);
+    } else d = evalPrimitive(*pr.prim, q);
     for (int a = pr.dim; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
     d = modifierDistance(n, pr.axes, d, t);
     double shell = n.shell.value_or(0.0);

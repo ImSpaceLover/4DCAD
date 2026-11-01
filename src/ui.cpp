@@ -35,7 +35,9 @@ void UI::frame(double dt) {
   viewport(dt);
   if (showQuality_) qualityWindow();
   if (showHelp_) helpWindow();
+  if (showSdf_) sdfWindow();
   pathPrompt();
+  unsavedPrompt();
 
   // toast
   if (app.now < app.toastUntil && !app.toastMsg.empty()) {
@@ -58,9 +60,9 @@ void UI::onKey(int key, int action, int mods) {
   bool ctrl = (mods & GLFW_MOD_CONTROL) || (mods & GLFW_MOD_SUPER);
   bool shift = mods & GLFW_MOD_SHIFT;
   if (action == GLFW_REPEAT && !(ctrl && (key == GLFW_KEY_Z || key == GLFW_KEY_Y))) return;
-  if (ctrl && key == GLFW_KEY_S) { fileAction(2); return; }
-  if (ctrl && key == GLFW_KEY_O) { fileAction(1); return; }
-  if (ctrl && key == GLFW_KEY_N) { app.newScene(); return; }
+  if (ctrl && key == GLFW_KEY_S) { shift ? fileAction(2) : saveScene(); return; }
+  if (ctrl && key == GLFW_KEY_O) { guarded([this] { fileAction(1); }); return; }
+  if (ctrl && key == GLFW_KEY_N) { guarded([this] { app.newScene(); }); return; }
   app.handleKey(key, shift, ctrl);
 }
 
@@ -123,11 +125,13 @@ void UI::pathPrompt() {
 void UI::menuBar() {
   if (!ImGui::BeginMainMenuBar()) return;
   if (ImGui::BeginMenu("File")) {
-    if (ImGui::MenuItem("New", "Ctrl+N")) app.newScene();
-    if (ImGui::MenuItem("Open...", "Ctrl+O")) fileAction(1);
-    if (ImGui::MenuItem("Save as...", "Ctrl+S")) fileAction(2);
+    if (ImGui::MenuItem("New", "Ctrl+N")) guarded([this] { app.newScene(); });
+    if (ImGui::MenuItem("Open...", "Ctrl+O")) guarded([this] { fileAction(1); });
+    if (ImGui::MenuItem("Save", "Ctrl+S")) saveScene();
+    if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S")) fileAction(2);
     if (ImGui::BeginMenu("Examples")) {
-      for (auto& ex : EXAMPLES) if (ImGui::MenuItem(ex.name)) { app.loadScene(ex.make()); app.currentFile.clear(); }
+      for (auto& ex : EXAMPLES)
+        if (ImGui::MenuItem(ex.name)) { auto mk = ex.make; guarded([this, mk] { app.loadScene(mk()); app.currentFile.clear(); }); }
       ImGui::EndMenu();
     }
     ImGui::Separator();
@@ -135,7 +139,7 @@ void UI::menuBar() {
     if (ImGui::MenuItem("Export library...")) fileAction(4);
     if (ImGui::MenuItem("Export selected object...", nullptr, false, app.selected() != nullptr)) fileAction(5);
     ImGui::Separator();
-    if (ImGui::MenuItem("Quit")) quitRequested = true;
+    if (ImGui::MenuItem("Quit")) requestQuit();
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Edit")) {
@@ -157,13 +161,12 @@ void UI::menuBar() {
     if (ImGui::MenuItem("Full 4D", "V", !app.geo)) app.setGeo(false);
     if (ImGui::MenuItem("Geodesic 3D", "V", app.geo)) app.setGeo(true);
     ImGui::Separator();
-    ImGui::MenuItem("Outside thumbnail (Geodesic)", nullptr, &app.showThumbnail);
-    ImGui::MenuItem("Show player sphere (Edit)", nullptr, &app.showPlayerMarker);
-    ImGui::MenuItem("Show own body (Explore)", nullptr, &app.showOwnBody);
+    ImGui::MenuItem("Outside thumbnail (Geodesic)", nullptr, &app.editSet.showThumbnail);
+    ImGui::MenuItem("Show own body (Explore)", nullptr, &app.exploreSet.showOwnBody);
     if (ImGui::MenuItem("Reset 4D orientation", "Shift+W")) app.editCam.reset4();
     if (ImGui::MenuItem("Front / Right / Top / Along W", "1 3 7 9")) app.standardView(0);
     ImGui::Separator();
-    ImGui::MenuItem("Rendering quality...", nullptr, &showQuality_);
+    ImGui::MenuItem("Settings...", nullptr, &showQuality_);
     ImGui::EndMenu();
   }
   if (ImGui::MenuItem("Help")) showHelp_ = !showHelp_;
@@ -212,16 +215,17 @@ void UI::toolbar() {
     ImGui::SameLine();
     if (toggleButton("Select", app.tool == Tool::Select, "Q: click to select")) app.tool = Tool::Select;
     ImGui::SameLine(0, 2);
-    if (toggleButton("Move", app.tool == Tool::Move, "W: gizmo arrows along the object's axes (projected into the visible slice)")) app.tool = Tool::Move;
+    if (toggleButton("Move", app.tool == Tool::Move, "W: gizmo arrows along the object's local X / Y / Z (kept inside the visible slice)")) app.tool = Tool::Move;
     ImGui::SameLine(0, 2);
-    if (toggleButton("Rotate", app.tool == Tool::Rotate, "E: gizmo rings for the planes of the object's axes")) app.tool = Tool::Rotate;
+    if (toggleButton("Rotate", app.tool == Tool::Rotate, "E: gizmo rings to rotate about the object's local X / Y / Z")) app.tool = Tool::Rotate;
   }
   ImGui::SameLine(0, 16);
   if (ImGui::Button("Undo")) app.undo();
   ImGui::SameLine(0, 2);
   if (ImGui::Button("Redo")) app.redo();
   ImGui::SameLine(0, 16);
-  if (ImGui::Button("Quality")) showQuality_ = !showQuality_;
+  if (ImGui::Button("Settings")) showQuality_ = !showQuality_;
+  if (app.dirty()) { ImGui::SameLine(); ImGui::TextColored({1, 0.75f, 0.3f, 1}, "unsaved"); }
   ImGui::SameLine();
   ImGui::TextDisabled("%.0f fps", app.fps);
   ImGui::End();
@@ -473,7 +477,9 @@ void UI::propertiesPanel() {
   if (ImGui::InputText("Name", nameBuf, sizeof nameBuf)) n->name = nameBuf;
   track();
   int dim = nodeDim(*n, app.reg);
-  ImGui::TextDisabled("%dD %s", dim, n->isLeaf() ? "shape (point + modifiers)" : "group");
+  ImGui::TextDisabled("%dD %s", dim, n->isCustom() ? "custom SDF" : n->isLeaf() ? "shape (point + modifiers)" : "group");
+  ImGui::SameLine();
+  if (ImGui::SmallButton("View SDF code")) { showSdf_ = true; sdfNodeId_ = n->id; }
 
   if (n->isLeaf()) {
     ImGui::SeparatorText("Shape");
@@ -491,6 +497,46 @@ void UI::propertiesPanel() {
     track();
     if (ImGui::DragFloat("Shell", &sh, 0.005f, 0.f, 5.f)) n->shell = std::max(0.f, sh);
     track();
+    ImGui::SeparatorText("Material");
+    float em = (float)n->mat.emissive;
+    if (ImGui::SliderFloat("Emissive", &em, 0, 1)) { bool was = n->mat.emissive > 0; n->mat.emissive = em; if (was != (em > 0)) done = true; }
+    track();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Always lit, casts no shadow, does not light other objects");
+    int tex = n->mat.texture;
+    if (ImGui::Combo("Texture", &tex, TEXTURE_NAMES, TEX_COUNT)) { n->mat.texture = tex; done = true; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Procedural 4D solid texture in the object's local space (moves with it)");
+    if (n->mat.texture != TEX_NONE) {
+      float c2[3] = {(float)n->mat.color2[0], (float)n->mat.color2[1], (float)n->mat.color2[2]};
+      if (ImGui::ColorEdit3("Texture colour", c2)) for (int i = 0; i < 3; i++) n->mat.color2[i] = c2[i];
+      track();
+      float ts = (float)n->mat.texScale, tst = (float)n->mat.texStrength;
+      if (ImGui::DragFloat("Texture scale", &ts, 0.02f, 0.01f, 100.f)) n->mat.texScale = std::max(0.01f, ts);
+      track();
+      if (ImGui::SliderFloat("Texture strength", &tst, 0, 1)) n->mat.texStrength = tst;
+      track();
+    }
+    if (n->isCustom()) {
+      ImGui::SeparatorText("Custom SDF (GLSL)");
+      if (codeEditId_ != n->id) { codeEditId_ = n->id; codeBuf_ = n->code; }
+      codeBuf_.reserve(codeBuf_.size() + 4096);
+      if (codeBuf_.capacity() < 16384) codeBuf_.reserve(16384);
+      std::vector<char> buf(codeBuf_.begin(), codeBuf_.end());
+      buf.resize(std::max<size_t>(16384, codeBuf_.size() + 4096), 0);
+      if (ImGui::InputTextMultiline("##code", buf.data(), buf.size(), {-1, 200}, ImGuiInputTextFlags_AllowTabInput)) codeBuf_ = buf.data();
+      if (ImGui::Button("Apply code")) {
+        std::string err = app.renderer->checkCustomCode(codeBuf_);
+        codeErr_ = err;
+        if (err.empty()) { n->code = codeBuf_; done = true; }
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Revert")) { codeBuf_ = n->code; codeErr_.clear(); }
+      if (!codeErr_.empty()) ImGui::TextColored({1, 0.55f, 0.4f, 1}, "%s", codeErr_.c_str());
+      else if (!app.renderer->checkCustomCode(n->code).empty()) ImGui::TextColored({1, 0.55f, 0.4f, 1}, "Stored code does not compile: shown as its bounding box");
+      float cb = (float)n->codeBound;
+      if (ImGui::DragFloat("Bound (half size)", &cb, 0.02f, 0.01f, 100.f)) n->codeBound = std::max(0.01f, cb);
+      track();
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Your shape must fit in this box: it is used to skip far-away work and,\non the CPU, for clicking / collisions / placement");
+    }
   } else {
     ImGui::SeparatorText("Boolean");
     int op = (int)n->op;
@@ -678,7 +724,7 @@ void UI::viewport(double dt) {
 
   // W slider (Edit, Full 4D): moves the camera's visible slice along its 4th axis
   bool sliderHovered = false;
-  if (app.mode == Mode::Edit && !app.geo) {
+  if (app.mode == Mode::Edit && !app.geo && app.editSet.showWSlider) {
     ImGui::SetCursorScreenPos({p0.x + 12, p0.y + 90});
     float w = (float)app.sliceW();
     float range = std::max(5.f, std::ceil(std::abs(w) / 5.f) * 5.f + 5.f);
@@ -697,8 +743,8 @@ void UI::viewport(double dt) {
     std::snprintf(buf, sizeof buf, "%.2f", w);
     dl->AddText({p0.x + 44, p0.y + 90 + 220 * (1 - (w + range) / (2 * range)) - 7}, IM_COL32(220, 220, 220, 255), buf);
   }
-  if (app.geo && app.showThumbnail) thumbnail();
-  bool thumbHovered = app.geo && app.showThumbnail && ImGui::IsItemHovered();
+  if (app.geo && app.editSet.showThumbnail) thumbnail();
+  bool thumbHovered = app.geo && app.editSet.showThumbnail && ImGui::IsItemHovered();
   if (sliderHovered || thumbHovered) vpHovered_ = false;
   overlays(dl);
   ImGui::End();
@@ -768,8 +814,8 @@ void UI::overlays(ImDrawList* dl) {
     else lines.push_back("WASD move | Space/Shift up/down (tangent) | Q/E roll | wheel speed | Esc release");
   } else if (app.modal != Modal::None) lines.push_back(app.transformHint());
   else {
-    const char* tool = app.tool == Tool::Move ? "Move: drag an arrow (object axis) or the centre square; drag the object to move it in the screen plane"
-                       : app.tool == Tool::Rotate ? "Rotate: drag a ring (rotation plane of two object axes)" : "Select: click to select";
+    const char* tool = app.tool == Tool::Move ? "Move: drag an arrow (local X/Y/Z) or the centre square; drag the object to move it in the screen plane"
+                       : app.tool == Tool::Rotate ? "Rotate: drag a ring to rotate about a local axis" : "Select: click an object (Ctrl+click: its group)";
     lines.push_back(tool);
     if (app.geo) lines.push_back("Hold RMB: look + WASD fly, Space/Shift up/down, Q/E roll | wheel: fly speed | G/R/S | Tab explore | V view");
     else lines.push_back("RMB/MMB drag orbit | MMB click: set centre of rotation | Shift+drag pan | Alt+drag rotate into W | wheel zoom | G/R/S | Tab | V");
@@ -808,21 +854,6 @@ void UI::overlays(ImDrawList* dl) {
     return;
   }
 
-  // player sphere: label with its distance from the visible slice + facing arrow
-  if (app.showPlayerMarker && (app.geo ? app.geoPlayer.valid : app.playerPlaced)) {
-    View pv = app.playerView();
-    double dw = dot(pv.eye - v.eye, ana);
-    V4 m = app.geo ? pv.eye : pv.eye - ana * dw;
-    double sx, sy, fx, fy;
-    if (length(m - v.eye) > 0.8 && app.project(m, v, sx, sy)) {
-      V4 f = col(pv.frame, 2);
-      if (!app.geo) f = reject(f, ana);
-      if (app.project(m + normalize(f) * 0.6, v, fx, fy)) dl->AddLine({(float)sx, (float)sy}, {(float)fx, (float)fy}, IM_COL32(255, 220, 60, 255), 2.5f);
-      std::snprintf(buf, sizeof buf, app.geo ? "player" : "player  dW=%+.2f", dw);
-      dl->AddText({(float)sx + 10, (float)sy - 18}, IM_COL32(255, 230, 120, 255), buf);
-    }
-  }
-
   // centre of rotation (set with a middle-click)
   if (!app.geo && app.editCam.pivotSet) {
     double px, py;
@@ -837,11 +868,11 @@ void UI::overlays(ImDrawList* dl) {
   // Blender-like gizmo: the object's own X/Y/Z/W axes projected into the visible slice
   Gizmo g = app.gizmo();
   if (g.visible) {
-    const ImU32 cols[4] = {IM_COL32(230, 80, 80, 255), IM_COL32(100, 210, 100, 255), IM_COL32(80, 130, 240, 255), IM_COL32(200, 100, 235, 255)};
+    const ImU32 cols[3] = {IM_COL32(230, 80, 80, 255), IM_COL32(100, 210, 100, 255), IM_COL32(80, 130, 240, 255)};
     ImVec2 c = {(float)g.cx, (float)g.cy};
     auto bright = [](ImU32 col) { return col | IM_COL32(60, 60, 60, 0); };
     if (app.tool == Tool::Move) {
-      for (int a = 0; a < 4; a++) {
+      for (int a = 0; a < 3; a++) {
         auto& ax = g.axes[a];
         if (!ax.visible) continue;
         bool hot = g.hot == a;
@@ -860,8 +891,8 @@ void UI::overlays(ImDrawList* dl) {
       for (size_t r = 0; r < g.rings.size(); r++) {
         auto& ring = g.rings[r];
         bool hot = g.hot == 10 + (int)r;
-        // ring colour: the axis it rotates "about" in 3D terms (XY->Z blue, XZ->Y green, YZ->X red), W planes purple
-        int about = (ring.a == 3 || ring.b == 3) ? 3 : 3 - ring.a - ring.b;
+        // ring colour = the local axis it rotates about (YZ -> X red, XZ -> Y green, XY -> Z blue)
+        int about = 3 - ring.a - ring.b;
         ImU32 col = hot ? IM_COL32(255, 230, 120, 255) : bright(cols[about]);
         std::vector<ImVec2> pts;
         for (auto& p : ring.pts) pts.push_back({(float)p.first, (float)p.second});
@@ -879,28 +910,152 @@ void UI::overlays(ImDrawList* dl) {
 
 // ============================================================ quality / help
 void UI::qualityWindow() {
-  ImGui::SetNextWindowSize({360, 0}, ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("Rendering quality", &showQuality_)) { ImGui::End(); return; }
-  auto& q = app.quality;
-  ImGui::SliderFloat("Resolution", &q.resolutionScale, 0.25f, 2.f, "%.2fx");
-  ImGui::SliderFloat("While moving", &q.motionScale, 0.2f, 1.f, "%.2fx");
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Resolution factor while the camera or objects move; full resolution when idle.");
-  ImGui::SliderInt("Max steps", &q.maxSteps, 32, 512);
-  ImGui::Checkbox("Soft shadows", &q.shadows);
-  ImGui::Checkbox("Ambient occlusion", &q.ao);
-  ImGui::SeparatorText("Geodesic rays");
-  ImGui::SliderFloat("Max step", &q.geoMaxStep, 0.02f, 1.f);
-  ImGui::SliderInt("Projections", &q.geoProjectIters, 1, 4);
-  ImGui::SeparatorText("Camera");
-  float fov = (float)app.fov;
-  if (ImGui::SliderFloat("FOV", &fov, 30, 110)) app.fov = fov;
-  ImGui::Checkbox("Collisions (Explore)", &app.collide);
-  ImGui::Checkbox("Outside thumbnail (Geodesic)", &app.showThumbnail);
-  ImGui::Checkbox("Player sphere (Edit)", &app.showPlayerMarker);
-  ImGui::Checkbox("Own body (Explore)", &app.showOwnBody);
-  if (!app.renderer->lastError.empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "Last shader error:\n%.300s", app.renderer->lastError.c_str());
-  ImGui::TextDisabled("Last shader compile: %.0f ms", app.renderer->lastCompileMs);
+  ImGui::SetNextWindowSize({430, 560}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Settings", &showQuality_)) { ImGui::End(); return; }
+  auto F = [](const char* label, double& v, float lo, float hi, const char* fmt = "%.2f", const char* tip = nullptr) {
+    float f = (float)v;
+    if (ImGui::SliderFloat(label, &f, lo, hi, fmt)) v = f;
+    if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+  };
+  auto Ff = [](const char* label, float& v, float lo, float hi, const char* fmt = "%.2f", const char* tip = nullptr) {
+    ImGui::SliderFloat(label, &v, lo, hi, fmt);
+    if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+  };
+  if (ImGui::BeginTabBar("settings")) {
+    if (ImGui::BeginTabItem("Edit mode")) {
+      auto& e = app.editSet;
+      F("Field of view", e.fov, 30, 110, "%.0f deg");
+      ImGui::SeparatorText("Full 4D");
+      F("Orbit speed", e.orbitSpeed, 0.1f, 4);
+      F("Pan speed", e.panSpeed, 0.1f, 4);
+      F("Zoom speed", e.zoomSpeed, 0.1f, 4);
+      F("Turn into W speed", e.rot4Speed, 0.1f, 4, "%.2f", "Alt+drag rotation into the 4th dimension");
+      ImGui::Checkbox("W slider", &e.showWSlider);
+      ImGui::Checkbox("Ground grid", &app.quality.grid);
+      ImGui::SeparatorText("Geodesic 3D");
+      F("Fly speed", e.flySpeed, 0.2f, 30, "%.1f", "Hold RMB + WASD (the wheel also changes it)");
+      F("Look speed", e.lookSpeed, 0.1f, 4);
+      ImGui::Checkbox("Outside thumbnail", &e.showThumbnail);
+      ImGui::SliderInt("Thumbnail size", &e.thumbSize, 160, 600);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Explore mode")) {
+      auto& x = app.exploreSet;
+      F("Field of view", x.fov, 30, 110, "%.0f deg");
+      F("Look speed", x.lookSpeed, 0.1f, 4);
+      ImGui::Checkbox("Show own body", &x.showOwnBody);
+      F("Body radius", x.bodyRadius, 0.05f, 1, "%.2f", "Also the collision radius");
+      ImGui::SeparatorText("Full 4D");
+      F("Move speed", x.moveSpeed, 0.2f, 30, "%.1f", "The wheel also changes it");
+      F("Turn into W speed", x.turn4Speed, 0.1f, 4, "%.2f", "Z/X and C/V");
+      ImGui::Checkbox("Collisions", &x.collide);
+      ImGui::SeparatorText("Geodesic 3D");
+      F("Move speed##g", x.geoMoveSpeed, 0.2f, 30, "%.1f");
+      ImGui::Checkbox("Collisions##g", &x.geoCollide);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Rendering")) {
+      auto& q = app.quality;
+      ImGui::SeparatorText("Performance");
+      Ff("Resolution", q.resolutionScale, 0.25f, 2.f, "%.2fx");
+      Ff("While moving", q.motionScale, 0.2f, 1.f, "%.2fx", "Resolution factor while the camera or objects move");
+      ImGui::SeparatorText("Ray marching");
+      ImGui::SliderInt("Max steps", &q.maxSteps, 32, 1024);
+      Ff("Max distance (4D)", q.maxDistFull, 5, 500, "%.0f", "Rays travelling further than this show the sky colour");
+      Ff("Max distance (geodesic)", q.maxDistGeo, 5, 300, "%.0f", "Same, measured along the world surface");
+      Ff("Hit precision", q.eps, 0.0002f, 0.02f, "%.4f", "Distance at which a ray counts as hitting a surface");
+      Ff("Step scale", q.stepScale, 0.3f, 1.f, "%.2f", "Below 1: smaller, safer steps for inexact SDFs (custom code, heavy modifiers)");
+      ImGui::SeparatorText("Lighting");
+      ImGui::Checkbox("Soft shadows", &q.shadows);
+      Ff("Shadow sharpness", q.shadowK, 2, 64, "%.0f");
+      Ff("Shadow distance", q.shadowMax, 1, 50, "%.0f");
+      ImGui::Checkbox("Ambient occlusion", &q.ao);
+      Ff("AO strength", q.aoStrength, 0, 4);
+      Ff("Ambient light", q.ambient, 0, 1);
+      Ff("Light direction", q.lightYaw, -3.14f, 3.14f, "%.2f");
+      Ff("Light height", q.lightPitch, -1.5f, 1.5f, "%.2f");
+      Ff("Light W", q.lightW, -1, 1, "%.2f", "Component of the light direction along the 4th axis");
+      ImGui::SeparatorText("Sky / fog");
+      ImGui::ColorEdit3("Sky top (4D)", q.skyTop.data());
+      ImGui::ColorEdit3("Sky bottom (4D)", q.skyBottom.data());
+      Ff("Fog", q.fog, 0, 4);
+      ImGui::TextDisabled("Geodesic sky: the colour of the world surface you stand on.");
+      ImGui::SeparatorText("Geodesic rays");
+      Ff("Max step", q.geoMaxStep, 0.02f, 1.f, "%.2f", "Smaller = more accurate light paths on strongly curved worlds (slower)");
+      ImGui::SliderInt("Projections", &q.geoProjectIters, 1, 4);
+      ImGui::Separator();
+      if (!app.renderer->lastError.empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "Last shader error:\n%.300s", app.renderer->lastError.c_str());
+      ImGui::TextDisabled("Last shader compile: %.0f ms", app.renderer->lastCompileMs);
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+  if (ImGui::Button("Reset to defaults")) { app.quality = QualitySettings{}; app.editSet = EditSettings{}; app.exploreSet = ExploreSettings{}; }
   ImGui::End();
+  if (!showQuality_) app.saveSettings();
+}
+
+void UI::sdfWindow() {
+  ImGui::SetNextWindowSize({620, 520}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("SDF code", &showSdf_)) { ImGui::End(); return; }
+  Node* n = findNode(app.root, sdfNodeId_);
+  if (!n) { ImGui::TextDisabled("Select an object and press 'View SDF code'."); ImGui::End(); return; }
+  std::string code = standaloneGLSL(*n, app.reg);
+  ImGui::Text("\"%s\" as a GLSL signed distance function (read-only)", n->name.c_str());
+  if (ImGui::Button("Copy to clipboard")) ImGui::SetClipboardText(code.c_str());
+  ImGui::SameLine();
+  if (ImGui::Button("Create editable custom SDF from it")) {
+    Node c = makeCustom(n->name + " (code)", code);
+    c.xf = n->xf;
+    c.anchor = n->anchor;
+    c.mods.clear();
+    auto b = computeBounds(*n, app.reg);
+    c.codeBound = std::isfinite(b[n->id].r) ? b[n->id].r / std::max(0.01, n->xf.scale) : 5.0;
+    if (n->isLeaf()) { c.color = n->color; c.mat = n->mat; }
+    std::string id = c.id;
+    app.root.children.push_back(std::move(c));
+    app.selection = {id};
+    app.commit();
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("(?)");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shapes are a point + modifiers; this is the equivalent GLSL.\nCustom SDFs can use: opExtrude(d, h), sU/sI/sS(a, b, k), INF.");
+  ImGui::InputTextMultiline("##sdf", code.data(), code.size() + 1, {-1, -1}, ImGuiInputTextFlags_ReadOnly);
+  ImGui::End();
+}
+
+void UI::guarded(std::function<void()> action) {
+  if (!app.dirty()) { action(); return; }
+  pendingGuarded_ = std::move(action);
+  openUnsaved_ = true;
+}
+
+void UI::saveScene() {
+  if (app.currentFile.empty()) { fileAction(2); return; }
+  std::string err;
+  if (app.saveSceneFile(app.currentFile, err)) app.toast("Saved " + app.currentFile); else app.toast(err, true);
+}
+
+void UI::requestQuit() { guarded([this] { exitNow = true; }); }
+
+void UI::unsavedPrompt() {
+  if (openUnsaved_) { ImGui::OpenPopup("Unsaved changes"); openUnsaved_ = false; }
+  if (ImGui::BeginPopupModal("Unsaved changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("The scene has unsaved changes%s%s.", app.currentFile.empty() ? "" : " in ", app.currentFile.c_str());
+    ImGui::TextUnformatted("Save them first?");
+    if (ImGui::Button("Save")) {
+      ImGui::CloseCurrentPopup();
+      std::string err;
+      std::string path = app.currentFile.empty() ? saveFileDialog("Save scene", "scene.4dscene.json") : app.currentFile;
+      if (!path.empty() && app.saveSceneFile(path, err)) { auto f = pendingGuarded_; pendingGuarded_ = nullptr; if (f) f(); }
+      else if (!path.empty()) app.toast(err, true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Don't save")) { ImGui::CloseCurrentPopup(); auto f = pendingGuarded_; pendingGuarded_ = nullptr; if (f) f(); }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) { ImGui::CloseCurrentPopup(); pendingGuarded_ = nullptr; }
+    ImGui::EndPopup();
+  }
 }
 
 void UI::helpWindow() {
@@ -916,14 +1071,15 @@ void UI::helpWindow() {
   ImGui::SeparatorText("Edit, Geodesic 3D (game-like)");
   ImGui::BulletText("Hold RMB: mouse look + WASD fly along the surface, Space/Shift up/down, Q/E roll; wheel = fly speed");
   ImGui::SeparatorText("Editing");
-  ImGui::BulletText("Tools: Q select, W move, E rotate. The gizmo shows the object's own X/Y/Z/W axes projected into the visible slice");
-  ImGui::BulletText("Move: drag an arrow to move along that axis, the centre square (or the object) to move in the screen plane");
-  ImGui::BulletText("Rotate: drag a ring to rotate in the plane of two object axes");
-  ImGui::BulletText("G grab, R rotate, S scale; then X/Y/Z/W = object axis (R: one axis = about it, two = that plane); Enter/click confirm, Esc cancel");
-  ImGui::BulletText("Click: select (again: parent group) | Shift+click: multi | A all | Esc none | Shift+D duplicate | X/Del delete | Ctrl+G group | F focus");
+  ImGui::BulletText("Tools: Q select, W move, E rotate. The gizmo always shows the object's local X/Y/Z, kept inside the visible slice");
+  ImGui::BulletText("Move: drag an arrow to move along that local axis, the centre square (or the object) to move in the screen plane");
+  ImGui::BulletText("Rotate: drag a ring to rotate about a local axis. Orbiting has no angle limit");
+  ImGui::BulletText("G grab, R rotate, S scale; then X/Y/Z = local axis; Enter/click confirm, Esc cancel");
+  ImGui::BulletText("Click: select the object | Ctrl+click: its group | Shift+click: multi | A all | Esc none | Shift+D duplicate | X/Del delete | Ctrl+G group | F focus");
+  ImGui::BulletText("Properties > View SDF code shows any object as GLSL; Custom SDF objects (4D shapes folder) take your own GLSL");
   ImGui::BulletText("Shapes are a point plus modifiers: Extrude / Revolve add the next axis (X, Y, Z, W); Rotate, Mirror, Repeat reshape");
   ImGui::SeparatorText("Explore (game-like)");
-  ImGui::BulletText("You start where the editor camera is. Click to capture the mouse, Esc releases (again: back to Edit)");
+  ImGui::BulletText("Edit and Explore share one camera: switching never moves you. Click to capture the mouse, Esc releases (again: back to Edit)");
   ImGui::BulletText("WASD, Space/Shift up/down, wheel = speed. Full 4D: Q/E along W, Z/X turn into W, C/V sideways in W, R reset");
   ImGui::BulletText("Your body (yellow sphere) is part of the scene: it casts a shadow, and on closed worlds you can see yourself");
   ImGui::SeparatorText("Library");

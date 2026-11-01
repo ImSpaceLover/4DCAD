@@ -2,6 +2,8 @@
 #include "app.hpp"
 #include "imgui.h"
 
+#include <functional>
+
 struct GLFWwindow;
 
 namespace fd {
@@ -13,7 +15,9 @@ class UI {
   void frame(double dt);
   void onKey(int key, int action, int mods);
   void onScroll(double y) { wheel_ += y; }
-  bool quitRequested = false;
+  bool exitNow = false;  // set once quitting is confirmed
+  void requestQuit();    // asks to save unsaved changes first
+  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
 
  private:
   App& app;
@@ -39,6 +43,13 @@ class UI {
   void overlays(ImDrawList* dl);
   void thumbnail();
   void qualityWindow();
+  void sdfWindow();
+  void unsavedPrompt();
+  void guarded(std::function<void()> action);  // runs action, asking about unsaved changes first
+  void saveScene();
+  bool showSdf_ = false, openUnsaved_ = false;
+  std::string sdfNodeId_, codeEditId_, codeBuf_, codeErr_;
+  std::function<void()> pendingGuarded_;
   void helpWindow();
   void pathPrompt();
   // file actions (1 open scene, 2 save scene, 3 import library, 4 export library, 5 export object, 6 export primitive)

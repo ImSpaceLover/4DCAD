@@ -53,7 +53,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 **Tab** switches between Edit and Explore. **V** (or the toolbar) switches between Full 4D and Geodesic 3D.
 
 **Edit mode, Full 4D view (Blender-like)**
-- **Navigation:** RMB/MMB drag orbits. A **middle-click** on an object sets the **centre of rotation** (shown as a small crosshair; middle-click empty space to reset it). Shift+drag pans, the wheel or Ctrl+drag zooms, and Alt+drag rotates the view into W.
+- **Navigation:** RMB/MMB drag orbits, with no angle limit, so you can go over the top. A **middle-click** on an object sets the **centre of rotation** (shown as a small crosshair; middle-click empty space to reset it). Shift+drag pans, the wheel or Ctrl+drag zooms, and Alt+drag rotates the view into W.
 - **W slider** (left edge of the viewport): moves the visible 3D slice along the camera's 4th axis.
 - **Standard views:** 1 / 3 / 7 / 9 give front / right / top / along W. Shift+W resets the 4D orientation.
 
@@ -61,22 +61,21 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 
 **Editing**
 - **Tools:** **Q** Select, **W** Move, **E** Rotate.
-- **Gizmo:** it shows the selected object's **own X / Y / Z / W axes**, projected into the visible slice. The axes stay visible however the 4D view is turned; an axis pointing straight out of the slice is hidden.
-  - Move: drag an arrow to move along that axis. Drag the centre square, or the object itself, to move in the screen plane (Shift: along depth).
-  - Rotate: drag a ring to rotate in the plane of two object axes. Ring colours: XY blue, XZ green, YZ red, planes with W purple.
-- **Blender-style transforms:** **G** grab, **R** rotate, **S** scale, then X / Y / Z / W = object axis. For R, one key rotates about that axis and two keys (e.g. `R X W`) rotate in that plane. Click or Enter confirms; Esc or RMB cancels.
+- **Gizmo:** always **3 arrows / 3 rings for the object's local X, Y and Z**. They are kept inside the visible slice and straightened into a clean 3D frame, so when the object or the view is turned into W, an arrow moves the object along a mix of world axes (e.g. X and W) in a straight line, without leaving the slice.
+  - Move: drag an arrow to move along that local axis. Drag the centre square, or the object itself, to move in the screen plane (Shift: along depth).
+  - Rotate: drag a ring to rotate about a local axis (red X, green Y, blue Z).
+- **Blender-style transforms:** **G** grab, **R** rotate, **S** scale, then X / Y / Z = the object's local axis (as on the gizmo). Click or Enter confirms; Esc or RMB cancels.
 - **Properties:** rotation is shown as 6 absolute angles (XY XZ XW YZ YW ZW).
-- **Selection:** click selects (click again for the parent group), Shift+click multi-selects, A selects all, Esc deselects.
+- **Selection:** a click selects exactly the object under the cursor; **Ctrl+click** selects its group. Shift+click multi-selects, A selects all, Esc deselects.
 - **Editing:** Shift+D duplicate, X/Del delete, Ctrl+G group, F focus, Ctrl+Z / Ctrl+Shift+Z undo / redo.
-- **Player sphere:** the yellow sphere with a "nose" shows where the Explore player is and which way it faces.
 
 **Explore mode (game-like)**
-- You always **start where the editor camera currently is**.
+- **Edit and Explore share one camera**: switching modes in either direction never moves you or turns you.
 - Click to capture the mouse. Esc releases it; Esc again returns to Edit.
 - WASD moves, Space/Shift move up/down, and the wheel sets speed.
 - Full 4D: Q/E move along W, Z/X turn into W, C/V turn sideways in W, R resets.
 - Geodesic: you move on the world's surface and Q/E roll.
-- **Your body** is part of the scene. It casts a shadow, and on closed worlds light comes back around so you can see yourself. On a hypersphere world every ray that misses everything returns to you, so the "sky" is your own back. Toggle it in View > Show own body.
+- **Your body** is part of the scene. It casts a shadow, and on closed worlds light comes back around so you can see yourself. On a hypersphere world every ray that misses everything returns to you, so the "sky" is your own back. Toggle it in Settings > Explore mode.
 
 ## Editor
 
@@ -96,7 +95,28 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 * **Scene tree:**
   * Boolean groups: union, intersection, subtraction (first child minus the rest) and smooth versions.
   * Drag rows onto groups (into), onto objects (union with it) or onto row edges (reorder).
-* **Geodesic sky:** the sky takes the colour of the world surface you live on. An outside thumbnail shows the world from the outside with your position.
+* **Materials** (Properties): colour, rounding, shell, **emissive** (always fully lit, casts no shadow, does not light other objects), and a **procedural 4D texture** (checker, stripes, grid, noise, rings) with a second colour, scale and strength. Textures are solid 4D textures in the object's local space, so they move and rotate with it.
+* **SDF code:** Properties > **View SDF code** shows any object (shape, group, whole tree) as a self-contained GLSL `float sdf(vec4 p)`. "Create editable custom SDF from it" turns it into a custom object.
+* **Custom SDFs:** the "Custom SDF (GLSL)" item (4D shapes folder) holds your own GLSL defining `float sdf(vec4 p)` in the object's local 4D space.
+  * You can write helper functions, and use `opExtrude(d, h)`, `sU / sI / sS(a, b, k)` and `INF`.
+  * "Apply code" test-compiles it and shows compiler errors. Code that does not compile is drawn as its bounding box.
+  * Set **Bound** so the shape fits inside it. The renderer uses it to skip far-away work, and on the CPU clicking, collisions and placement treat the shape as that box.
+  * Custom SDFs combine with booleans and modifiers like any other object.
+* **Geodesic sky:** the sky takes the colour of the world surface right under the camera (e.g. a yellow hyperplane gives a yellow sky). An outside thumbnail shows the world from the outside with your position.
+
+## Saving and settings
+
+* Nothing is written to your scene file unless you save (**Ctrl+S**; **Ctrl+Shift+S** = save as). The toolbar shows "unsaved" when there are changes. Quitting, New, Open and loading an example ask whether to save first.
+* On startup the last saved / opened file is reopened (falling back to the example scene).
+* **Settings** (toolbar or View menu) has three tabs, saved per user:
+  * **Edit mode**: field of view. Full 4D: orbit / pan / zoom / turn-into-W speeds, W slider, ground grid. Geodesic: fly speed, look speed, outside thumbnail and its size.
+  * **Explore mode**: field of view, look speed, own body and its radius. Full 4D: move speed, turn-into-W speed, collisions. Geodesic: move speed, collisions.
+  * **Rendering**:
+    * Performance: resolution, and resolution while moving.
+    * Ray marching: max steps, **max ray distance** (Full 4D and Geodesic, after which the sky colour is shown), hit precision, step scale (below 1 for inexact custom SDFs).
+    * Lighting: soft shadows (sharpness, distance), ambient occlusion (strength), ambient light, light direction including its W component.
+    * Sky and fog: sky colours and fog amount.
+    * Geodesic rays: max step size and projections.
 
 ## Performance
 
@@ -114,7 +134,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 * **Quality settings** (toolbar → Quality): resolution, resolution while moving,
   march steps, shadows, AO, geodesic step size.
 
-Limits: about 100 nodes per scene (OpenGL uniform limit).
+Limits: about 90 nodes per scene (OpenGL uniform limit).
 
 ## Code layout
 

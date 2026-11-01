@@ -46,7 +46,7 @@ Renderer::~Renderer() {
   for (auto& [k, p] : cache_) gl::DeleteProgram(p.id);
 }
 
-static GLuint compileShader(GLenum type, const std::string& src, std::string& err) {
+GLuint compileShader(GLenum type, const std::string& src, std::string& err) {
   GLuint sh = gl::CreateShader(type);
   const char* s = src.c_str();
   gl::ShaderSource(sh, 1, &s, nullptr);
@@ -65,7 +65,24 @@ static GLuint compileShader(GLenum type, const std::string& src, std::string& er
   return sh;
 }
 
+std::string Renderer::checkCustomCode(const std::string& code) {
+  auto it = codeErrors_.find(code);
+  if (it != codeErrors_.end()) return it->second;
+  std::string src = std::string("#version 330 core\n") + sdfHelpersGLSL() + renameCustomCode(code, "_t") +
+                    "\nout vec4 fragColor;\nvoid main() { fragColor = vec4(sdf_t(vec4(gl_FragCoord.xy, 0.0, 1.0))); }\n";
+  std::string err;
+  GLuint sh = compileShader(GL_FRAGMENT_SHADER, src, err);
+  if (sh) gl::DeleteShader(sh);
+  else if (err.empty()) err = "compile error";
+  if (sh && code.find("sdf") == std::string::npos) err = "the code must define: float sdf(vec4 p)";
+  codeErrors_[code] = err;
+  if (!err.empty()) badCode_.insert(code);
+  return err;
+}
+
 Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo) {
+  // custom SDFs that do not compile are replaced by their bounding box
+  walk(root, [&](Node& n, Node*, int) { if (n.isCustom()) checkCustomCode(n.code); });
   std::string key = structureKey(root, reg, world, geo);
   auto it = cache_.find(key);
   if (it != cache_.end()) {
@@ -76,7 +93,7 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
   if (failed_.count(key)) return nullptr;
   auto t0 = std::chrono::steady_clock::now();
   Program p;
-  p.cs = compileScene(root, reg, world, geo);
+  p.cs = compileScene(root, reg, world, geo, &badCode_);
   std::string err;
   GLuint vs = compileShader(GL_VERTEX_SHADER, VERTEX_SHADER, err);
   GLuint fs = vs ? compileShader(GL_FRAGMENT_SHADER, buildFragmentShader(p.cs.glsl, geo), err) : 0;
@@ -104,7 +121,6 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
   }
   lastCompileMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   lastError.clear();
-  // keep a handful of programs (current full + geo + recent undo states)
   while (lru_.size() >= 8) {
     auto& old = cache_[lru_.back()];
     gl::DeleteProgram(old.id);
@@ -144,6 +160,8 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
   gl::Uniform4fv(u(*p, "u_col"), N, pk.col.data());
   gl::Uniform4fv(u(*p, "u_bc"), N, pk.bc.data());
   gl::Uniform1fv(u(*p, "u_br"), N, pk.br.data());
+  gl::Uniform4fv(u(*p, "u_mat"), N, pk.mat.data());
+  gl::Uniform4fv(u(*p, "u_col2"), N, pk.col2.data());
   const QualitySettings& q = *fp.quality;
   gl::Uniform2f(u(*p, "u_res"), (float)rt.w, (float)rt.h);
   float eye[4], fr[16], light[4], mk[4];
@@ -153,6 +171,16 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
   gl::UniformMatrix4fv(u(*p, "u_frame"), 1, GL_FALSE, fr);
   gl::Uniform1f(u(*p, "u_tanHalf"), (float)std::tan(fp.fovDeg * PI / 360));
   gl::Uniform1i(u(*p, "u_maxSteps"), q.maxSteps);
+  gl::Uniform1f(u(*p, "u_maxDist"), fp.geo ? q.maxDistGeo : q.maxDistFull);
+  gl::Uniform1f(u(*p, "u_eps"), q.eps);
+  gl::Uniform1f(u(*p, "u_stepScale"), q.stepScale);
+  gl::Uniform1f(u(*p, "u_shadowK"), q.shadowK);
+  gl::Uniform1f(u(*p, "u_shadowMax"), q.shadowMax);
+  gl::Uniform1f(u(*p, "u_aoStrength"), q.aoStrength);
+  gl::Uniform1f(u(*p, "u_fog"), q.fog);
+  gl::Uniform1f(u(*p, "u_ambient"), q.ambient);
+  gl::Uniform3f(u(*p, "u_skyTop"), q.skyTop[0], q.skyTop[1], q.skyTop[2]);
+  gl::Uniform3f(u(*p, "u_skyBottom"), q.skyBottom[0], q.skyBottom[1], q.skyBottom[2]);
   gl::Uniform1i(u(*p, "u_shadows"), q.shadows ? 1 : 0);
   gl::Uniform1i(u(*p, "u_ao"), q.ao ? 1 : 0);
   gl::Uniform1i(u(*p, "u_grid"), fp.grid ? 1 : 0);

@@ -32,6 +32,12 @@ Node makeGroup(BoolOp op, std::vector<Node> children, const std::string& name) {
   return n;
 }
 
+Node makeCustom(const std::string& name, const std::string& code) {
+  Node n = makeLeaf("custom", name);
+  n.code = code;
+  return n;
+}
+
 M4 nodeRotation(const Node& n) { return n.anchor ? mul(n.anchor->basis, n.xf.rot) : n.xf.rot; }
 
 void walk(Node& n, const std::function<void(Node&, Node*, int)>& fn, Node* parent, int depth) {
@@ -86,7 +92,14 @@ Node cloneFresh(const Node& n) {
 }
 
 // ---------------------------------------------------------------- registry
-PrimitiveRegistry::PrimitiveRegistry() { list_ = builtinPrimitives(); }
+PrimitiveRegistry::PrimitiveRegistry() {
+  list_ = builtinPrimitives();
+  PrimitiveDef custom;  // placeholder for GLSL custom SDF leaves (base dimension 4)
+  custom.id = "custom";
+  custom.name = "Custom SDF";
+  custom.builtin = true;
+  list_.push_back(custom);
+}
 const PrimitiveDef* PrimitiveRegistry::get(const std::string& id) const {
   for (auto& p : list_) if (p.id == id) return &p;
   return nullptr;
@@ -111,6 +124,7 @@ std::vector<PrimitiveDef> PrimitiveRegistry::custom() const {
 }
 
 int nodeBaseDim(const Node& n, const PrimitiveRegistry& reg) {
+  if (n.isCustom()) return 4;
   if (n.isLeaf()) { auto* p = reg.get(n.prim); return p ? primitiveDim(*p) : 0; }
   int d = 0;
   for (auto& c : n.children) d = std::max(d, nodeDim(c, reg));
@@ -256,6 +270,10 @@ static json nodeJ(const Node& n) {
     j["thickness"] = n.thickness;
     if (n.round) j["round"] = *n.round;
     if (n.shell) j["shell"] = *n.shell;
+    const Material& m = n.mat;
+    j["material"] = {{"emissive", m.emissive}, {"texture", TEXTURE_NAMES[m.texture]}, {"texScale", m.texScale},
+                     {"texStrength", m.texStrength}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}}};
+    if (n.isCustom()) { j["code"] = n.code; j["codeBound"] = n.codeBound; }
   } else {
     j["op"] = BOOL_OP_NAMES[(int)n.op];
     j["k"] = n.k;
@@ -309,7 +327,19 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
     n.thickness = j.value("thickness", 0.1);
     if (j.contains("round") && j["round"].is_number()) n.round = j["round"].get<double>();
     if (j.contains("shell") && j["shell"].is_number()) n.shell = j["shell"].get<double>();
-    if (n.prim != "point") {
+    if (j.contains("material") && j["material"].is_object()) {
+      auto& mj = j["material"];
+      n.mat.emissive = std::clamp(mj.value("emissive", 0.0), 0.0, 1.0);
+      std::string t = mj.value("texture", std::string("None"));
+      for (int i = 0; i < TEX_COUNT; i++) if (t == TEXTURE_NAMES[i]) n.mat.texture = i;
+      n.mat.texScale = mj.value("texScale", 1.0);
+      n.mat.texStrength = mj.value("texStrength", 0.7);
+      if (mj.contains("color2")) for (int i = 0; i < 3; i++) n.mat.color2[i] = mj["color2"][i].get<double>();
+    }
+    if (n.prim == "custom") {
+      n.code = j.value("code", std::string(DEFAULT_CUSTOM_SDF));
+      n.codeBound = j.value("codeBound", 1.5);
+    } else if (n.prim != "point") {
       // old primitive types become a point with the recipe as innermost modifiers
       const PrimitiveDef* def = nullptr;
       for (auto& p : builtinPrimitives()) if (p.id == n.prim) def = &p;
@@ -445,6 +475,13 @@ LibraryImport importLibraryJson(const std::string& text) {
 
 std::vector<LibraryFolder> builtinFolders() {
   std::vector<LibraryFolder> out = {{"builtin-basic", "Basic (0D-2D)", true, {}}, {"builtin-3d", "3D shapes", true, {}}, {"builtin-4d", "4D shapes", true, {}}};
+  {
+    LibraryObject o;
+    o.id = "builtin-custom";
+    o.name = "Custom SDF (GLSL)";
+    o.node = makeCustom("Custom SDF");
+    out[2].objects.push_back(o);
+  }
   for (auto& p : builtinPrimitives()) {
     int d = primitiveDim(p);
     LibraryObject o;

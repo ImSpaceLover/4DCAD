@@ -10,6 +10,8 @@
 
 #include "examples.hpp"
 
+#include <nlohmann/json.hpp>
+
 namespace fd {
 
 static std::array<double, 3> hsl(double h, double s, double l) {
@@ -24,13 +26,10 @@ App::App() {}
 
 void App::init() {
   renderer = std::make_unique<Renderer>();
-  std::string text;
-  std::string auto_ = (std::filesystem::path(dataDir()) / "autosave.4dscene.json").string();
-  bool ok = false;
-  if (readFile(auto_, text)) {
-    try { loadScene(sceneFromJson(text)); ok = true; } catch (...) {}
-  }
-  if (!ok) loadScene(playgroundScene());
+  loadSettings();
+  // reopen the last saved / opened scene file (changes are never written without asking)
+  std::string err;
+  if (lastFile.empty() || !loadSceneFile(lastFile, err)) { loadScene(playgroundScene()); currentFile.clear(); }
 }
 
 void App::toast(const std::string& msg, bool error) {
@@ -54,13 +53,13 @@ void App::loadScene(SceneFile f) {
   if (f.camera) editCam.load(*f.camera);
   mode = Mode::Edit;
   geo = false;
-  geoEdit.valid = geoPlayer.valid = false;
-  playerPlaced = false;
+  geoEdit.valid = false;
   modal = Modal::None;
   history_.clear();
   future_.clear();
   rebuild();
   committed_ = snapshot();
+  saved_ = committed_;
 }
 
 void App::newScene() {
@@ -77,6 +76,8 @@ bool App::loadSceneFile(const std::string& path, std::string& err) {
   if (!readFile(path, text)) { err = "Cannot read " + path; return false; }
   try { loadScene(sceneFromJson(text)); } catch (const std::exception& e) { err = e.what(); return false; }
   currentFile = path;
+  lastFile = path;
+  saveSettings();
   return true;
 }
 
@@ -88,10 +89,16 @@ std::string App::serialize() {
 bool App::saveSceneFile(const std::string& path, std::string& err) {
   if (!writeFile(path, serialize())) { err = "Cannot write " + path; return false; }
   currentFile = path;
+  lastFile = path;
+  saved_ = committed_;
+  saveSettings();
   return true;
 }
 
-void App::autosave() { writeFile((std::filesystem::path(dataDir()) / "autosave.4dscene.json").string(), serialize()); }
+V4 App::light() const {
+  double cy = std::cos(quality.lightYaw), sy = std::sin(quality.lightYaw), cp = std::cos(quality.lightPitch), sp = std::sin(quality.lightPitch);
+  return normalize(V4{cp * sy, sp, cp * cy, quality.lightW});
+}
 
 void App::rebuild() {
   version_++;
@@ -108,7 +115,6 @@ void App::commit() {
     if (history_.size() > 200) history_.erase(history_.begin());
     future_.clear();
     committed_ = s;
-    autosave();
   }
 }
 
@@ -224,7 +230,7 @@ void App::reparent(const std::string& id, const std::string& targetId, Drop wher
 
 void App::setWorld(const std::string& id) {
   world = id;
-  geoEdit.valid = geoPlayer.valid = false;
+  geoEdit.valid = false;
   bool wasGeo = geo;
   geo = false;
   commit();
@@ -268,12 +274,15 @@ void App::setMode(Mode m) {
   if (m == mode) return;
   cancelModal();
   drag_ = Drag::None;
-  if (m == Mode::Explore) {
-    // the player always starts where the editor camera currently is
-    if (geo && geoEdit.valid) { geoPlayer = geoEdit; geoPlayer.distance = 0; geoPlayer.valid = true; }
-    else { playerCam.setFromView(editCam.view(), 3); playerPlaced = true; }
-    wantCapture = true;
-  } else wantRelease = true;
+  // one shared camera: switching modes keeps the exact position and orientation
+  if (!geo) {
+    View v = editCam.view();
+    double dist = editCam.distance;
+    editCam.setFromView(v, dist);  // re-base yaw/pitch so first-person look starts level-free
+    editCam.pivotSet = false;
+  }
+  if (m == Mode::Explore) wantCapture = true;
+  else wantRelease = true;
   mode = m;
   lastChange_ = now;
 }
@@ -284,35 +293,22 @@ void App::setGeo(bool g) {
   cancelModal();
   drag_ = Drag::None;
   if (g) {
-    auto f = field();
-    // the (first-person) geodesic editor camera starts where the 4D camera is, on the surface
-    geoEdit.initFrom(f, mode == Mode::Explore ? playerCam.view() : editCam.view(), 0);
+    geoEdit.initFrom(field(), editCam.view(), 0);  // stand where the 4D camera is, on the surface
     if (!geoEdit.valid) { toast("Could not place the camera on the world surface", true); return; }
-    if (mode == Mode::Explore || !geoPlayer.valid) { geoPlayer = geoEdit; }
-  } else {
-    if (geoPlayer.valid) { playerCam.setFromView({geoPlayer.pivot, geoPlayer.frame}, 3); playerPlaced = true; }
-    if (geoEdit.valid && mode == Mode::Edit) {
-      // keep looking from the same place
-      editCam.setFromView({geoEdit.pivot, geoEdit.frame}, 4);
-      editCam.pivotSet = false;
-    }
+  } else if (geoEdit.valid) {
+    editCam.setFromView({geoEdit.pivot, geoEdit.frame}, 4);  // keep looking from the same place
+    editCam.pivotSet = false;
   }
   geo = g;
   lastChange_ = now;
 }
 
 View App::currentView() {
-  if (geo && geoEdit.valid) {
-    if (mode == Mode::Explore && geoPlayer.valid) return {geoPlayer.pivot, geoPlayer.frame};
-    return {geoEdit.pivot, geoEdit.frame};
-  }
-  return mode == Mode::Explore ? playerCam.view() : editCam.view();
+  if (geo && geoEdit.valid) return {geoEdit.pivot, geoEdit.frame};
+  return editCam.view();
 }
 
-View App::playerView() {
-  if (geo && geoPlayer.valid) return {geoPlayer.pivot, geoPlayer.frame};
-  return playerCam.view();
-}
+View App::playerView() { return currentView(); }
 
 V4 App::screenRay(double x, double y, const View& v) const {
   double sx = ((x - vpX) / vpW) * 2 - 1, sy = 1 - ((y - vpY) / vpH) * 2;
@@ -358,13 +354,12 @@ void App::standardView(int which) {
 }
 
 std::array<float, 3> App::worldColor() {
+  // colour of the world surface under the camera (e.g. a yellow plane gives a yellow sky)
   std::array<float, 3> c{0.35f, 0.4f, 0.55f};
-  Node* w = world.empty() ? nullptr : findNode(root, world);
-  if (!w) return c;
-  double s[3] = {0, 0, 0};
-  int n = 0;
-  walk(*w, [&](Node& m, Node*, int) { if (m.isLeaf() && !m.hidden) { for (int i = 0; i < 3; i++) s[i] += m.color[i]; n++; } });
-  if (n) for (int i = 0; i < 3; i++) c[i] = (float)(s[i] / n);
+  if (world.empty() || !ev) return c;
+  Sample s = ev->worldSample(currentView().eye, world);
+  if (s.d >= INF * 0.5) return c;
+  for (int i = 0; i < 3; i++) c[i] = (float)s.color[i];
   return c;
 }
 
@@ -471,13 +466,34 @@ void App::rotateNodes(const std::vector<std::string>& ids, const M4& q) {
 }
 
 /** Object axis projected into the visible 3D slice (zero if it points straight out of it). */
-V4 App::gizmoAxisDir(const std::string& id, int axis, const View& v) {
+std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
+  // local X, Y, Z of the object, with the component along the hidden 4th direction removed and
+  // straightened into an orthonormal frame of the visible slice: always 3 usable axes. Moving
+  // along one may change several world coordinates (e.g. X and W) but stays inside the slice.
   Node* n = findNode(root, id);
-  if (!n) return {0, 0, 0, 0};
-  V4 a = col(nodeWorldFrame(id), axis);
-  V4 out = (geo && n->anchor) ? col(n->anchor->basis, 3) : col(v.frame, 3);
-  V4 d = reject(a, normalize(out));
-  return length(d) > 0.2 ? normalize(d) : V4{0, 0, 0, 0};
+  M4 F = nodeWorldFrame(id);
+  V4 out = (geo && n && n->anchor) ? col(n->anchor->basis, 3) : col(v.frame, 3);
+  out = normalize(out);
+  V4 a[3];
+  for (int i = 0; i < 3; i++) a[i] = reject(col(F, i), out);
+  // orthonormalise, most visible axes first so they stay closest to the real local axes
+  int order[3] = {0, 1, 2};
+  std::sort(order, order + 3, [&](int x, int y) { return length(a[x]) > length(a[y]); });
+  std::array<V4, 3> r{};
+  std::vector<V4> done{out};
+  for (int k = 0; k < 3; k++) {
+    V4 d = a[order[k]];
+    for (auto& u : done) d = reject(d, u);
+    if (length(d) < 1e-3) {  // degenerate: complete the slice's frame
+      auto full = completeBasis(done);
+      d = full[done.size()];
+    }
+    d = normalize(d);
+    if (dot(d, col(F, order[k])) < 0) d = -d;
+    r[order[k]] = d;
+    done.push_back(d);
+  }
+  return r;
 }
 
 static double segDist(double px, double py, double ax, double ay, double bx, double by) {
@@ -496,50 +512,44 @@ Gizmo App::gizmo() {
   double depth = std::max(0.3, dot(c - v.eye, col(v.frame, 2)));
   g.worldLen = 95.0 * 2 * depth * tanHalf() / vpH;
   g.visible = true;
-  std::vector<int> vis;
-  for (int a = 0; a < 4; a++) {
+  auto dirs = gizmoAxes(n->id, v);
+  for (int a = 0; a < 3; a++) {
     auto& ax = g.axes[a];
     ax.axis = a;
-    ax.dir = gizmoAxisDir(n->id, a, v);
-    if (length(ax.dir) < 0.5) continue;
-    if (!project(c + ax.dir * g.worldLen, v, ax.ex, ax.ey)) continue;
-    if (std::hypot(ax.ex - g.cx, ax.ey - g.cy) < 8) continue;  // pointing at the camera
-    ax.visible = true;
-    vis.push_back(a);
+    ax.dir = dirs[a];
+    if (!project(c + ax.dir * g.worldLen, v, ax.ex, ax.ey)) { ax.ex = g.cx; ax.ey = g.cy; }
+    ax.visible = true;  // always 3 arrows (an arrow pointing at the camera is just short)
   }
   if (tool == Tool::Rotate) {
     double r = g.worldLen * 0.85;
-    for (size_t i = 0; i < vis.size(); i++)
-      for (size_t j = i + 1; j < vis.size(); j++) {
-        Gizmo::Ring ring;
-        ring.a = vis[i]; ring.b = vis[j];
-        ring.u = g.axes[vis[i]].dir;
-        V4 v2 = reject(g.axes[vis[j]].dir, ring.u);
-        if (length(v2) < 0.2) continue;
-        ring.v = normalize(v2);
-        bool ok = true;
-        for (int k = 0; k <= 64 && ok; k++) {
-          double t = k / 64.0 * 2 * PI, sx, sy;
-          ok = project(c + (ring.u * std::cos(t) + ring.v * std::sin(t)) * r, v, sx, sy);
-          ring.pts.push_back({sx, sy});
-        }
-        if (!ok) continue;
-        double ux, uy, wx, wy;
-        project(c + ring.u * r, v, ux, uy);
-        project(c + ring.v * r, v, wx, wy);
-        double cr = (ux - g.cx) * (wy - g.cy) - (uy - g.cy) * (wx - g.cx);
-        ring.orient = cr >= 0 ? 1 : -1;
-        g.rings.push_back(ring);
+    const int planes[3][2] = {{1, 2}, {0, 2}, {0, 1}};  // rings about X, Y, Z
+    for (auto& pl : planes) {
+      Gizmo::Ring ring;
+      ring.a = pl[0]; ring.b = pl[1];
+      ring.u = dirs[pl[0]];
+      ring.v = dirs[pl[1]];
+      bool ok = true;
+      for (int k = 0; k <= 64 && ok; k++) {
+        double t = k / 64.0 * 2 * PI, sx, sy;
+        ok = project(c + (ring.u * std::cos(t) + ring.v * std::sin(t)) * r, v, sx, sy);
+        ring.pts.push_back({sx, sy});
       }
+      if (!ok) continue;
+      double ux, uy, wx, wy;
+      project(c + ring.u * r, v, ux, uy);
+      project(c + ring.v * r, v, wx, wy);
+      double cr = (ux - g.cx) * (wy - g.cy) - (uy - g.cy) * (wx - g.cx);
+      ring.orient = cr >= 0 ? 1 : -1;
+      g.rings.push_back(ring);
+    }
   }
-  // hover
   if (gizmoHandle_ >= 0) g.hot = gizmoHandle_;
   else {
     double best = 9;
     if (tool == Tool::Move) {
       if (std::hypot(lastMx_ - g.cx, lastMy_ - g.cy) < 10) { g.hot = 4; best = 0; }
-      for (int a = 0; a < 4; a++) {
-        if (!g.axes[a].visible) continue;
+      for (int a = 0; a < 3; a++) {
+        if (std::hypot(g.axes[a].ex - g.cx, g.axes[a].ey - g.cy) < 6) continue;
         double d = segDist(lastMx_, lastMy_, g.cx, g.cy, g.axes[a].ex, g.axes[a].ey);
         if (d < best && std::hypot(lastMx_ - g.cx, lastMy_ - g.cy) > 10) { best = d; g.hot = a; }
       }
@@ -605,7 +615,7 @@ void App::applyModal() {
       double k = 2 * depth * tanHalf() / vpH;
       V4 delta = right * (dx * k) - up * (dy * k);
       if (modalAxes.size() == 1) {
-        V4 axis = gizmoAxisDir(id, modalAxes[0], v);
+        V4 axis = modalAxes[0] < 3 ? gizmoAxes(id, v)[modalAxes[0]] : V4{0, 0, 0, 0};
         double sx0, sy0, sx1, sy1;
         if (length(axis) > 0.5 && project(c, v, sx0, sy0) && project(c + axis, v, sx1, sy1)) {
           double ax = sx1 - sx0, ay = sy1 - sy0, l2 = ax * ax + ay * ay;
@@ -623,7 +633,9 @@ void App::applyModal() {
         int a, b;
         if (modalAxes.size() >= 2) { a = modalAxes[0]; b = modalAxes[1]; }
         else { int x = modalAxes[0]; a = x == 0 ? 1 : 0; b = x == 2 ? 1 : x == 3 ? 1 : 2; if (x == 1) { a = 2; b = 0; } }
-        V4 u = gizmoAxisDir(id, a, v), w = gizmoAxisDir(id, b, v);
+        auto gax = gizmoAxes(id, v);
+        if (a > 2 || b > 2) continue;
+        V4 u = gax[a], w = gax[b];
         w = reject(w, u);
         if (length(u) < 0.5 || length(w) < 0.2) continue;
         q = rotationInPlane(u, normalize(w), ang);
@@ -644,7 +656,7 @@ void App::handleKey(int key, bool shift, bool ctrl) {
   if (key == GLFW_KEY_TAB) { setMode(mode == Mode::Edit ? Mode::Explore : Mode::Edit); return; }
   if (mode == Mode::Explore) {
     if (key == GLFW_KEY_ESCAPE) { if (mouseCaptured) wantRelease = true; else setMode(Mode::Edit); }
-    if (key == GLFW_KEY_R && !geo) playerCam.reset4();
+    if (key == GLFW_KEY_R && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
     return;
   }
   if (drag_ == Drag::Fly) return;  // WASD are flying keys while RMB is held
@@ -683,10 +695,10 @@ void App::handleKey(int key, bool shift, bool ctrl) {
 void App::flyGeoEdit(const InputState& in, double dt) {
   // game-like editor camera in the Geodesic view: hold RMB, mouse looks, WASD/Space/Shift move, Q/E roll
   auto f = field();
-  if (in.dx != 0 || in.dy != 0) geoEdit.look(in.dx, in.dy);
+  if (in.dx != 0 || in.dy != 0) geoEdit.look(in.dx * editSet.lookSpeed, in.dy * editSet.lookSpeed);
   if (!in.keyDown) return;
   auto K = [&](int k) { return in.keyDown(k) ? 1.0 : 0.0; };
-  double sp = editFlySpeed * dt;
+  double sp = editSet.flySpeed * dt;
   double mr = K(GLFW_KEY_D) - K(GLFW_KEY_A), mf = K(GLFW_KEY_W) - K(GLFW_KEY_S);
   double mu = K(GLFW_KEY_SPACE) - std::max(K(GLFW_KEY_LEFT_SHIFT), K(GLFW_KEY_RIGHT_SHIFT));
   double roll = K(GLFW_KEY_E) - K(GLFW_KEY_Q);
@@ -710,6 +722,7 @@ void App::handleInput(const InputState& in, double dt) {
   for (int b = 0; b < 3; b++) {
     if (!in.pressed[b] || !in.vpHovered || drag_ != Drag::None) continue;
     pressX_ = in.mx; pressY_ = in.my; dragMoved_ = false; dragButton_ = b;
+    selectionAtPress_ = selection;
     if (g && b == 1) { drag_ = Drag::Fly; wantCapture = true; continue; }
     if (b == 1 || b == 2 || (b == 0 && in.alt)) {
       drag_ = in.shift ? Drag::Pan : in.ctrl ? Drag::Zoom : (in.alt && b != 0) ? Drag::Rot4 : Drag::Orbit;
@@ -740,8 +753,8 @@ void App::handleInput(const InputState& in, double dt) {
     }
   }
   if (in.wheel != 0 && in.vpHovered) {
-    if (g) editFlySpeed = clampd(editFlySpeed * std::exp(in.wheel * 0.15), 0.2, 30);
-    else editCam.zoom(-in.wheel);
+    if (g) editSet.flySpeed = clampd(editSet.flySpeed * std::exp(in.wheel * 0.15), 0.2, 30);
+    else editCam.zoom(-in.wheel * editSet.zoomSpeed);
   }
 
   // --- continue drags ---
@@ -749,10 +762,10 @@ void App::handleInput(const InputState& in, double dt) {
     if (std::abs(in.mx - pressX_) + std::abs(in.my - pressY_) > 3) dragMoved_ = true;
     const View& v = modalView_;
     switch (drag_) {
-      case Drag::Orbit: if (dragMoved_) editCam.orbit(in.dx, in.dy); break;
-      case Drag::Pan: editCam.pan(in.dx, in.dy); break;
-      case Drag::Zoom: editCam.zoom(in.dy * 0.05); break;
-      case Drag::Rot4: editCam.rotate4(0, 3, in.dx * 0.006); editCam.rotate4(1, 3, -in.dy * 0.006); break;
+      case Drag::Orbit: if (dragMoved_) editCam.orbit(in.dx * editSet.orbitSpeed, in.dy * editSet.orbitSpeed); break;
+      case Drag::Pan: editCam.pan(in.dx * editSet.panSpeed, in.dy * editSet.panSpeed); break;
+      case Drag::Zoom: editCam.zoom(in.dy * 0.05 * editSet.zoomSpeed); break;
+      case Drag::Rot4: editCam.rotate4(0, 3, in.dx * 0.006 * editSet.rot4Speed); editCam.rotate4(1, 3, -in.dy * 0.006 * editSet.rot4Speed); break;
       case Drag::Fly: flyGeoEdit(in, dt); break;
       case Drag::FreeMove: {
         if (in.dx == 0 && in.dy == 0) break;
@@ -804,12 +817,12 @@ void App::handleInput(const InputState& in, double dt) {
     if (click && in.vpHovered) {
       auto hit = pick(in.mx, in.my);
       std::string id = hit && hit->node ? hit->node->id : "";
-      if (!id.empty() && !in.shift && selection.size() == 1) {
-        if (selection[0] == id) {
-          Node* p = findParent(root, id);
-          if (p && p->id != root.id) id = p->id;
-        } else if (selection[0] != root.id && isAncestor(root, selection[0], id)) id = selection[0];
+      // a click selects exactly the object under the cursor; Ctrl+click selects its group instead
+      if (!id.empty() && in.ctrl) {
+        Node* p = findParent(root, id);
+        if (p && p->id != root.id) id = p->id;
       }
+      (void)selectionAtPress_;
       if (in.shift && !id.empty()) {
         auto it = std::find(selection.begin(), selection.end(), id);
         if (it != selection.end()) selection.erase(it); else selection.push_back(id);
@@ -823,32 +836,38 @@ void App::handleInput(const InputState& in, double dt) {
 }
 
 void App::updateExplore(const InputState& in, double dt) {
+  const auto& X = exploreSet;
   if (mouseCaptured && (in.dx != 0 || in.dy != 0)) {
-    if (geo && geoPlayer.valid) geoPlayer.look(in.dx, in.dy);
-    else playerCam.look(in.dx, in.dy);
+    if (geo && geoEdit.valid) geoEdit.look(in.dx * X.lookSpeed, in.dy * X.lookSpeed);
+    else editCam.look(in.dx * X.lookSpeed, in.dy * X.lookSpeed);
   }
   if (in.pressed[0] && in.vpHovered && !mouseCaptured) wantCapture = true;
-  if (in.wheel != 0) moveSpeed = clampd(moveSpeed * std::exp(in.wheel * 0.1), 0.2, 30);
+  if (in.wheel != 0) {
+    double& sp = geo ? exploreSet.geoMoveSpeed : exploreSet.moveSpeed;
+    sp = clampd(sp * std::exp(in.wheel * 0.1), 0.2, 30);
+  }
   if (!in.keysEnabled || !in.keyDown) return;
   auto K = [&](int k) { return in.keyDown(k) ? 1.0 : 0.0; };
-  double sp = moveSpeed * dt, rot = 1.2 * dt;
+  double rot = 1.2 * dt * X.turn4Speed;
   double mr = K(GLFW_KEY_D) - K(GLFW_KEY_A), mf = K(GLFW_KEY_W) - K(GLFW_KEY_S);
   double mu = K(GLFW_KEY_SPACE) - std::max(K(GLFW_KEY_LEFT_SHIFT), K(GLFW_KEY_RIGHT_SHIFT));
   double ma = K(GLFW_KEY_E) - K(GLFW_KEY_Q);
-  double r = avatarRadius;
-  if (geo && geoPlayer.valid) {
+  double r = X.bodyRadius;
+  if (geo && geoEdit.valid) {
+    double sp = X.geoMoveSpeed * dt;
     auto f = field();
-    if (ma != 0) geoPlayer.roll(ma * rot);
+    if (ma != 0) geoEdit.roll(ma * 1.2 * dt);
     if (mr != 0 || mf != 0 || mu != 0)
-      geoPlayer.move(f, {mr * sp, mu * sp, mf * sp}, quality.geoMaxStep * 0.5,
-                     collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalGeo(to).d < r; }) : nullptr);
+      geoEdit.move(f, {mr * sp, mu * sp, mf * sp}, quality.geoMaxStep * 0.5,
+                   X.geoCollide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalGeo(to).d < r; }) : nullptr);
   } else {
+    double sp = X.moveSpeed * dt;
     double zx = K(GLFW_KEY_Z) - K(GLFW_KEY_X), cv = K(GLFW_KEY_C) - K(GLFW_KEY_V);
-    if (zx != 0) playerCam.rotate4AroundEye(2, 3, zx * rot);
-    if (cv != 0) playerCam.rotate4AroundEye(0, 3, cv * rot);
+    if (zx != 0) editCam.rotate4AroundEye(2, 3, zx * rot);
+    if (cv != 0) editCam.rotate4AroundEye(0, 3, cv * rot);
     if (mr != 0 || mf != 0 || mu != 0 || ma != 0)
-      playerCam.move({mr * sp, mu * sp, mf * sp, ma * sp},
-                     collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalFull(to).d < r; }) : nullptr);
+      editCam.move({mr * sp, mu * sp, mf * sp, ma * sp},
+                   X.collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalFull(to).d < r; }) : nullptr);
   }
 }
 
@@ -882,38 +901,33 @@ void App::renderFrame() {
   bool interacting = drag_ != Drag::None && drag_ != Drag::Click;
   bool moving = (now - lastChange_) < 0.25 || interacting || modal != Modal::None || mode == Mode::Explore;
   float scale = quality.resolutionScale * (moving ? quality.motionScale : 1.0f);
+  const QualitySettings& q = quality;
   std::ostringstream key;
   key.precision(9);
   for (double x : v.eye) key << x << ',';
   for (double x : v.frame) key << x << ',';
-  key << version_ << '|' << geo << (int)mode << '|' << vpW << 'x' << vpH << '|' << scale << '|' << fov << '|' << quality.maxSteps
-      << quality.shadows << quality.ao << quality.geoMaxStep << quality.geoProjectIters << showPlayerMarker << showOwnBody << '|';
+  key << version_ << '|' << geo << (int)mode << '|' << vpW << 'x' << vpH << '|' << scale << '|' << fov() << '|' << q.maxSteps << q.shadows << q.ao
+      << q.geoMaxStep << q.geoProjectIters << q.maxDistFull << q.maxDistGeo << q.eps << q.stepScale << q.shadowK << q.shadowMax << q.aoStrength
+      << q.fog << q.ambient << q.lightYaw << q.lightPitch << q.lightW << q.skyTop[0] << q.skyTop[1] << q.skyTop[2] << q.skyBottom[0]
+      << q.skyBottom[1] << q.skyBottom[2] << q.grid << exploreSet.showOwnBody << exploreSet.bodyRadius << '|';
   for (auto& s : selection) key << s << ';';
 
   FrameParams fp;
   fp.view = v;
   fp.geo = geo && geoEdit.valid;
-  fp.grid = mode == Mode::Edit;
-  fp.fovDeg = fov;
+  fp.grid = mode == Mode::Edit && q.grid;
+  fp.fovDeg = fov();
   fp.quality = &quality;
-  fp.light = light;
+  fp.light = light();
   fp.skyCol = worldColor();
-  // the player's body: always in Explore (you can see yourself / your shadow, e.g. light
-  // wrapping around a closed world); in Edit it marks where the player is
-  float r = (float)avatarRadius;
-  if (mode == Mode::Explore && showOwnBody) {
+  for (float x : fp.skyCol) key << x << ',';
+  // the player's body in Explore: casts a shadow and can be seen when light wraps around a closed world
+  float r = (float)exploreSet.bodyRadius;
+  if (mode == Mode::Explore && exploreSet.showOwnBody) {
     fp.marker = v.eye;
     fp.markerFwd = col(v.frame, 2);
     fp.markerCol = {0.95f, 0.8f, 0.2f, r};
     fp.markerSkip = r * 3;  // the primary ray starts inside the body
-  } else if (showPlayerMarker && (fp.geo ? geoPlayer.valid : playerPlaced)) {
-    View pv = playerView();
-    V4 ana = col(v.frame, 3);
-    fp.marker = fp.geo ? pv.eye : pv.eye - ana * dot(pv.eye - v.eye, ana);
-    V4 f = col(pv.frame, 2);
-    fp.markerFwd = fp.geo ? f : normalize(reject(f, ana));
-    if (length(fp.marker - v.eye) > 0.8) fp.markerCol = {1.0f, 0.85f, 0.2f, r};
-    for (double x : pv.eye) key << x << ',';
   }
   std::string k = key.str();
   if (k != lastKey_) {
@@ -922,7 +936,9 @@ void App::renderFrame() {
     fp.scale = scale;
     renderer->render(mainRT, (int)vpW, (int)vpH, root, reg, world, highlightSet(), fp);
   }
-  if (fp.geo && showThumbnail) {
+  if (fp.geo && editSet.showThumbnail) {
+    thumbW = editSet.thumbSize;
+    thumbH = editSet.thumbSize * 3 / 4;
     View tv = thumbnailView();
     FrameParams tp;
     tp.view = tv;
@@ -930,7 +946,7 @@ void App::renderFrame() {
     tp.grid = false;
     tp.fovDeg = 40;
     tp.quality = &quality;
-    tp.light = light;
+    tp.light = light();
     tp.marker = v.eye;
     tp.markerFwd = col(v.frame, 2);
     double R = 3;
@@ -945,6 +961,58 @@ void App::renderFrame() {
       renderer->render(thumbRT, thumbW, thumbH, root, reg, world, {}, tp);
     }
   }
+}
+
+// ============================================================ settings (persisted per user)
+void App::saveSettings() {
+  nlohmann::json j;
+  const auto& q = quality;
+  j["lastFile"] = lastFile;
+  j["render"] = {{"resolutionScale", q.resolutionScale}, {"motionScale", q.motionScale}, {"maxSteps", q.maxSteps}, {"maxDistFull", q.maxDistFull},
+                 {"maxDistGeo", q.maxDistGeo}, {"eps", q.eps}, {"stepScale", q.stepScale}, {"shadows", q.shadows}, {"shadowK", q.shadowK},
+                 {"shadowMax", q.shadowMax}, {"ao", q.ao}, {"aoStrength", q.aoStrength}, {"fog", q.fog}, {"ambient", q.ambient},
+                 {"lightYaw", q.lightYaw}, {"lightPitch", q.lightPitch}, {"lightW", q.lightW}, {"skyTop", q.skyTop}, {"skyBottom", q.skyBottom},
+                 {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}};
+  const auto& e = editSet;
+  j["edit"] = {{"fov", e.fov}, {"orbitSpeed", e.orbitSpeed}, {"panSpeed", e.panSpeed}, {"zoomSpeed", e.zoomSpeed}, {"rot4Speed", e.rot4Speed},
+               {"showWSlider", e.showWSlider}, {"flySpeed", e.flySpeed}, {"lookSpeed", e.lookSpeed}, {"showThumbnail", e.showThumbnail},
+               {"thumbSize", e.thumbSize}};
+  const auto& x = exploreSet;
+  j["explore"] = {{"fov", x.fov}, {"lookSpeed", x.lookSpeed}, {"showOwnBody", x.showOwnBody}, {"bodyRadius", x.bodyRadius},
+                  {"moveSpeed", x.moveSpeed}, {"turn4Speed", x.turn4Speed}, {"collide", x.collide}, {"geoMoveSpeed", x.geoMoveSpeed},
+                  {"geoCollide", x.geoCollide}};
+  writeFile((std::filesystem::path(dataDir()) / "settings.json").string(), j.dump(2));
+}
+
+void App::loadSettings() {
+  std::string text;
+  if (!readFile((std::filesystem::path(dataDir()) / "settings.json").string(), text)) return;
+  try {
+    auto j = nlohmann::json::parse(text);
+    lastFile = j.value("lastFile", std::string());
+    auto get = [](const nlohmann::json& o, const char* k, auto& v) { if (o.contains(k)) v = o[k].get<std::decay_t<decltype(v)>>(); };
+    if (j.contains("render")) {
+      auto& r = j["render"]; auto& q = quality;
+      get(r, "resolutionScale", q.resolutionScale); get(r, "motionScale", q.motionScale); get(r, "maxSteps", q.maxSteps);
+      get(r, "maxDistFull", q.maxDistFull); get(r, "maxDistGeo", q.maxDistGeo); get(r, "eps", q.eps); get(r, "stepScale", q.stepScale);
+      get(r, "shadows", q.shadows); get(r, "shadowK", q.shadowK); get(r, "shadowMax", q.shadowMax); get(r, "ao", q.ao);
+      get(r, "aoStrength", q.aoStrength); get(r, "fog", q.fog); get(r, "ambient", q.ambient); get(r, "lightYaw", q.lightYaw);
+      get(r, "lightPitch", q.lightPitch); get(r, "lightW", q.lightW); get(r, "skyTop", q.skyTop); get(r, "skyBottom", q.skyBottom);
+      get(r, "grid", q.grid); get(r, "geoMaxStep", q.geoMaxStep); get(r, "geoProjectIters", q.geoProjectIters);
+    }
+    if (j.contains("edit")) {
+      auto& r = j["edit"]; auto& e = editSet;
+      get(r, "fov", e.fov); get(r, "orbitSpeed", e.orbitSpeed); get(r, "panSpeed", e.panSpeed); get(r, "zoomSpeed", e.zoomSpeed);
+      get(r, "rot4Speed", e.rot4Speed); get(r, "showWSlider", e.showWSlider); get(r, "flySpeed", e.flySpeed); get(r, "lookSpeed", e.lookSpeed);
+      get(r, "showThumbnail", e.showThumbnail); get(r, "thumbSize", e.thumbSize);
+    }
+    if (j.contains("explore")) {
+      auto& r = j["explore"]; auto& x = exploreSet;
+      get(r, "fov", x.fov); get(r, "lookSpeed", x.lookSpeed); get(r, "showOwnBody", x.showOwnBody); get(r, "bodyRadius", x.bodyRadius);
+      get(r, "moveSpeed", x.moveSpeed); get(r, "turn4Speed", x.turn4Speed); get(r, "collide", x.collide); get(r, "geoMoveSpeed", x.geoMoveSpeed);
+      get(r, "geoCollide", x.geoCollide);
+    }
+  } catch (...) { /* bad settings file: keep defaults */ }
 }
 
 }  // namespace fd

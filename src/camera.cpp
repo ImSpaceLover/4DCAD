@@ -15,8 +15,8 @@ void FullCamera::setFromView(const View& v, double dist) {
 void FullCamera::orbit(double dx, double dy) {
   View before = view();
   V4 c = orbitCenter();
-  yaw += dx * 0.008;
-  pitch = clampd(pitch - dy * 0.008, -1.55, 1.55);
+  yaw += dx * 0.008 * (std::cos(pitch) < 0 ? -1 : 1);  // upside down: keep drag direction intuitive
+  pitch -= dy * 0.008;  // no limit: orbit freely over the top
   M4 f = frame();
   V4 eye = c + mul(mul(f, transpose(before.frame)), before.eye - c);
   target = eye + col(f, 2) * distance;

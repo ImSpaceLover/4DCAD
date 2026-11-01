@@ -54,7 +54,7 @@ static void loadFonts(float scale) {
 
 int main(int argc, char** argv) {
   std::string sceneArg, example, screenshot;
-  std::string selectName, toolName;
+  std::string selectName, toolName, openWindow;
   bool startGeo = false, startExplore = false;
   int frames = 30, W = 1600, H = 900;
   for (int i = 1; i < argc; i++) {
@@ -63,6 +63,7 @@ int main(int argc, char** argv) {
     else if (a == "--geo") startGeo = true;
     else if (a == "--select" && i + 1 < argc) selectName = argv[++i];
     else if (a == "--tool" && i + 1 < argc) toolName = argv[++i];
+    else if (a == "--open" && i + 1 < argc) openWindow = argv[++i];
     else if (a == "--explore") startExplore = true;
     else if (a == "--screenshot" && i + 1 < argc) screenshot = argv[++i];
     else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -90,6 +91,8 @@ int main(int argc, char** argv) {
   // our callbacks first; ImGui chains to them
   glfwSetKeyCallback(win, [](GLFWwindow*, int key, int, int action, int mods) { if (g_ui) g_ui->onKey(key, action, mods); });
   glfwSetScrollCallback(win, [](GLFWwindow*, double, double y) { if (g_ui) g_ui->onScroll(y); });
+  // closing the window asks about unsaved changes first
+  glfwSetWindowCloseCallback(win, [](GLFWwindow* w) { if (g_ui) { glfwSetWindowShouldClose(w, GLFW_FALSE); g_ui->requestQuit(); } });
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -116,12 +119,13 @@ int main(int argc, char** argv) {
   if (!selectName.empty()) walk(app.root, [&](Node& n, Node*, int) { if (n.name == selectName && app.selection.empty()) app.selection = {n.id}; });
   if (toolName == "move") app.tool = Tool::Move;
   if (toolName == "rotate") app.tool = Tool::Rotate;
+  if (!openWindow.empty()) ui->debugOpen(openWindow);
   if (startExplore) app.setMode(Mode::Explore);
 
   auto t0 = std::chrono::steady_clock::now();
   double last = 0;
   int frame = 0;
-  while (!glfwWindowShouldClose(win) && !ui->quitRequested) {
+  while (!ui->exitNow) {
     glfwPollEvents();
     double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     double dt = std::min(0.1, t - last);
@@ -157,7 +161,7 @@ int main(int argc, char** argv) {
     }
     glfwSwapBuffers(win);
   }
-  app.autosave();
+  app.saveSettings();
   g_ui = nullptr;
   delete ui;
   app.mainRT.destroy();

@@ -49,6 +49,8 @@ class SceneEvaluator {
   Sample evalGeo(const V4& p) const;
   Sample eval(const V4& p, bool geo) const { return geo ? evalGeo(p) : evalFull(p); }
   double worldDist(const V4& g, const std::string& worldId) const;
+  /** Distance + colour of the world surface nearest to g. */
+  Sample worldSample(const V4& g, const std::string& worldId) const;
   double worldDist(const V4& g) const { return worldDist(g, activeWorld); }
   V4 worldGrad(const V4& g, const std::string& worldId) const;
   V4 worldGrad(const V4& g) const { return worldGrad(g, activeWorld); }

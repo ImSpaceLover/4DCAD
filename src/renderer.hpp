@@ -43,6 +43,8 @@ class Renderer {
               const std::unordered_set<std::string>& highlight, const FrameParams& fp);
   std::string lastError;
   double lastCompileMs = 0;
+  /** Test-compiles custom SDF code; returns the compiler error ("" if it is fine). Cached. */
+  std::string checkCustomCode(const std::string& code);
 
  private:
   struct Program {
@@ -53,6 +55,8 @@ class Renderer {
   std::unordered_map<std::string, Program> cache_;
   std::list<std::string> lru_;
   std::unordered_set<std::string> failed_;
+  std::unordered_set<std::string> badCode_;
+  std::unordered_map<std::string, std::string> codeErrors_;
   GLuint vao_ = 0, vbo_ = 0;
   Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo);
   GLint u(Program& p, const char* name);

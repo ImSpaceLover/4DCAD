@@ -14,8 +14,11 @@ static Node anchored(const char* prim, const std::string& name, V4 c, double R, 
 }
 
 SceneFile playgroundScene() {
-  Node ground = makeShape("hyperplane", "Ground", {0, 0, 0, 0}, {0.45, 0.46, 0.5});
+  Node ground = makeShape("hyperplane", "Ground", {0, 0, 0, 0}, {0.5, 0.52, 0.56});
   ground.id = "ground";
+  ground.mat.texture = TEX_CHECKER;   // 4D checkerboard floor
+  ground.mat.texStrength = 0.25;
+  ground.mat.color2 = {0.3, 0.31, 0.35};
   Node tess = makeShape("tesseract", "Tesseract", {0, 1.2, 0, 0}, {0.85, 0.35, 0.3});
   double ang[6] = {0, 0, 30, 0, 20, 0};
   tess.xf.rot = rotationFromAngles(ang);
@@ -24,16 +27,23 @@ SceneFile playgroundScene() {
   Node carved = makeGroup(BoolOp::Subtraction, {tess, glome}, "Carved tesseract");
   Node duo = makeShape("duocylinder", "Duocylinder", {-3.5, 1.1, 0, 0}, {0.3, 0.6, 0.9});
   Node tiger = makeShape("tiger", "Tiger", {3.5, 1.6, 0, 0}, {0.4, 0.85, 0.5});
+  tiger.mat.texture = TEX_STRIPES;
+  tiger.mat.texScale = 3;
+  tiger.mat.color2 = {0.1, 0.3, 0.15};
+  Node wavy = makeCustom("Wavy glome (custom GLSL)");
+  wavy.xf.pos = {4, 1.2, 4, 0};
+  wavy.color = {0.95, 0.55, 0.25};
   Node a = makeShape("hypersphere", "Blob A", {0, 1, -4, 0}, {0.8, 0.4, 0.8});
   Node b = makeShape("hypersphere", "Blob B", {0.9, 1.5, -4, 0.4}, {0.4, 0.4, 0.9});
   b.xf.scale = 0.7;
+  b.mat.emissive = 1;  // glowing, casts no shadow
   Node blobs = makeGroup(BoolOp::SmoothUnion, {a, b}, "Smooth blobs");
   blobs.k = 0.5;
   Node pillar = makeShape("cubinder", "Pillars", {0, 1, 5, 0}, {0.75, 0.7, 0.6});
   pillar.xf.scale = 0.4;
   pillar.mods.push_back({2, 0, 2, 3});
   SceneFile f;
-  f.root = makeGroup(BoolOp::Union, {ground, carved, duo, tiger, blobs, pillar}, "Scene");
+  f.root = makeGroup(BoolOp::Union, {ground, carved, duo, tiger, blobs, pillar, wavy}, "Scene");
   f.root.id = "root";
   return f;
 }

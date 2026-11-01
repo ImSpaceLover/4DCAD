@@ -125,14 +125,18 @@ int main() {
   app.selection = {cube};
   before = findNode(app.root, cube)->xf.pos;
   app.handleInput(frameInput(500, 350, 0, 0, false, false, false), 0.016);
+  app.tool = Tool::Move;
+  Gizmo gb = app.gizmo();
+  V4 xdirBefore = gb.axes[0].dir;
+  double ux = gb.axes[0].ex - gb.cx, uy = gb.axes[0].ey - gb.cy, ul = std::hypot(ux, uy);
   app.startModal(Modal::Grab);
   app.handleKey(88 /*X*/, false, false);
-  app.handleInput(frameInput(560, 380, 60, 30, false, false, false), 0.016);
+  app.handleInput(frameInput(500 + 60 * ux / ul, 350 + 60 * uy / ul, 60 * ux / ul, 60 * uy / ul, false, false, false), 0.016);  // along the arrow
   app.confirmModal();
   after = findNode(app.root, cube)->xf.pos;
   V4 d = after - before;
-  V4 xdir = normalize(reject(col(app.nodeWorldFrame(cube), 0), ana));
-  CHECK(length(d) > 0.05 && std::abs(dot(normalize(d), xdir)) > 0.999, "grab X = object X axis in the slice");
+  V4 xdir = xdirBefore;
+  CHECK(length(d) > 0.05 && std::abs(dot(normalize(d), xdir)) > 0.999, "grab X = object X axis in the slice: |d|=%.4f dot=%.4f", length(d), length(d) > 0 ? dot(normalize(d), xdir) : 0.0);
   CHECK(std::abs(dot(d, ana)) < 1e-9, "grab stayed in the slice");
 
   // --- W slider moves the visible slice along ana ---
@@ -142,21 +146,94 @@ int main() {
   V4 e1 = app.editCam.view().eye;
   CHECK(std::abs(dot(e1 - e0, ana) - 1.5) < 1e-9 && length(e1 - e0) - 1.5 < 1e-9, "slice W");
 
-  // --- the player starts where the edit camera is; marker projected into the edit slice ---
-  app.setMode(Mode::Explore);
-  CHECK(length(app.currentView().eye - app.editCam.view().eye) < 1e-9, "player starts at the edit camera");
-  app.playerCam.move({0, 0, 0, 2.0}, nullptr);  // player walks 2 units along its ana
-  app.setMode(Mode::Edit);
-  app.editCam.orbit(100, 0);
-  app.setMode(Mode::Explore);
-  CHECK(length(app.currentView().eye - app.editCam.view().eye) < 1e-9, "player re-spawns at the edit camera");
-  app.playerCam.move({0, 0, 0, 2.0}, nullptr);
-  app.setMode(Mode::Edit);
-  View pv = app.playerView();
-  View ev = app.currentView();
-  V4 a2 = col(ev.frame, 3);
-  V4 m = pv.eye - a2 * dot(pv.eye - ev.eye, a2);
-  CHECK(std::abs(dot(m - ev.eye, a2)) < 1e-9, "marker in slice");
+  // --- Edit and Explore share one camera: switching modes never moves you ---
+  {
+    View e0 = app.currentView();
+    app.setMode(Mode::Explore);
+    View x0 = app.currentView();
+    CHECK(length(x0.eye - e0.eye) < 1e-9, "edit -> explore keeps the position");
+    app.editCam.move({0.5, 0, 1.0, 2.0}, nullptr);  // walk, including along W
+    View x1 = app.currentView();
+    app.setMode(Mode::Edit);
+    View e1 = app.currentView();
+    CHECK(length(e1.eye - x1.eye) < 1e-9, "explore -> edit keeps the position");
+    double fe = 0;
+    for (int i = 0; i < 16; i++) fe = std::max(fe, std::abs(e1.frame[i] - x1.frame[i]));
+    CHECK(fe < 1e-9, "and the orientation");
+  }
+  // --- free orbit: no pitch limit ---
+  {
+    double p0 = app.editCam.pitch;
+    for (int i = 0; i < 100; i++) app.editCam.orbit(0, -10);
+    CHECK(app.editCam.pitch - p0 > 7.5, "orbit went over the top (%.2f rad)", app.editCam.pitch - p0);
+  }
+  // --- gizmo: always 3 local axes, orthonormal and inside the slice, even rotated into W ---
+  {
+    Node* c = findNode(app.root, cube);
+    double ang[6] = {0, 0, 45, 0, 30, 20};
+    c->xf.rot = rotationFromAngles(ang);
+    app.rebuild();
+    app.tool = Tool::Move;
+    app.selection = {cube};
+    Gizmo gz = app.gizmo();
+    V4 ana2 = col(app.currentView().frame, 3);
+    int n = 0;
+    for (int a = 0; a < 3; a++) {
+      n += gz.axes[a].visible;
+      CHECK(std::abs(dot(gz.axes[a].dir, ana2)) < 1e-9, "gizmo axis %d inside the slice", a);
+      for (int b = a + 1; b < 3; b++) CHECK(std::abs(dot(gz.axes[a].dir, gz.axes[b].dir)) < 1e-9, "axes %d,%d orthogonal", a, b);
+    }
+    CHECK(n == 3, "3 arrows");
+    // the X arrow follows the local X axis as closely as the slice allows (mix of world X and W)
+    V4 lx = col(app.nodeWorldFrame(cube), 0);
+    CHECK(dot(gz.axes[0].dir, lx) > 0.5, "X arrow ~ local X");
+    app.tool = Tool::Rotate;
+    CHECK(app.gizmo().rings.size() == 3, "3 rings");
+  }
+  // --- clicking an object inside a group selects that object, not the group ---
+  {
+    app.loadScene(playgroundScene());
+    app.tool = Tool::Move;
+    std::string tessId;
+    walk(app.root, [&](Node& m, Node*, int) { if (m.name == "Tesseract") tessId = m.id; });
+    app.editCam.target = app.nodeWorldPos(tessId);
+    app.editCam.distance = 6;
+    app.editCam.yaw = 0.3; app.editCam.pitch = -0.2; app.editCam.reset4();
+    app.rebuild();
+    double sx, sy;
+    // aim at the tesseract's frame (its centre is hollowed out by the hypersphere)
+    View vv = app.currentView();
+    app.project(app.nodeWorldPos(tessId) + col(vv.frame, 0) * 0.85, vv, sx, sy);
+    auto hit = app.pick(sx, sy);
+    CHECK(hit && hit->node, "aiming at the carved tesseract");
+    tessId = hit->node->id;  // a leaf (tesseract or the subtracted hypersphere's cut surface)
+    app.handleInput(frameInput(sx, sy, 0, 0, true, true, false), 0.016);
+    app.handleInput(frameInput(sx, sy, 0, 0, false, false, true), 0.016);
+    CHECK(app.selection.size() == 1 && app.selection[0] == tessId, "single click selects the object");
+    app.handleInput(frameInput(sx, sy, 0, 0, true, true, false), 0.016);
+    app.handleInput(frameInput(sx, sy, 0, 0, false, false, true), 0.016);
+    CHECK(app.selection.size() == 1 && app.selection[0] == tessId, "second click still selects the object");
+    app.tool = Tool::Select;
+    InputState in = frameInput(sx, sy, 0, 0, true, true, false);
+    in.ctrl = true;
+    app.handleInput(in, 0.016);
+    in = frameInput(sx, sy, 0, 0, false, false, true);
+    in.ctrl = true;
+    app.handleInput(in, 0.016);
+    CHECK(app.selection.size() == 1 && findNode(app.root, app.selection[0])->name == "Carved tesseract", "ctrl+click selects the group");
+  }
+  // --- unsaved changes are tracked; saving clears them ---
+  {
+    CHECK(!app.dirty(), "fresh scene is clean");
+    findNode(app.root, app.root.children[1].id)->xf.pos[0] += 1;
+    app.commit();
+    CHECK(app.dirty(), "edit marks dirty");
+    std::string err;
+    std::string path = std::string(getenv("HOME") ? getenv("HOME") : ".") + "/test.4dscene.json";
+    CHECK(app.saveSceneFile(path, err), "save: %s", err.c_str());
+    CHECK(!app.dirty(), "saved scene is clean");
+    CHECK(app.lastFile == path, "remembered as last file");
+  }
 
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---
   app.loadScene(planetScene());
@@ -181,6 +258,10 @@ int main() {
     app.handleInput(in, 0.1);
     V4 p1 = app.currentView().eye;
     CHECK(length(p1 - p0) > 0.5 && std::abs(length(p1) - 3) < 1e-3, "flew %.3f along the surface", length(p1 - p0));
+  }
+  {
+    auto sc = app.worldColor();
+    CHECK(std::abs(sc[0] - 0.35f) < 1e-4 && std::abs(sc[2] - 0.75f) < 1e-4, "geodesic sky = world surface colour");
   }
   View tv = app.thumbnailView();
   V4 cam = app.currentView().eye;
