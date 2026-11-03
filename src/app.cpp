@@ -795,7 +795,7 @@ void App::handleKey(int key, bool shift, bool ctrl) {
   if (key == GLFW_KEY_TAB) { setMode(mode == Mode::Edit ? Mode::Explore : Mode::Edit); return; }
   if (mode == Mode::Explore) {
     if (key == GLFW_KEY_ESCAPE) { if (mouseCaptured) wantRelease = true; else setMode(Mode::Edit); }
-    if (key == GLFW_KEY_R && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
+    if (key == GLFW_KEY_BACKSPACE && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
     return;
   }
   if (drag_ == Drag::Fly) return;  // WASD are flying keys while RMB is held
@@ -1025,10 +1025,12 @@ void App::updateExplore(const InputState& in, double dt) {
   } else {
     double sp = X.moveSpeed * dt;
     double zx = K(GLFW_KEY_Z) - K(GLFW_KEY_X), cv = K(GLFW_KEY_C) - K(GLFW_KEY_V);
+    double mw = K(GLFW_KEY_R) - K(GLFW_KEY_F);  // along the slider (4th) axis
     if (zx != 0) editCam.rotate4AroundEye(2, 3, zx * rot);
     if (cv != 0) editCam.rotate4AroundEye(0, 3, cv * rot);
-    if (mr != 0 || mf != 0 || mu != 0 || ma != 0)
-      editCam.move({mr * sp, mu * sp, mf * sp, ma * sp},
+    if (ma != 0) editCam.rotate4AroundEye(0, 1, ma * 1.2 * dt);  // Q/E roll, as in the Geodesic view
+    if (mr != 0 || mf != 0 || mu != 0 || mw != 0)
+      editCam.move({mr * sp, mu * sp, mf * sp, mw * sp},
                    X.collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalFull(to).d < r; }) : nullptr);
   }
 }

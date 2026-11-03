@@ -151,7 +151,7 @@ void UI::helpWindow() {
   ImGui::BulletText("Shapes are a point plus modifiers: Extrude / Revolve add the next axis (X, Y, Z, W); Mirror, Repeat, Radial repeat copy it");
   ImGui::SeparatorText("Explore (game-like)");
   ImGui::BulletText("Edit and Explore share one camera: switching never moves you. Click to capture the mouse, Esc releases (again: back to Edit)");
-  ImGui::BulletText("WASD, Space/Shift up/down, wheel = speed. Full 4D: Q/E along W, Z/X turn into W, C/V sideways in W, R reset");
+  ImGui::BulletText("WASD, Space/Shift up/down, wheel = speed. Full 4D: R/F along the slider axis (W), Q/E roll, Z/X turn into W, C/V sideways in W, Backspace reset 4D orientation");
   ImGui::BulletText("Your body (yellow sphere) is part of the scene: it casts a shadow, and on closed worlds you can see yourself");
   ImGui::SeparatorText("Library");
   ImGui::BulletText("Built-in folders are read-only; saved objects go to Custom. '+ Folder' adds folders; right-click to rename / move / delete");

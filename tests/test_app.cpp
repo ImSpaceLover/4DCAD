@@ -389,6 +389,25 @@ int main() {
     app.editCam.reset4();
   }
 
+  // --- Full 4D Explore: Q/E roll, R/F move along the slider axis ---
+  {
+    app.setMode(Mode::Explore);
+    View v0 = app.currentView();
+    InputState in = frameInput(500, 350, 0, 0, false, false, false);
+    in.keyDown = [](int k) { return k == 69; /* E */ };
+    for (int i = 0; i < 10; i++) app.handleInput(in, 0.05);
+    View v1 = app.currentView();
+    CHECK(length(v1.eye - v0.eye) < 1e-9, "roll does not move");
+    CHECK(std::abs(dot(col(v1.frame, 1), col(v0.frame, 0))) > 0.3, "E rolls (up tilts toward right)");
+    CHECK(length(col(v1.frame, 2) - col(v0.frame, 2)) < 1e-9 && length(col(v1.frame, 3) - col(v0.frame, 3)) < 1e-9, "roll keeps forward and 4th axis");
+    in.keyDown = [](int k) { return k == 82; /* R */ };
+    for (int i = 0; i < 10; i++) app.handleInput(in, 0.05);
+    View v2 = app.currentView();
+    V4 d = v2.eye - v1.eye;
+    CHECK(length(d) > 0.5 && std::abs(dot(d, col(v1.frame, 3))) > 0.999 * length(d), "R moves along the 4th axis");
+    app.setMode(Mode::Edit);
+  }
+
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---
   app.loadScene(planetScene());
   app.setGeo(true);

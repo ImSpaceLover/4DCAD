@@ -81,7 +81,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 - **Edit and Explore share one camera**: switching modes in either direction never moves you or turns you.
 - Click to capture the mouse. Esc releases it; Esc again returns to Edit.
 - WASD moves, Space/Shift move up/down, and the wheel sets speed.
-- Full 4D: Q/E move along W, Z/X turn into W, C/V turn sideways in W, R resets.
+- Full 4D: R/F move along the slider axis (W by default), Q/E roll (as in Geodesic), Z/X turn into W, C/V turn sideways in W, Backspace resets the 4D orientation.
 - Geodesic: you move on the world's surface and Q/E roll.
 - **Your body** is part of the scene. It casts a shadow, and on closed worlds light comes back around so you can see yourself. On a hypersphere world every ray that misses everything returns to you, so the "sky" is your own back. Toggle it in Settings > Explore mode.
 

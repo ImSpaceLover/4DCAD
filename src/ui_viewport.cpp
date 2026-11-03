@@ -132,7 +132,7 @@ void UI::overlays(ImDrawList* dl) {
   lines.push_back(buf);
   if (app.mode == Mode::Explore) {
     if (!app.mouseCaptured) lines.push_back("Click the viewport to capture the mouse (Esc releases)");
-    else if (!app.geo) lines.push_back("WASD move | Space/Shift up/down | Q/E along W | Z/X turn into W | C/V turn sideways in W | R reset | wheel speed");
+    else if (!app.geo) lines.push_back("WASD move | Space/Shift up/down | R/F along the slider axis | Q/E roll | Z/X, C/V turn into it | Backspace reset");
     else lines.push_back("WASD move | Space/Shift up/down (tangent) | Q/E roll | wheel speed | Esc release");
   } else if (app.modal != Modal::None) lines.push_back(app.transformHint());
   else {
