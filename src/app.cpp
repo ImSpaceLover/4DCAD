@@ -788,48 +788,48 @@ void App::applyModal() {
 }
 
 // ============================================================ input
-void App::handleKey(int key, bool shift, bool ctrl) {
-  if (ctrl && key == GLFW_KEY_Z) { shift ? redo() : undo(); return; }
-  if (ctrl && key == GLFW_KEY_Y) { redo(); return; }
-  if (ctrl && key == GLFW_KEY_G) { groupSelection(BoolOp::Union); return; }
-  if (key == GLFW_KEY_TAB) { setMode(mode == Mode::Edit ? Mode::Explore : Mode::Edit); return; }
+void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
+  auto P = [&](Action a) { return keys.pressed(a, key, ctrl, shift, alt); };
+  if (P(Action::Undo)) { undo(); return; }
+  if (P(Action::Redo)) { redo(); return; }
+  if (P(Action::Group)) { groupSelection(BoolOp::Union); return; }
+  if (P(Action::ToggleMode)) { setMode(mode == Mode::Edit ? Mode::Explore : Mode::Edit); return; }
   if (mode == Mode::Explore) {
-    if (key == GLFW_KEY_ESCAPE) { if (mouseCaptured) wantRelease = true; else setMode(Mode::Edit); }
-    if (key == GLFW_KEY_BACKSPACE && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
+    if (P(Action::ReleaseMouse)) { if (mouseCaptured) wantRelease = true; else setMode(Mode::Edit); }
+    if (P(Action::Reset4D) && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
+    if (P(Action::DebugRay)) { debugRay = !debugRay; toast(debugRay ? "Debug ray on" : "Debug ray off"); }
     return;
   }
-  if (drag_ == Drag::Fly) return;  // WASD are flying keys while RMB is held
+  if (drag_ == Drag::Fly) return;  // movement keys while RMB is held
   if (modal != Modal::None) {
-    int ax = key == GLFW_KEY_X ? 0 : key == GLFW_KEY_Y ? 1 : key == GLFW_KEY_Z ? 2 : key == GLFW_KEY_W ? 3 : -1;
+    int ax = P(Action::AxisX) ? 0 : P(Action::AxisY) ? 1 : P(Action::AxisZ) ? 2 : P(Action::AxisW) ? 3 : -1;
     if (ax >= 0) {
       if (modal == Modal::Rotate) modalAxes = (modalAxes.size() >= 2 || (modalAxes.size() == 1 && modalAxes[0] == ax)) ? std::vector<int>{ax} : (modalAxes.push_back(ax), modalAxes);
       else modalAxes = (modalAxes.size() == 1 && modalAxes[0] == ax) ? std::vector<int>{} : std::vector<int>{ax};
       applyModal();
-    } else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) confirmModal();
-    else if (key == GLFW_KEY_ESCAPE) cancelModal();
+    } else if (P(Action::Confirm)) confirmModal();
+    else if (P(Action::Cancel)) cancelModal();
     return;
   }
-  if (ctrl) return;
-  switch (key) {
-    case GLFW_KEY_V: setGeo(!geo); break;
-    case GLFW_KEY_Q: tool = Tool::Select; break;
-    case GLFW_KEY_W: if (shift) editCam.reset4(); else tool = Tool::Move; break;
-    case GLFW_KEY_E: tool = Tool::Rotate; break;
-    case GLFW_KEY_L: editSet.globalAxes = !editSet.globalAxes; toast(editSet.globalAxes ? "Transform axes: global" : "Transform axes: local"); break;
-    case GLFW_KEY_G: startModal(Modal::Grab); break;
-    case GLFW_KEY_R: startModal(Modal::Rotate); break;
-    case GLFW_KEY_S: startModal(Modal::Scale); break;
-    case GLFW_KEY_X: case GLFW_KEY_DELETE: if (!selection.empty()) deleteSelection(); break;
-    case GLFW_KEY_D: if (shift) duplicateSelection(); break;
-    case GLFW_KEY_F: case GLFW_KEY_PERIOD: case GLFW_KEY_KP_DECIMAL: focusSelection(); break;
-    case GLFW_KEY_ESCAPE: selection.clear(); break;
-    case GLFW_KEY_A: { selection.clear(); for (auto& c : root.children) selection.push_back(c.id); break; }
-    case GLFW_KEY_1: case GLFW_KEY_KP_1: standardView(0); break;
-    case GLFW_KEY_3: case GLFW_KEY_KP_3: standardView(1); break;
-    case GLFW_KEY_7: case GLFW_KEY_KP_7: standardView(2); break;
-    case GLFW_KEY_9: case GLFW_KEY_KP_9: standardView(3); break;
-    default: break;
-  }
+  if (P(Action::ToggleView)) setGeo(!geo);
+  else if (P(Action::ToolSelect)) tool = Tool::Select;
+  else if (P(Action::ToolMove)) tool = Tool::Move;
+  else if (P(Action::ToolRotate)) tool = Tool::Rotate;
+  else if (P(Action::ToggleGlobal)) { editSet.globalAxes = !editSet.globalAxes; toast(editSet.globalAxes ? "Transform axes: global" : "Transform axes: local"); }
+  else if (P(Action::ToggleSnap)) { editSet.snap = !editSet.snap; toast(editSet.snap ? "Snapping on" : "Snapping off"); }
+  else if (P(Action::Grab)) startModal(Modal::Grab);
+  else if (P(Action::Rotate)) startModal(Modal::Rotate);
+  else if (P(Action::Scale)) startModal(Modal::Scale);
+  else if (P(Action::Delete)) { if (!selection.empty()) deleteSelection(); }
+  else if (P(Action::Duplicate)) duplicateSelection();
+  else if (P(Action::Focus)) focusSelection();
+  else if (P(Action::Deselect)) selection.clear();
+  else if (P(Action::SelectAll)) { selection.clear(); for (auto& c : root.children) selection.push_back(c.id); }
+  else if (P(Action::ViewFront)) standardView(0);
+  else if (P(Action::ViewRight)) standardView(1);
+  else if (P(Action::ViewTop)) standardView(2);
+  else if (P(Action::ViewAlongW)) standardView(3);
+  else if (P(Action::Reset4D)) editCam.reset4();
 }
 
 void App::flyGeoEdit(const InputState& in, double dt) {
@@ -837,11 +837,11 @@ void App::flyGeoEdit(const InputState& in, double dt) {
   auto f = field();
   if (in.dx != 0 || in.dy != 0) geoEdit.look(in.dx * editSet.lookSpeed, in.dy * editSet.lookSpeed);
   if (!in.keyDown) return;
-  auto K = [&](int k) { return in.keyDown(k) ? 1.0 : 0.0; };
+  auto K = [&](Action a) { return keys.held(a, in.keyDown) ? 1.0 : 0.0; };
   double sp = editSet.flySpeed * dt;
-  double mr = K(GLFW_KEY_D) - K(GLFW_KEY_A), mf = K(GLFW_KEY_W) - K(GLFW_KEY_S);
-  double mu = K(GLFW_KEY_SPACE) - std::max(K(GLFW_KEY_LEFT_SHIFT), K(GLFW_KEY_RIGHT_SHIFT));
-  double roll = K(GLFW_KEY_E) - K(GLFW_KEY_Q);
+  double mr = K(Action::MoveRight) - K(Action::MoveLeft), mf = K(Action::MoveForward) - K(Action::MoveBack);
+  double mu = K(Action::MoveUp) - K(Action::MoveDown);
+  double roll = K(Action::RollRight) - K(Action::RollLeft);
   if (roll != 0) geoEdit.roll(roll * 1.2 * dt);
   if (mr != 0 || mf != 0 || mu != 0) geoEdit.move(f, {mr * sp, mu * sp, mf * sp}, quality.geoMaxStep * 0.5, nullptr);
 }
@@ -1009,11 +1009,11 @@ void App::updateExplore(const InputState& in, double dt) {
     sp = clampd(sp * std::exp(in.wheel * 0.1), 0.2, 30);
   }
   if (!in.keysEnabled || !in.keyDown) return;
-  auto K = [&](int k) { return in.keyDown(k) ? 1.0 : 0.0; };
+  auto K = [&](Action a) { return keys.held(a, in.keyDown) ? 1.0 : 0.0; };
   double rot = 1.2 * dt * X.turn4Speed;
-  double mr = K(GLFW_KEY_D) - K(GLFW_KEY_A), mf = K(GLFW_KEY_W) - K(GLFW_KEY_S);
-  double mu = K(GLFW_KEY_SPACE) - std::max(K(GLFW_KEY_LEFT_SHIFT), K(GLFW_KEY_RIGHT_SHIFT));
-  double ma = K(GLFW_KEY_E) - K(GLFW_KEY_Q);
+  double mr = K(Action::MoveRight) - K(Action::MoveLeft), mf = K(Action::MoveForward) - K(Action::MoveBack);
+  double mu = K(Action::MoveUp) - K(Action::MoveDown);
+  double ma = K(Action::RollRight) - K(Action::RollLeft);
   double r = X.bodyRadius;
   if (geo && geoEdit.valid) {
     double sp = X.geoMoveSpeed * dt;
@@ -1024,8 +1024,8 @@ void App::updateExplore(const InputState& in, double dt) {
                    X.geoCollide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalGeo(to).d < r; }) : nullptr);
   } else {
     double sp = X.moveSpeed * dt;
-    double zx = K(GLFW_KEY_Z) - K(GLFW_KEY_X), cv = K(GLFW_KEY_C) - K(GLFW_KEY_V);
-    double mw = K(GLFW_KEY_R) - K(GLFW_KEY_F);  // along the slider (4th) axis
+    double zx = K(Action::TurnWPlus) - K(Action::TurnWMinus), cv = K(Action::SideWPlus) - K(Action::SideWMinus);
+    double mw = K(Action::MoveAnaPlus) - K(Action::MoveAnaMinus);  // along the slider (4th) axis
     if (zx != 0) editCam.rotate4AroundEye(2, 3, zx * rot);
     if (cv != 0) editCam.rotate4AroundEye(0, 3, cv * rot);
     if (ma != 0) editCam.rotate4AroundEye(0, 1, ma * 1.2 * dt);  // Q/E roll, as in the Geodesic view
@@ -1148,6 +1148,7 @@ void App::saveSettings() {
   j["explore"] = {{"fov", x.fov}, {"lookSpeed", x.lookSpeed}, {"showOwnBody", x.showOwnBody}, {"bodyRadius", x.bodyRadius},
                   {"moveSpeed", x.moveSpeed}, {"turn4Speed", x.turn4Speed}, {"collide", x.collide}, {"geoMoveSpeed", x.geoMoveSpeed},
                   {"geoCollide", x.geoCollide}};
+  keys.toJson(j["keys"]);
   writeFile((std::filesystem::path(dataDir()) / "settings.json").string(), j.dump(2));
 }
 
@@ -1181,6 +1182,7 @@ void App::loadSettings() {
       get(r, "moveSpeed", x.moveSpeed); get(r, "turn4Speed", x.turn4Speed); get(r, "collide", x.collide); get(r, "geoMoveSpeed", x.geoMoveSpeed);
       get(r, "geoCollide", x.geoCollide);
     }
+    if (j.contains("keys")) keys.fromJson(j["keys"]);
   } catch (...) { /* bad settings file: keep defaults */ }
 }
 

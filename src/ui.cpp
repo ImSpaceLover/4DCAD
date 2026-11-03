@@ -37,15 +37,30 @@ void UI::frame(double dt) {
 
 void UI::onKey(int key, int action, int mods) {
   if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
+  bool ctrl = (mods & GLFW_MOD_CONTROL) || (mods & GLFW_MOD_SUPER);
+  bool shift = mods & GLFW_MOD_SHIFT, alt = mods & GLFW_MOD_ALT;
+  if (captureAction_ >= 0) {  // Settings > Keys: the next key press becomes the binding
+    if (action != GLFW_PRESS || key == GLFW_KEY_UNKNOWN) return;
+    bool isMod = key == GLFW_KEY_LEFT_SHIFT || key == GLFW_KEY_RIGHT_SHIFT || key == GLFW_KEY_LEFT_CONTROL || key == GLFW_KEY_RIGHT_CONTROL ||
+                 key == GLFW_KEY_LEFT_ALT || key == GLFW_KEY_RIGHT_ALT || key == GLFW_KEY_LEFT_SUPER || key == GLFW_KEY_RIGHT_SUPER;
+    Action a = (Action)captureAction_;
+    bool held = actionInfo(a).held;
+    if (isMod && !held) return;  // shortcuts: wait for the main key (modifiers are taken from it)
+    KeyCombo c{key, held ? false : ctrl, held ? false : shift, held ? false : alt};
+    app.keys.at(a)[captureSlot_] = c;
+    captureAction_ = -1;
+    app.saveSettings();
+    return;
+  }
   ImGuiIO& io = ImGui::GetIO();
   if (io.WantTextInput && !app.mouseCaptured) return;
-  bool ctrl = (mods & GLFW_MOD_CONTROL) || (mods & GLFW_MOD_SUPER);
-  bool shift = mods & GLFW_MOD_SHIFT;
-  if (action == GLFW_REPEAT && !(ctrl && (key == GLFW_KEY_Z || key == GLFW_KEY_Y))) return;
-  if (ctrl && key == GLFW_KEY_S) { shift ? fileAction(2) : saveScene(); return; }
-  if (ctrl && key == GLFW_KEY_O) { guarded([this] { fileAction(1); }); return; }
-  if (ctrl && key == GLFW_KEY_N) { guarded([this] { app.newScene(); }); return; }
-  app.handleKey(key, shift, ctrl);
+  auto P = [&](Action a) { return app.keys.pressed(a, key, ctrl, shift, alt); };
+  if (action == GLFW_REPEAT && !(P(Action::Undo) || P(Action::Redo))) return;
+  if (P(Action::Save)) { saveScene(); return; }
+  if (P(Action::SaveAs)) { fileAction(2); return; }
+  if (P(Action::Open)) { guarded([this] { fileAction(1); }); return; }
+  if (P(Action::New)) { guarded([this] { app.newScene(); }); return; }
+  app.handleKey(key, shift, ctrl, alt);
 }
 
 // ============================================================ file actions

@@ -5,6 +5,8 @@
 #include "app.hpp"
 #include "examples.hpp"
 
+#include <nlohmann/json.hpp>
+
 using namespace fd;
 static int failures = 0, checks = 0;
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { failures++; std::printf("FAIL %s:%d: %s  ", __FILE__, __LINE__, #cond); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -406,6 +408,28 @@ int main() {
     V4 d = v2.eye - v1.eye;
     CHECK(length(d) > 0.5 && std::abs(dot(d, col(v1.frame, 3))) > 0.999 * length(d), "R moves along the 4th axis");
     app.setMode(Mode::Edit);
+  }
+
+  // --- key bindings: defaults have no conflicts, rebinding works, settings round trip ---
+  {
+    KeyBindings kb;
+    for (int i = 0; i < (int)Action::Count; i++) {
+      auto cf = kb.conflicts((Action)i);
+      CHECK(cf.empty(), "default binding conflict: %s vs %s", actionInfo((Action)i).label, cf.empty() ? "" : actionInfo(cf[0]).label);
+    }
+    app.tool = Tool::Select;
+    app.keys.at(Action::ToolMove) = {KeyCombo{77 /* M */}, KeyCombo{}};
+    app.handleKey(87 /* W */, false, false);
+    CHECK(app.tool == Tool::Select, "old key unbound");
+    app.handleKey(77, false, false);
+    CHECK(app.tool == Tool::Move, "new key works");
+    nlohmann::json j;
+    app.keys.toJson(j);
+    KeyBindings k2;
+    k2.fromJson(j);
+    CHECK(k2.at(Action::ToolMove)[0].key == 77 && !k2.at(Action::ToolMove)[1].bound(), "bindings round trip");
+    CHECK(kb.conflicts(Action::ToolMove).empty() && (kb.at(Action::ToolSelect)[0] = KeyCombo{87}, !kb.conflicts(Action::ToolSelect).empty()), "conflict detected");
+    app.keys.resetDefaults();
   }
 
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---

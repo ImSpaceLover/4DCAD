@@ -91,11 +91,62 @@ void UI::qualityWindow() {
       ImGui::TextDisabled("Last shader compile: %.0f ms", app.renderer->lastCompileMs);
       ImGui::EndTabItem();
     }
+    if (ImGui::BeginTabItem("Keys")) {
+      keysTab();
+      ImGui::EndTabItem();
+    }
     ImGui::EndTabBar();
   }
   if (ImGui::Button("Reset to defaults")) { app.quality = QualitySettings{}; app.editSet = EditSettings{}; app.exploreSet = ExploreSettings{}; }
   ImGui::End();
   if (!showQuality_) app.saveSettings();
+}
+
+void UI::keysTab() {
+  auto& K = app.keys;
+  if (ImGui::Button("Reset all to defaults")) { K.resetDefaults(); captureAction_ = -1; app.saveSettings(); }
+  ImGui::SameLine();
+  ImGui::TextDisabled("Click a key to change it, right-click to clear");
+  if (captureAction_ >= 0) {
+    ImGui::TextColored({1, 0.8f, 0.3f, 1}, "Press a key for \"%s\"...", actionInfo((Action)captureAction_).label);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Cancel")) captureAction_ = -1;
+  }
+  ImGui::BeginChild("keys");
+  const char* group = "";
+  for (int i = 0; i < (int)Action::Count; i++) {
+    Action a = (Action)i;
+    const ActionInfo& info = actionInfo(a);
+    if (std::strcmp(group, info.group) != 0) {
+      group = info.group;
+      ImGui::SeparatorText(group);
+    }
+    ImGui::PushID(i);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(info.label);
+    for (int slot = 0; slot < 2; slot++) {
+      ImGui::SameLine(slot == 0 ? 210.f : 330.f);
+      ImGui::PushID(slot);
+      bool waiting = captureAction_ == i && captureSlot_ == slot;
+      std::string t = waiting ? "..." : KeyBindings::comboText(K.at(a)[slot]);
+      if (t.empty()) t = "-";
+      if (ImGui::Button((t + "###k").c_str(), {112, 0})) { captureAction_ = i; captureSlot_ = slot; }
+      if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) { K.at(a)[slot] = KeyCombo{}; app.saveSettings(); }
+      ImGui::PopID();
+    }
+    auto cf = K.conflicts(a);
+    if (!cf.empty()) {
+      ImGui::SameLine();
+      ImGui::TextColored({1, 0.45f, 0.35f, 1}, "!");
+      if (ImGui::IsItemHovered()) {
+        std::string s = "Same key as:";
+        for (Action o : cf) s += std::string("\n  ") + actionInfo(o).label;
+        ImGui::SetTooltip("%s", s.c_str());
+      }
+    }
+    ImGui::PopID();
+  }
+  ImGui::EndChild();
 }
 
 void UI::sdfWindow() {

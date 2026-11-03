@@ -118,7 +118,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 
 * Nothing is written to your scene file unless you save (**Ctrl+S**; **Ctrl+Shift+S** = save as). The toolbar shows "unsaved" when there are changes. Quitting, New, Open and loading an example ask whether to save first.
 * On startup the last saved / opened file is reopened (falling back to the example scene).
-* **Settings** (toolbar or View menu) has three tabs, saved per user:
+* **Settings** (toolbar or View menu) has four tabs, saved per user:
   * **Edit mode**: field of view, local / global axes, snapping steps. Full 4D: orbit / pan / zoom / turn-into-W speeds, W slider, ground grid. Geodesic: fly speed, look speed, outside thumbnail and its size.
   * **Explore mode**: field of view, look speed, own body and its radius. Full 4D: move speed, turn-into-W speed, collisions. Geodesic: move speed, collisions.
   * **Rendering**:
@@ -127,6 +127,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
     * Lighting: soft shadows (sharpness, distance), ambient occlusion (strength), ambient light, light direction including its W component.
     * Sky and fog: sky colours and fog amount.
     * Geodesic rays: max step size and projections.
+  * **Keys**: every shortcut and movement key can be rebound (two keys per action). Click a key and press the new one; right-click clears it. A red "!" marks keys that clash with another action in the same mode. "Reset all to defaults" restores the keys listed in this README.
 
 ## Performance
 

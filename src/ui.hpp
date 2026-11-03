@@ -56,6 +56,8 @@ class UI {
   void fileAction(int action);
   void doFileAction(int action, const std::string& path);
   std::string exportPrimId_;
+  int captureAction_ = -1, captureSlot_ = 0;  // Settings > Keys: waiting for a key press
+  void keysTab();
 };
 
 }  // namespace fd

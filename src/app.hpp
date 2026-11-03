@@ -10,6 +10,7 @@
 
 #include "camera.hpp"
 #include "evaluator.hpp"
+#include "keybinds.hpp"
 #include "library.hpp"
 #include "renderer.hpp"
 #include "surface.hpp"
@@ -184,7 +185,9 @@ class App {
 
   // --- per frame ---
   void handleInput(const InputState& in, double dt);
-  void handleKey(int key, bool shift, bool ctrl);
+  void handleKey(int key, bool shift, bool ctrl, bool alt = false);
+  KeyBindings keys;      // rebindable shortcuts (saved with the settings)
+  bool debugRay = false; // Explore: show the debug ray
   void renderFrame();
   View thumbnailView();
   double sliceW() { return editCam.sliceW(); }
