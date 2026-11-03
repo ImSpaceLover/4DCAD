@@ -156,7 +156,9 @@ src/camera.*                  Full-4D orbit/fly camera, surface-bound geodesic c
 src/codegen.*, shaders.hpp    scene → GLSL, ray-marching shader
 src/renderer.*, gl.*          OpenGL renderer and function loader
 src/app.*                     state, tools, undo, explore movement, thumbnail
-src/ui.*, filedialog.*, main.cpp   ImGui interface, native file dialogs, window
+src/ui*.cpp, ui_common.hpp    ImGui interface (ui.cpp core, ui_toolbar / ui_library / ui_tree /
+                              ui_properties / ui_viewport / ui_windows panels)
+src/filedialog.*, main.cpp    native file dialogs, window
 tests/                        core and app-level unit tests (ctest)
 ```
 

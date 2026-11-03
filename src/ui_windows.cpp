@@ -1,0 +1,162 @@
+// Settings, SDF code and help windows.
+#include "ui_common.hpp"
+
+namespace fd {
+
+// ============================================================ quality / help
+void UI::qualityWindow() {
+  ImGui::SetNextWindowSize({430, 560}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Settings", &showQuality_)) { ImGui::End(); return; }
+  auto F = [](const char* label, double& v, float lo, float hi, const char* fmt = "%.2f", const char* tip = nullptr) {
+    float f = (float)v;
+    if (ImGui::SliderFloat(label, &f, lo, hi, fmt)) v = f;
+    if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+  };
+  auto Ff = [](const char* label, float& v, float lo, float hi, const char* fmt = "%.2f", const char* tip = nullptr) {
+    ImGui::SliderFloat(label, &v, lo, hi, fmt);
+    if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+  };
+  if (ImGui::BeginTabBar("settings")) {
+    if (ImGui::BeginTabItem("Edit mode")) {
+      auto& e = app.editSet;
+      F("Field of view", e.fov, 30, 110, "%.0f deg");
+      ImGui::SeparatorText("Full 4D");
+      F("Orbit speed", e.orbitSpeed, 0.1f, 4);
+      F("Pan speed", e.panSpeed, 0.1f, 4);
+      F("Zoom speed", e.zoomSpeed, 0.1f, 4);
+      F("Turn into W speed", e.rot4Speed, 0.1f, 4, "%.2f", "Alt+drag rotation into the 4th dimension");
+      ImGui::Checkbox("W slider", &e.showWSlider);
+      ImGui::Checkbox("Ground grid", &app.quality.grid);
+      ImGui::SeparatorText("Transforming");
+      ImGui::Checkbox("Global axes (L)", &e.globalAxes);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Gizmo and G / R axis keys use the world axes instead of the object's own axes");
+      ImGui::Checkbox("Snapping", &e.snap);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hold Ctrl while transforming to invert");
+      F("Grid step", e.snapMove, 0.01f, 5, "%.2f", "Moved objects land on multiples of this (on a world surface: the distance moved)");
+      F("Angle step", e.snapAngle, 1, 90, "%.0f deg");
+      F("Scale step", e.snapScale, 0.01f, 1, "%.2f");
+      ImGui::SeparatorText("Geodesic 3D");
+      F("Fly speed", e.flySpeed, 0.2f, 30, "%.1f", "Hold RMB + WASD (the wheel also changes it)");
+      F("Look speed", e.lookSpeed, 0.1f, 4);
+      ImGui::Checkbox("Outside thumbnail", &e.showThumbnail);
+      ImGui::SliderInt("Thumbnail size", &e.thumbSize, 160, 600);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Explore mode")) {
+      auto& x = app.exploreSet;
+      F("Field of view", x.fov, 30, 110, "%.0f deg");
+      F("Look speed", x.lookSpeed, 0.1f, 4);
+      ImGui::Checkbox("Show own body", &x.showOwnBody);
+      F("Body radius", x.bodyRadius, 0.05f, 1, "%.2f", "Also the collision radius");
+      ImGui::SeparatorText("Full 4D");
+      F("Move speed", x.moveSpeed, 0.2f, 30, "%.1f", "The wheel also changes it");
+      F("Turn into W speed", x.turn4Speed, 0.1f, 4, "%.2f", "Z/X and C/V");
+      ImGui::Checkbox("Collisions", &x.collide);
+      ImGui::SeparatorText("Geodesic 3D");
+      F("Move speed##g", x.geoMoveSpeed, 0.2f, 30, "%.1f");
+      ImGui::Checkbox("Collisions##g", &x.geoCollide);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Rendering")) {
+      auto& q = app.quality;
+      ImGui::SeparatorText("Performance");
+      Ff("Resolution", q.resolutionScale, 0.25f, 2.f, "%.2fx");
+      Ff("While moving", q.motionScale, 0.2f, 1.f, "%.2fx", "Resolution factor while the camera or objects move");
+      ImGui::SeparatorText("Ray marching");
+      ImGui::SliderInt("Max steps", &q.maxSteps, 32, 1024);
+      Ff("Max distance (4D)", q.maxDistFull, 5, 500, "%.0f", "Rays travelling further than this show the sky colour");
+      Ff("Max distance (geodesic)", q.maxDistGeo, 5, 300, "%.0f", "Same, measured along the world surface");
+      Ff("Hit precision", q.eps, 0.0002f, 0.02f, "%.4f", "Distance at which a ray counts as hitting a surface");
+      Ff("Step scale", q.stepScale, 0.3f, 1.f, "%.2f", "Below 1: smaller, safer steps for inexact SDFs (custom code, heavy modifiers)");
+      ImGui::SeparatorText("Lighting");
+      ImGui::Checkbox("Soft shadows", &q.shadows);
+      Ff("Shadow sharpness", q.shadowK, 2, 64, "%.0f");
+      Ff("Shadow distance", q.shadowMax, 1, 50, "%.0f");
+      ImGui::Checkbox("Ambient occlusion", &q.ao);
+      Ff("AO strength", q.aoStrength, 0, 4);
+      Ff("Ambient light", q.ambient, 0, 1);
+      Ff("Light direction", q.lightYaw, -3.14f, 3.14f, "%.2f");
+      Ff("Light height", q.lightPitch, -1.5f, 1.5f, "%.2f");
+      Ff("Light W", q.lightW, -1, 1, "%.2f", "Component of the light direction along the 4th axis");
+      ImGui::SeparatorText("Sky / fog");
+      ImGui::ColorEdit3("Sky top (4D)", q.skyTop.data());
+      ImGui::ColorEdit3("Sky bottom (4D)", q.skyBottom.data());
+      Ff("Fog", q.fog, 0, 4);
+      ImGui::TextDisabled("Geodesic sky: the colour of the world surface you stand on.");
+      ImGui::SeparatorText("Geodesic rays");
+      Ff("Max step", q.geoMaxStep, 0.02f, 1.f, "%.2f", "Smaller = more accurate light paths on strongly curved worlds (slower)");
+      ImGui::SliderInt("Projections", &q.geoProjectIters, 1, 4);
+      ImGui::Separator();
+      if (!app.renderer->lastError.empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "Last shader error:\n%.300s", app.renderer->lastError.c_str());
+      ImGui::TextDisabled("Last shader compile: %.0f ms", app.renderer->lastCompileMs);
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+  if (ImGui::Button("Reset to defaults")) { app.quality = QualitySettings{}; app.editSet = EditSettings{}; app.exploreSet = ExploreSettings{}; }
+  ImGui::End();
+  if (!showQuality_) app.saveSettings();
+}
+
+void UI::sdfWindow() {
+  ImGui::SetNextWindowSize({620, 520}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("SDF code", &showSdf_)) { ImGui::End(); return; }
+  Node* n = findNode(app.root, sdfNodeId_);
+  if (!n) { ImGui::TextDisabled("Select an object and press 'View SDF code'."); ImGui::End(); return; }
+  std::string code = standaloneGLSL(*n, app.reg);
+  ImGui::Text("\"%s\" as a GLSL signed distance function (read-only)", n->name.c_str());
+  if (ImGui::Button("Copy to clipboard")) ImGui::SetClipboardText(code.c_str());
+  ImGui::SameLine();
+  if (ImGui::Button("Create editable custom SDF from it")) {
+    Node c = makeCustom(n->name + " (code)", code);
+    c.xf = n->xf;
+    c.anchor = n->anchor;
+    c.mods.clear();
+    auto b = computeBounds(*n, app.reg);
+    c.codeBound = std::isfinite(b[n->id].r) ? b[n->id].r / std::max(0.01, n->xf.scale) : 5.0;
+    if (n->isLeaf()) { c.color = n->color; c.mat = n->mat; }
+    std::string id = c.id;
+    app.root.children.push_back(std::move(c));
+    app.selection = {id};
+    app.commit();
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("(?)");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shapes are a point + modifiers; this is the equivalent GLSL.\nCustom SDFs can use: opExtrude(d, h), opRadial(v, r, n, start, step), sU/sI/sS(a, b, k), INF.");
+  ImGui::InputTextMultiline("##sdf", code.data(), code.size() + 1, {-1, -1}, ImGuiInputTextFlags_ReadOnly);
+  ImGui::End();
+}
+
+void UI::helpWindow() {
+  ImGui::SetNextWindowSize({640, 560}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Help", &showHelp_)) { ImGui::End(); return; }
+  ImGui::SeparatorText("Modes");
+  ImGui::TextWrapped("Tab: Edit / Explore.  V: Full 4D / Geodesic 3D (needs a world object: World menu in the toolbar, or Properties > Use as world).");
+  ImGui::SeparatorText("Edit, Full 4D (Blender-like)");
+  ImGui::BulletText("RMB/MMB drag: orbit | MMB click on an object: set the centre of rotation (click empty space to reset)");
+  ImGui::BulletText("Shift+drag: pan | Ctrl+drag or wheel: zoom | Alt+drag: rotate the view into W");
+  ImGui::BulletText("W slider (left edge of the viewport): moves the visible 3D slice along the camera's 4th axis");
+  ImGui::BulletText("1 / 3 / 7 / 9: front / right / top / along W | Shift+W: reset 4D orientation");
+  ImGui::SeparatorText("Edit, Geodesic 3D (game-like)");
+  ImGui::BulletText("Hold RMB: mouse look + WASD fly along the surface, Space/Shift up/down, Q/E roll; wheel = fly speed");
+  ImGui::SeparatorText("Editing");
+  ImGui::BulletText("Tools: Q select, W move, E rotate. The gizmo always shows the object's local X/Y/Z, kept inside the visible slice");
+  ImGui::BulletText("Move: drag an arrow to move along that local axis, the centre square (or the object) to move in the screen plane");
+  ImGui::BulletText("Rotate: drag a ring to rotate about a local axis. Orbiting has no angle limit");
+  ImGui::BulletText("G grab, R rotate, S scale; then X/Y/Z = local axis; Enter/click confirm, Esc cancel");
+  ImGui::BulletText("L: local / global axes for the gizmo and G / R. Snap (toolbar): grid / angle / scale steps; hold Ctrl to invert while transforming");
+  ImGui::BulletText("Several objects selected: Properties edits all of them (position / rotation / scale relatively). Groups take their first object as origin");
+  ImGui::BulletText("Click: select the object | Ctrl+click: its group | Shift+click: multi | A all | Esc none | Shift+D duplicate | X/Del delete | Ctrl+G group | F focus");
+  ImGui::BulletText("Properties > View SDF code shows any object as GLSL; Custom SDF objects (4D shapes folder) take your own GLSL");
+  ImGui::BulletText("Shapes are a point plus modifiers: Extrude / Revolve add the next axis (X, Y, Z, W); Mirror, Repeat, Radial repeat copy it");
+  ImGui::SeparatorText("Explore (game-like)");
+  ImGui::BulletText("Edit and Explore share one camera: switching never moves you. Click to capture the mouse, Esc releases (again: back to Edit)");
+  ImGui::BulletText("WASD, Space/Shift up/down, wheel = speed. Full 4D: Q/E along W, Z/X turn into W, C/V sideways in W, R reset");
+  ImGui::BulletText("Your body (yellow sphere) is part of the scene: it casts a shadow, and on closed worlds you can see yourself");
+  ImGui::SeparatorText("Library");
+  ImGui::BulletText("Built-in folders are read-only; saved objects go to Custom. '+ Folder' adds folders; right-click to rename / move / delete");
+  ImGui::BulletText("Drag items into the viewport, onto tree rows, or onto a folder. Drag tree rows onto a folder to save them there");
+  ImGui::End();
+}
+
+}  // namespace fd
