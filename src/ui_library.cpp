@@ -15,7 +15,6 @@ void UI::libraryPanel() {
   if (ImGui::Button("Import")) fileAction(3);
   ImGui::SameLine();
   if (ImGui::Button("Export")) fileAction(4);
-  ImGui::TextDisabled(app.geo ? "Geodesic: drag 3D items onto the surface" : "Drag items into the viewport");
 
   std::function<void()> deferred;
   for (auto& f : app.lib.folders) {
@@ -57,7 +56,7 @@ void UI::libraryPanel() {
       ImGui::EndPopup();
     }
     if (open) {
-      if (f.objects.empty()) ImGui::TextDisabled("  (empty: right-click an object in the scene tree > Save to library)");
+      if (f.objects.empty()) ImGui::TextDisabled("  (empty)");
       for (auto& o : f.objects) {
         std::string oid = o.id;
         int dim = nodeDim(o.node, app.reg);

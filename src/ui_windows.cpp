@@ -84,7 +84,6 @@ void UI::qualityWindow() {
       ImGui::ColorEdit3("Sky top (4D)", q.skyTop.data());
       ImGui::ColorEdit3("Sky bottom (4D)", q.skyBottom.data());
       Ff("Fog", q.fog, 0, 4);
-      ImGui::TextDisabled("Geodesic sky: the colour of the world surface you stand on.");
       ImGui::SeparatorText("Geodesic rays");
       Ff("Max step", q.geoMaxStep, 0.02f, 1.f, "%.2f", "Smaller = more accurate light paths on strongly curved worlds (slower)");
       ImGui::SliderInt("Projections", &q.geoProjectIters, 1, 4);

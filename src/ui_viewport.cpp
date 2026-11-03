@@ -40,7 +40,6 @@ void UI::viewport(double dt) {
     ImGui::PopStyleColor();
     sliderHovered = ImGui::IsItemHovered() || ImGui::IsItemActive();
     int sa = app.editCam.slider;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Slice %c = %.2f", AXIS[sa], w);
     ImGui::SetCursorScreenPos({p0.x + 8, p0.y + 314});
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {3, 1});
     char zero[8];
@@ -111,7 +110,7 @@ void UI::thumbnail() {
     app.thumbPitch = clampd(app.thumbPitch - d.y * 0.01, -1.55, 1.55);
   }
   if (hovered && wheel_ != 0) { app.thumbZoom = clampd(app.thumbZoom * std::exp(-wheel_ * 0.1), 0.3, 4); wheel_ = 0; }
-  if (hovered) ImGui::SetTooltip("Outside view (Full 4D slice through the world centre and the camera).\nYellow sphere = camera. Drag to orbit, wheel to zoom.");
+  if (hovered) ImGui::SetTooltip("Drag to orbit, wheel to zoom");
   ImDrawList* dl = ImGui::GetWindowDrawList();
   ImVec2 p1 = {p0.x + app.thumbW, p0.y + app.thumbH};
   if (app.thumbRT.tex) dl->AddImage(tex(app.thumbRT.tex), p0, p1, {0, 1}, {1, 0});
@@ -142,38 +141,33 @@ void UI::overlays(ImDrawList* dl) {
   // status text
   std::vector<std::string> lines;
   char buf[256];
-  std::snprintf(buf, sizeof buf, "%s | %s", app.mode == Mode::Edit ? "EDIT" : "EXPLORE", app.geo ? "Geodesic 3D" : "Full 4D");
+  // controls are listed in Help (and Settings > Keys); only the state and what needs an answer now is shown here
+  std::snprintf(buf, sizeof buf, "%s | %s | eye (%.2f, %.2f, %.2f, %.2f)", app.mode == Mode::Edit ? "EDIT" : "EXPLORE", app.geo ? "Geodesic 3D" : "Full 4D",
+                v.eye[0], v.eye[1], v.eye[2], v.eye[3]);
   lines.push_back(buf);
-  std::snprintf(buf, sizeof buf, "eye (%.2f, %.2f, %.2f, %.2f)", v.eye[0], v.eye[1], v.eye[2], v.eye[3]);
-  lines.push_back(buf);
+  int highlight = -1;
   if (!app.isolate.empty()) {
     std::snprintf(buf, sizeof buf, "Isolated: %d object(s) (%s: show all)", (int)app.isolate.size(), app.keys.text(Action::Isolate).c_str());
     lines.push_back(buf);
   }
   if (app.mode == Mode::Explore) {
-    if (!app.mouseCaptured) lines.push_back("Click the viewport to capture the mouse (Esc releases)");
-    else if (!app.geo) lines.push_back("WASD move | Space/Shift up/down | R/F along the slider axis | Q/E roll | Z/X, C/V turn into it | Backspace reset");
-    else lines.push_back("WASD move | Space/Shift up/down (tangent) | Q/E roll | wheel speed | Esc release");
+    if (!app.mouseCaptured) lines.push_back("Click the viewport to capture the mouse");
     if (app.debugRay) {
       const auto& d = app.debugTrace;
       std::snprintf(buf, sizeof buf, "Debug ray%s: length %.2f, %d steps, stopped: %s", app.debugFrozen ? " (frozen)" : "", d.t, d.steps,
                     rayReasonText(d.reason));
       lines.push_back(buf);
     }
-  } else if (app.modal != Modal::None) lines.push_back(app.transformHint());
-  else {
-    const char* tool = app.tool == Tool::Move ? "Move: drag an arrow (local X/Y/Z) or the centre square; drag the object to move it in the screen plane"
-                       : app.tool == Tool::Rotate ? "Rotate: drag a ring to rotate about a local axis" : "Select: click an object (Ctrl+click: its group)";
-    lines.push_back(tool);
-    if (app.geo) lines.push_back("Hold RMB: look + WASD fly, Space/Shift up/down, Q/E roll | wheel: fly speed | G/R/S | Tab explore | V view");
-    else lines.push_back("RMB/MMB drag orbit | MMB click: set centre of rotation | Shift+drag pan | Alt+drag rotate into W | wheel zoom | G/R/S | Tab | V");
+  } else if (app.modal != Modal::None) {
+    highlight = (int)lines.size();
+    lines.push_back(app.transformHint());
   }
   float ty = y0 + 8;
   float tx = x0 + (app.mode == Mode::Edit && !app.geo ? 60 : 8);
   for (size_t i = 0; i < lines.size(); i++) {
     ImVec2 ts = ImGui::CalcTextSize(lines[i].c_str());
     dl->AddRectFilled({tx - 4, ty - 1}, {tx + ts.x + 4, ty + ts.y + 1}, IM_COL32(0, 0, 0, 130));
-    dl->AddText({tx, ty}, (i == 2 && app.modal != Modal::None) ? IM_COL32(255, 180, 70, 255) : IM_COL32(232, 232, 232, 255), lines[i].c_str());
+    dl->AddText({tx, ty}, (int)i == highlight ? IM_COL32(255, 180, 70, 255) : IM_COL32(232, 232, 232, 255), lines[i].c_str());
     ty += ts.y + 4;
   }
 

@@ -43,7 +43,6 @@ void UI::propertiesPanel() {
   };
   if (!others.empty()) {
     ImGui::TextColored({0.55f, 0.8f, 1, 1}, "Editing %d objects: values from \"%s\"", (int)others.size() + 1, n->name.c_str());
-    ImGui::TextDisabled("Changes apply to all (position / rotation / scale relatively)");
   }
 
   char nameBuf[256];
@@ -137,9 +136,9 @@ void UI::propertiesPanel() {
     ImGui::SeparatorText("Boolean");
     int op = (int)n->op;
     if (ImGui::Combo("Operator", &op, BOOL_OP_LABELS, 6)) { n->op = (BoolOp)op; done = true; }
+    if (ImGui::IsItemHovered() && (n->op == BoolOp::Subtraction || n->op == BoolOp::SmoothSubtraction)) ImGui::SetTooltip("First child minus the following children");
     mixed([](const Node& x) { return x.op; });
     if (isSmooth(n->op)) { float k = (float)n->k; if (ImGui::DragFloat("Smoothness", &k, 0.01f, 0.001f, 10.f)) n->k = std::max(0.001f, k); track(); }
-    if (n->op == BoolOp::Subtraction || n->op == BoolOp::SmoothSubtraction) ImGui::TextDisabled("First child minus the following children.");
     if (!isRoot && !n->children.empty()) {
       if (ImGui::Button("Recentre origin on first object")) { app.recentreGroup(nid); ImGui::End(); return; }
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Moves the group's origin (centre of rotation and scaling) to its first object.\nNothing moves in the world.");
@@ -152,7 +151,6 @@ void UI::propertiesPanel() {
     if (ImGui::DragFloat4("Position XYZW", pos, 0.02f)) for (int i = 0; i < 4; i++) n->xf.pos[i] = pos[i];
     track();
     mixed([](const Node& x) { return x.xf.pos; });
-    if (n->anchor) ImGui::TextDisabled("Anchor point; drag the gizmo or press G to slide along the surface.");
     // absolute rotation as 6 plane angles (decomposed from the stored rotation matrix)
     auto ang = anglesFromRotation(n->xf.rot);
     float a[6];
@@ -312,7 +310,7 @@ void UI::propertiesPanel() {
 
   ImGui::SeparatorText("World surface");
   if (n->id == app.world) {
-    ImGui::TextWrapped("This object is the world: its 3D boundary is the space of the Geodesic view.");
+    ImGui::TextUnformatted("This object is the world.");
     if (ImGui::Button("Stop using as world")) { app.setWorld(""); ImGui::End(); return; }
   } else if (!isRoot && dim == 4 && !n->anchor) {
     if (ImGui::Button("Use as world")) { app.setWorld(nid); ImGui::End(); return; }

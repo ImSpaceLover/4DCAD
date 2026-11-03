@@ -986,8 +986,8 @@ void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
   if (mode == Mode::Explore) {
     if (P(Action::ReleaseMouse)) { if (mouseCaptured) wantRelease = true; else setMode(Mode::Edit); }
     if (P(Action::Reset4D) && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
-    if (P(Action::DebugRay)) { debugRay = !debugRay; debugFrozen = false; lastChange_ = now; toast(debugRay ? "Debug ray on" : "Debug ray off"); }
-    if (P(Action::DebugRayFreeze) && debugRay) { debugFrozen = !debugFrozen; toast(debugFrozen ? "Debug ray frozen: walk around it" : "Debug ray follows the view"); }
+    if (P(Action::DebugRay)) { debugRay = !debugRay; debugFrozen = false; lastChange_ = now; }
+    if (P(Action::DebugRayFreeze) && debugRay) debugFrozen = !debugFrozen;  // the status line shows it
     return;
   }
   if (drag_ == Drag::Fly) return;  // movement keys while RMB is held
@@ -1005,8 +1005,8 @@ void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
   else if (P(Action::ToolSelect)) tool = Tool::Select;
   else if (P(Action::ToolMove)) tool = Tool::Move;
   else if (P(Action::ToolRotate)) tool = Tool::Rotate;
-  else if (P(Action::ToggleGlobal)) { editSet.globalAxes = !editSet.globalAxes; toast(editSet.globalAxes ? "Transform axes: global" : "Transform axes: local"); }
-  else if (P(Action::ToggleSnap)) { editSet.snap = !editSet.snap; toast(editSet.snap ? "Snapping on" : "Snapping off"); }
+  else if (P(Action::ToggleGlobal)) editSet.globalAxes = !editSet.globalAxes;
+  else if (P(Action::ToggleSnap)) editSet.snap = !editSet.snap;
   else if (P(Action::Grab)) startModal(Modal::Grab);
   else if (P(Action::Rotate)) startModal(Modal::Rotate);
   else if (P(Action::Scale)) startModal(Modal::Scale);
