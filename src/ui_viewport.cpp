@@ -27,7 +27,10 @@ void UI::viewport(double dt) {
     ImGui::EndDragDropTarget();
   }
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  if (app.mainRT.tex) dl->AddImage(tex(app.mainRT.tex), p0, {p0.x + sz.x, p0.y + sz.y}, {0, 1}, {1, 0});
+  if (uint64_t t = app.renderer ? app.renderer->texture(app.mainRT) : 0) {
+    bool fl = app.renderer->flipY();  // OpenGL images are stored bottom-up
+    dl->AddImage((ImTextureID)t, p0, {p0.x + sz.x, p0.y + sz.y}, {0, fl ? 1.f : 0.f}, {1, fl ? 0.f : 1.f});
+  }
 
   // W slider (Edit, Full 4D): moves the camera's visible slice along its 4th axis
   bool sliderHovered = false;
@@ -113,7 +116,10 @@ void UI::thumbnail() {
   if (hovered) ImGui::SetTooltip("Drag to orbit, wheel to zoom");
   ImDrawList* dl = ImGui::GetWindowDrawList();
   ImVec2 p1 = {p0.x + app.thumbW, p0.y + app.thumbH};
-  if (app.thumbRT.tex) dl->AddImage(tex(app.thumbRT.tex), p0, p1, {0, 1}, {1, 0});
+  if (uint64_t t = app.renderer ? app.renderer->texture(app.thumbRT) : 0) {
+    bool fl = app.renderer->flipY();
+    dl->AddImage((ImTextureID)t, p0, p1, {0, fl ? 1.f : 0.f}, {1, fl ? 0.f : 1.f});
+  }
   // debug ray seen from outside (projected onto the thumbnail's view)
   if (app.debugRay && app.debugTrace.pts.size() > 1) {
     View tv = app.thumbnailView();

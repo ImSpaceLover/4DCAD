@@ -16,6 +16,7 @@
 #include "app.hpp"
 #include "examples.hpp"
 #include "gl.hpp"
+#include "renderer.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -114,7 +115,7 @@ int main(int argc, char** argv) {
   ImGui_ImplGlfw_InitForOpenGL(win, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  app.init();
+  app.init(makeGLRenderer());
   ui = new UI(app, win);
   g_ui = ui;
   std::string err;
@@ -183,8 +184,9 @@ int main(int argc, char** argv) {
   if (screenshot.empty()) app.clearRecovery();  // quitting normally (unsaved changes were already asked about)
   g_ui = nullptr;
   delete ui;
-  app.mainRT.destroy();
-  app.thumbRT.destroy();
+  app.renderer->destroy(app.mainRT);
+  app.renderer->destroy(app.thumbRT);
+  app.renderer.reset();
   app.renderer.reset();
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();

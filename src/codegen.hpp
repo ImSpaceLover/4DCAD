@@ -29,10 +29,8 @@ std::string renameCustomCode(const std::string& code, const std::string& suffix)
 /** Self-contained GLSL `float sdf(vec4 p)` of a node in its local space (for viewing / copying). */
 std::string standaloneGLSL(const Node& n, const PrimitiveRegistry& reg);
 
-struct PackedUniforms {
-  std::vector<float> rot, pos, par, col, bc, br, mat, col2;
-};
-PackedUniforms packUniforms(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight);
+/** Node data buffer: 12 vec4 per node in CompiledScene::nodeIds order (read in shaders with ndat(node, slot)). */
+std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight);
 
 /** Signature of everything that requires recompiling (structure, recipes, world, view). */
 std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo);

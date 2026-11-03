@@ -18,6 +18,7 @@ void UI::frame(double dt) {
   if (showQuality_) qualityWindow();
   if (showHelp_) helpWindow();
   if (showSdf_) sdfWindow();
+  if (app.showLights) lightsWindow();
   pathPrompt();
   unsavedPrompt();
   recoveryPrompt();

@@ -160,6 +160,9 @@ void propagateEdit(const Node& B, const Node& A, Node& T, bool stacksMatch, cons
       ch(B.mat.texScale, A.mat.texScale, T.mat.texScale);
       ch(B.mat.texStrength, A.mat.texStrength, T.mat.texStrength);
       ch(B.mat.color2, A.mat.color2, T.mat.color2);
+      ch(B.mat.roughness, A.mat.roughness, T.mat.roughness);
+      ch(B.mat.specular, A.mat.specular, T.mat.specular);
+      ch(B.mat.transparency, A.mat.transparency, T.mat.transparency);
       if (B.isCustom() && T.isCustom()) { ch(B.code, A.code, T.code); ch(B.codeBound, A.codeBound, T.codeBound); }
     } else {
       ch(B.op, A.op, T.op);
@@ -389,7 +392,8 @@ static json nodeJ(const Node& n) {
     if (n.shell) j["shell"] = *n.shell;
     const Material& m = n.mat;
     j["material"] = {{"emissive", m.emissive}, {"texture", TEXTURE_NAMES[m.texture]}, {"texScale", m.texScale},
-                     {"texStrength", m.texStrength}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}}};
+                     {"texStrength", m.texStrength}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}},
+                     {"roughness", m.roughness}, {"specular", m.specular}, {"transparency", m.transparency}};
     if (n.isCustom()) { j["code"] = n.code; j["codeBound"] = n.codeBound; }
   } else {
     j["op"] = BOOL_OP_NAMES[(int)n.op];
@@ -454,6 +458,9 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
       n.mat.texScale = mj.value("texScale", 1.0);
       n.mat.texStrength = mj.value("texStrength", 0.7);
       if (mj.contains("color2")) for (int i = 0; i < 3; i++) n.mat.color2[i] = mj["color2"][i].get<double>();
+      n.mat.roughness = std::clamp(mj.value("roughness", 0.75), 0.0, 1.0);
+      n.mat.specular = std::clamp(mj.value("specular", 0.35), 0.0, 2.0);
+      n.mat.transparency = std::clamp(mj.value("transparency", 0.0), 0.0, 1.0);
     }
     if (n.prim == "custom") {
       n.code = j.value("code", std::string(DEFAULT_CUSTOM_SDF));
@@ -524,12 +531,42 @@ std::vector<CameraBookmark> bookmarksFromJson(const std::string& text) {
   try { return jMarks(json::parse(text)); } catch (...) { return {}; }
 }
 
+static json lightsJ(const std::vector<PointLight>& l) {
+  json a = json::array();
+  for (auto& x : l)
+    a.push_back({{"name", x.name}, {"pos", v4j(x.pos)}, {"color", {x.color[0], x.color[1], x.color[2]}}, {"intensity", x.intensity},
+                 {"range", x.range}, {"shadows", x.shadows}, {"enabled", x.enabled}});
+  return a;
+}
+static std::vector<PointLight> jLights(const json& a) {
+  std::vector<PointLight> out;
+  if (!a.is_array()) return out;
+  for (auto& o : a) {
+    if (!o.is_object()) continue;
+    PointLight l;
+    l.name = o.value("name", std::string("Light"));
+    l.pos = jv4(o.value("pos", json::array()));
+    if (o.contains("color") && o["color"].is_array() && o["color"].size() == 3) for (int i = 0; i < 3; i++) l.color[i] = o["color"][i].get<double>();
+    l.intensity = std::max(0.0, o.value("intensity", 1.5));
+    l.range = std::max(0.01, o.value("range", 10.0));
+    l.shadows = o.value("shadows", true);
+    l.enabled = o.value("enabled", true);
+    out.push_back(l);
+  }
+  return out;
+}
+std::string lightsToJson(const std::vector<PointLight>& l) { return lightsJ(l).dump(); }
+std::vector<PointLight> lightsFromJson(const std::string& text) {
+  try { return jLights(json::parse(text)); } catch (...) { return {}; }
+}
+
 std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam,
-                        const std::vector<CameraBookmark>* bookmarks) {
+                        const std::vector<CameraBookmark>* bookmarks, const std::vector<PointLight>* lights) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   j["world"] = world.empty() ? json(nullptr) : json(world);
   if (cam) j["camera"] = camJ(*cam);
   if (bookmarks && !bookmarks->empty()) j["bookmarks"] = marksJ(*bookmarks);
+  if (lights && !lights->empty()) j["lights"] = lightsJ(*lights);
   return j.dump(2);
 }
 
@@ -639,6 +676,7 @@ SceneFile sceneFromJson(const std::string& text) {
     f.camera = cs;
   }
   if (j.contains("bookmarks")) f.bookmarks = jMarks(j["bookmarks"]);
+  if (j.contains("lights")) f.lights = jLights(j["lights"]);
   return f;
 }
 

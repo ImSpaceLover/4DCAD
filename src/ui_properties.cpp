@@ -110,6 +110,17 @@ void UI::propertiesPanel() {
       track();
     mixed([](const Node& x) { return x.mat.texStrength; });
     }
+    float ro = (float)n->mat.roughness, spc = (float)n->mat.specular, tr = (float)n->mat.transparency;
+    if (ImGui::SliderFloat("Roughness", &ro, 0, 1)) n->mat.roughness = ro;
+    track();
+    mixed([](const Node& x) { return x.mat.roughness; });
+    if (ImGui::SliderFloat("Specular", &spc, 0, 2)) n->mat.specular = spc;
+    track();
+    mixed([](const Node& x) { return x.mat.specular; });
+    if (ImGui::SliderFloat("Transparency", &tr, 0, 1)) n->mat.transparency = tr;
+    track();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("See-through surfaces (layers per pixel: Settings > Rendering)");
+    mixed([](const Node& x) { return x.mat.transparency; });
     if (n->isCustom()) {
       ImGui::SeparatorText("Custom SDF (GLSL)");
       if (codeEditId_ != n->id) { codeEditId_ = n->id; codeBuf_ = n->code; }

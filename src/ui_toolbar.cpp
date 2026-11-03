@@ -92,6 +92,7 @@ void UI::menuBar() {
       ImGui::EndMenu();
     }
     ImGui::Separator();
+    ImGui::MenuItem("Lights...", nullptr, &app.showLights);
     ImGui::MenuItem("Settings...", nullptr, &showQuality_);
     ImGui::EndMenu();
   }

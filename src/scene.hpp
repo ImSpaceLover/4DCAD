@@ -63,6 +63,9 @@ struct Material {
   double texScale = 1;   // pattern cells per unit
   double texStrength = 0.7;
   std::array<double, 3> color2{0.12, 0.12, 0.14};  // second texture colour
+  double roughness = 0.75;   // 0 = sharp highlights, 1 = matte
+  double specular = 0.35;    // highlight strength
+  double transparency = 0;   // 0 = opaque, 1 = invisible (see-through surfaces)
 };
 
 /** Default code of a custom SDF leaf (GLSL). */
@@ -126,6 +129,16 @@ struct QualitySettings {
   float lightYaw = 2.18f, lightPitch = 0.93f, lightW = 0.25f;  // light direction
   std::array<float, 3> skyTop{0.32f, 0.38f, 0.5f}, skyBottom{0.16f, 0.17f, 0.2f};
   bool grid = true;               // ground grid in Edit mode
+  float sunIntensity = 1.0f;      // directional light
+  bool pointShadows = true;       // point lights cast shadows (each one costs a shadow ray)
+  bool emissiveLights = true;     // emissive objects light their surroundings (as point lights)
+  int transparentLayers = 2;      // see-through surfaces passed per pixel (0 = transparency off)
+  bool relaxedMarching = true;    // over-relaxed sphere tracing (fewer steps)
+  // Explore mode (moving: keep it fast)
+  bool exploreSimple = true;      // no textures / transparency, cheaper AO
+  bool exploreShadows = true;
+  bool exploreAO = false;
+  bool explorePointShadows = false;
   float geoMaxStep = 0.25f;
   int geoProjectIters = 1;
 };
@@ -205,6 +218,17 @@ std::vector<std::pair<int, std::string>> modifierProblems(const Node& n, const P
 std::vector<Modifier> stepsToModifiers(const std::vector<Step>& steps);
 Node nodeFromPrimitive(const PrimitiveDef& p, const std::string& name);
 
+/** A point light (a 4D position; light falls off to 0 at `range`). */
+struct PointLight {
+  std::string name = "Light";
+  V4 pos{0, 3, 0, 0};
+  std::array<double, 3> color{1, 0.95, 0.85};
+  double intensity = 1.5;
+  double range = 10;
+  bool shadows = true;
+  bool enabled = true;
+};
+
 /** A saved camera position (Full 4D camera, plus the Geodesic camera if it was used). */
 struct CameraBookmark {
   std::string name;
@@ -216,6 +240,7 @@ struct CameraBookmark {
 
 struct SceneFile {
   std::vector<CameraBookmark> bookmarks;
+  std::vector<PointLight> lights;
   Node root;
   std::vector<PrimitiveDef> primitives;
   std::string world;  // empty = none
@@ -238,7 +263,9 @@ std::vector<LibraryFolder> builtinFolders();
 
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
 std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
-                        const std::vector<CameraBookmark>* bookmarks = nullptr);
+                        const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr);
+std::string lightsToJson(const std::vector<PointLight>& l);
+std::vector<PointLight> lightsFromJson(const std::string& text);
 std::string bookmarksToJson(const std::vector<CameraBookmark>& b);
 std::vector<CameraBookmark> bookmarksFromJson(const std::string& text);
 

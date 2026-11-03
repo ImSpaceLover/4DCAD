@@ -80,6 +80,21 @@ void UI::qualityWindow() {
       Ff("Light direction", q.lightYaw, -3.14f, 3.14f, "%.2f");
       Ff("Light height", q.lightPitch, -1.5f, 1.5f, "%.2f");
       Ff("Light W", q.lightW, -1, 1, "%.2f", "Component of the light direction along the 4th axis");
+      Ff("Sun intensity", q.sunIntensity, 0, 3);
+      ImGui::Checkbox("Point light shadows", &q.pointShadows);
+      ImGui::Checkbox("Emissive objects light the scene", &q.emissiveLights);
+      ImGui::SliderInt("Transparent layers", &q.transparentLayers, 0, 4);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("See-through surfaces passed per pixel (0 = transparency off)");
+      ImGui::Checkbox("Over-relaxed marching", &q.relaxedMarching);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Longer steps with a safety check: usually faster (Full 4D)");
+      ImGui::SeparatorText("Explore mode (fast)");
+      ImGui::Checkbox("Simplified materials", &q.exploreSimple);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("No procedural textures or transparency, cheaper ambient occlusion");
+      ImGui::Checkbox("Shadows##ex", &q.exploreShadows);
+      ImGui::SameLine();
+      ImGui::Checkbox("Ambient occlusion##ex", &q.exploreAO);
+      ImGui::SameLine();
+      ImGui::Checkbox("Point light shadows##ex", &q.explorePointShadows);
       ImGui::SeparatorText("Sky / fog");
       ImGui::ColorEdit3("Sky top (4D)", q.skyTop.data());
       ImGui::ColorEdit3("Sky bottom (4D)", q.skyBottom.data());
@@ -87,7 +102,11 @@ void UI::qualityWindow() {
       ImGui::SeparatorText("Geodesic rays");
       Ff("Max step", q.geoMaxStep, 0.02f, 1.f, "%.2f", "Smaller = more accurate light paths on strongly curved worlds (slower)");
       ImGui::SliderInt("Projections", &q.geoProjectIters, 1, 4);
-      ImGui::Separator();
+      ImGui::SeparatorText("Backend");
+      int be = (int)app.backendPref;
+      if (ImGui::Combo("Graphics API", &be, BACKEND_NAMES, 3)) { app.backendPref = (Backend)be; app.saveSettings(); }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Applied on the next start. Auto: Vulkan if available, else OpenGL");
+      ImGui::TextDisabled("In use: %s", app.renderer->device.c_str());
       if (!app.renderer->lastError.empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "Last shader error:\n%.300s", app.renderer->lastError.c_str());
       ImGui::TextDisabled("Last shader compile: %.0f ms", app.renderer->lastCompileMs);
       ImGui::EndTabItem();
@@ -101,6 +120,52 @@ void UI::qualityWindow() {
   if (ImGui::Button("Reset to defaults")) { app.quality = QualitySettings{}; app.editSet = EditSettings{}; app.exploreSet = ExploreSettings{}; }
   ImGui::End();
   if (!showQuality_) app.saveSettings();
+}
+
+void UI::lightsWindow() {
+  ImGui::SetNextWindowSize({380, 420}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Lights", &app.showLights)) { ImGui::End(); return; }
+  bool done = false, live = false;
+  auto track = [&] { if (ImGui::IsItemEdited()) live = true; if (ImGui::IsItemDeactivatedAfterEdit()) done = true; };
+  if (ImGui::Button("+ Point light")) {
+    PointLight l;
+    l.name = "Light " + std::to_string(app.lights.size() + 1);
+    l.pos = app.currentView().eye;  // where you are
+    app.lights.push_back(l);
+    done = true;
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("%d / %d (with emissive objects)", (int)app.frameLights().size(), MAX_LIGHTS);
+  int del = -1;
+  for (size_t i = 0; i < app.lights.size(); i++) {
+    auto& l = app.lights[i];
+    ImGui::PushID((int)i);
+    if (ImGui::CollapsingHeader((l.name + "###h").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (ImGui::Checkbox("On", &l.enabled)) done = true;
+      ImGui::SameLine();
+      if (ImGui::Checkbox("Shadows", &l.shadows)) done = true;
+      ImGui::SameLine();
+      if (ImGui::SmallButton("To camera")) { l.pos = app.currentView().eye; done = true; }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Delete")) del = (int)i;
+      float p[4] = {(float)l.pos[0], (float)l.pos[1], (float)l.pos[2], (float)l.pos[3]};
+      if (ImGui::DragFloat4("Position XYZW", p, 0.02f)) for (int k = 0; k < 4; k++) l.pos[k] = p[k];
+      track();
+      float c[3] = {(float)l.color[0], (float)l.color[1], (float)l.color[2]};
+      if (ImGui::ColorEdit3("Colour", c)) for (int k = 0; k < 3; k++) l.color[k] = c[k];
+      track();
+      float in = (float)l.intensity, rg = (float)l.range;
+      if (ImGui::DragFloat("Intensity", &in, 0.02f, 0, 20)) l.intensity = std::max(0.f, in);
+      track();
+      if (ImGui::DragFloat("Range", &rg, 0.05f, 0.1f, 500)) l.range = std::max(0.1f, rg);
+      track();
+    }
+    ImGui::PopID();
+  }
+  if (del >= 0) { app.lights.erase(app.lights.begin() + del); done = true; }
+  ImGui::End();
+  if (done) app.commit();
+  else if (live) app.rebuild();
 }
 
 void UI::keysTab() {

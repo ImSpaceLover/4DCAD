@@ -20,7 +20,6 @@ inline const float LEFT_W = 250, RIGHT_W = 340, TOOLBAR_H = 38;
 
 struct LibPayload { char id[96]; };
 
-inline ImTextureID tex(GLuint t) { return (ImTextureID)(intptr_t)t; }
 
 inline bool toggleButton(const char* label, bool active, const char* tip = nullptr) {
   if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.5f, 0.15f, 1));

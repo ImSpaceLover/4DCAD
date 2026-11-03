@@ -25,8 +25,8 @@ static std::array<double, 3> hsl(double h, double s, double l) {
 
 App::App() {}
 
-void App::init() {
-  renderer = std::make_unique<Renderer>();
+void App::init(std::unique_ptr<Renderer> r) {
+  renderer = std::move(r);
   loadSettings();
   // reopen the last saved / opened scene file (changes are never written without asking)
   std::string err;
@@ -97,12 +97,13 @@ void App::toast(const std::string& msg, bool error) {
 
 // ============================================================ scene lifecycle
 // undo snapshot: world id, bookmarks, scene tree (one line each)
-std::string App::snapshot() { return world + "\n" + bookmarksToJson(bookmarks) + "\n" + nodeToJson(root); }
+std::string App::snapshot() { return world + "\n" + bookmarksToJson(bookmarks) + "\n" + lightsToJson(lights) + "\n" + nodeToJson(root); }
 void App::restore(const std::string& s) {
-  auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1);
+  auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1), nl3 = s.find('\n', nl2 + 1);
   world = s.substr(0, nl);
   bookmarks = bookmarksFromJson(s.substr(nl + 1, nl2 - nl - 1));
-  root = nodeFromJson(s.substr(nl2 + 1));
+  lights = lightsFromJson(s.substr(nl2 + 1, nl3 - nl2 - 1));
+  root = nodeFromJson(s.substr(nl3 + 1));
   recordLinks(root, linkDefs_);
 }
 
@@ -110,6 +111,7 @@ void App::loadScene(SceneFile f) {
   root = std::move(f.root);
   world = (!f.world.empty() && findNode(root, f.world)) ? f.world : "";
   bookmarks = std::move(f.bookmarks);
+  lights = std::move(f.lights);
   recordLinks(root, linkDefs_);
   isolate.clear();
   selection.clear();
@@ -146,7 +148,7 @@ bool App::loadSceneFile(const std::string& path, std::string& err) {
 
 std::string App::serialize() {
   CameraState cs = editCam.save();
-  return sceneToJson(root, reg, world, &cs, &bookmarks);
+  return sceneToJson(root, reg, world, &cs, &bookmarks, &lights);
 }
 
 bool App::saveSceneFile(const std::string& path, std::string& err) {
@@ -1228,6 +1230,41 @@ void App::updateExplore(const InputState& in, double dt) {
 }
 
 // ============================================================ rendering
+std::vector<LightParam> App::frameLights() {
+  std::vector<LightParam> out;
+  for (auto& l : lights) {
+    if (!l.enabled || out.size() >= (size_t)MAX_LIGHTS) continue;
+    LightParam p;
+    p.pos = l.pos;
+    for (int i = 0; i < 3; i++) p.color[i] = (float)(l.color[i] * l.intensity);
+    p.range = (float)l.range;
+    p.shadows = l.shadows;
+    out.push_back(p);
+  }
+  if (quality.emissiveLights) {
+    // emissive objects light their surroundings: a point light at the object's centre,
+    // reaching a few times its size (brightest first, up to the light limit)
+    auto bounds = computeBounds(isolate.empty() ? root : viewRoot_, reg);
+    std::vector<std::pair<double, LightParam>> em;
+    walk(isolate.empty() ? root : viewRoot_, [&](Node& n, Node*, int) {
+      if (!n.isLeaf() || n.mat.emissive <= 0.05) return;
+      for (Node* a : pathTo(isolate.empty() ? root : viewRoot_, n.id)) if (a->hidden) return;
+      auto b = bounds.find(n.id);
+      double r = b != bounds.end() && std::isfinite(b->second.r) ? b->second.r : 1.0;
+      LightParam p;
+      p.pos = nodeWorldPos(n.id);  // the object's origin (shapes are built around it)
+      double k = n.mat.emissive * 1.2;
+      for (int i = 0; i < 3; i++) p.color[i] = (float)(n.color[i] * k);
+      p.range = (float)std::max(1.5, r * 6);
+      p.shadows = false;  // the light sits inside the object: its own surface would shadow it
+      em.push_back({n.mat.emissive * (n.color[0] + n.color[1] + n.color[2]), p});
+    });
+    std::sort(em.begin(), em.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    for (auto& [w, p] : em) if (out.size() < (size_t)MAX_LIGHTS) out.push_back(p);
+  }
+  return out;
+}
+
 View App::thumbnailView() {
   View cur = currentView();
   auto bounds = computeBounds(root, reg);
@@ -1276,6 +1313,15 @@ void App::renderFrame() {
   fp.quality = &quality;
   fp.light = light();
   fp.skyCol = worldColor();
+  fp.lights = frameLights();
+  if (mode == Mode::Explore) {  // keep exploring fast: the cheaper settings chosen for it
+    fp.simple = q.exploreSimple;
+    fp.shadows = q.exploreShadows;
+    fp.ao = q.exploreAO;
+    fp.pointShadows = q.explorePointShadows && q.pointShadows;
+  } else fp.pointShadows = q.pointShadows;
+  for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows; }
+  key << fp.simple << fp.shadows << fp.ao << fp.pointShadows << q.sunIntensity << q.transparentLayers << q.relaxedMarching;
   // debug ray: re-traced from the view every frame unless frozen
   if (debugRay && ev) {
     if (!debugFrozen) debugTrace = traceRay(*ev, fp.geo, v.eye, col(v.frame, 2), quality);
@@ -1342,7 +1388,10 @@ void App::saveSettings() {
                  {"maxDistGeo", q.maxDistGeo}, {"eps", q.eps}, {"stepScale", q.stepScale}, {"shadows", q.shadows}, {"shadowK", q.shadowK},
                  {"shadowMax", q.shadowMax}, {"ao", q.ao}, {"aoStrength", q.aoStrength}, {"fog", q.fog}, {"ambient", q.ambient},
                  {"lightYaw", q.lightYaw}, {"lightPitch", q.lightPitch}, {"lightW", q.lightW}, {"skyTop", q.skyTop}, {"skyBottom", q.skyBottom},
-                 {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}};
+                 {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}, {"sunIntensity", q.sunIntensity},
+                 {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
+                 {"relaxedMarching", q.relaxedMarching}, {"exploreSimple", q.exploreSimple}, {"exploreShadows", q.exploreShadows},
+                 {"exploreAO", q.exploreAO}, {"explorePointShadows", q.explorePointShadows}, {"backend", BACKEND_NAMES[(int)backendPref]}};
   const auto& e = editSet;
   j["edit"] = {{"fov", e.fov}, {"orbitSpeed", e.orbitSpeed}, {"panSpeed", e.panSpeed}, {"zoomSpeed", e.zoomSpeed}, {"rot4Speed", e.rot4Speed},
                {"showWSlider", e.showWSlider}, {"flySpeed", e.flySpeed}, {"lookSpeed", e.lookSpeed}, {"showThumbnail", e.showThumbnail},
@@ -1354,6 +1403,21 @@ void App::saveSettings() {
                   {"geoCollide", x.geoCollide}};
   keys.toJson(j["keys"]);
   writeFile((std::filesystem::path(dataDir()) / "settings.json").string(), j.dump(2));
+}
+
+static Backend backendFromSettings(const std::string& settingsText) {
+  try {
+    auto j = nlohmann::json::parse(settingsText);
+    std::string b = j.value("render", nlohmann::json::object()).value("backend", std::string("Auto"));
+    for (int i = 0; i < 3; i++) if (b == BACKEND_NAMES[i]) return (Backend)i;
+  } catch (...) {}
+  return Backend::Auto;
+}
+
+Backend App::savedBackend() {
+  std::string text;
+  if (!readFile((std::filesystem::path(dataDir()) / "settings.json").string(), text)) return Backend::Auto;
+  return backendFromSettings(text);
 }
 
 void App::loadSettings() {
@@ -1371,6 +1435,10 @@ void App::loadSettings() {
       get(r, "aoStrength", q.aoStrength); get(r, "fog", q.fog); get(r, "ambient", q.ambient); get(r, "lightYaw", q.lightYaw);
       get(r, "lightPitch", q.lightPitch); get(r, "lightW", q.lightW); get(r, "skyTop", q.skyTop); get(r, "skyBottom", q.skyBottom);
       get(r, "grid", q.grid); get(r, "geoMaxStep", q.geoMaxStep); get(r, "geoProjectIters", q.geoProjectIters);
+      get(r, "sunIntensity", q.sunIntensity); get(r, "pointShadows", q.pointShadows); get(r, "emissiveLights", q.emissiveLights);
+      get(r, "transparentLayers", q.transparentLayers); get(r, "relaxedMarching", q.relaxedMarching); get(r, "exploreSimple", q.exploreSimple);
+      get(r, "exploreShadows", q.exploreShadows); get(r, "exploreAO", q.exploreAO); get(r, "explorePointShadows", q.explorePointShadows);
+      backendPref = backendFromSettings(text);
     }
     if (j.contains("edit")) {
       auto& r = j["edit"]; auto& e = editSet;

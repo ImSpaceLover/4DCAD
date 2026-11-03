@@ -108,10 +108,12 @@ class App {
   RenderTarget mainRT, thumbRT;
   int thumbW = 300, thumbH = 225;
   std::unique_ptr<Renderer> renderer;
+  Backend backendPref = Backend::Auto;  // graphics API for the next start (settings)
+  bool showLights = false;              // Lights window
   double fps = 0, now = 0;
 
   // --- lifecycle ---
-  void init();
+  void init(std::unique_ptr<Renderer> r);
   void loadScene(SceneFile f);
   bool loadSceneFile(const std::string& path, std::string& err);
   bool saveSceneFile(const std::string& path, std::string& err);
@@ -128,6 +130,8 @@ class App {
   std::string lastFile;  // reopened on startup
   void loadSettings();
   void saveSettings();
+  /** The graphics API chosen in the settings (read before the window is created). */
+  static Backend savedBackend();
   // --- autosave / crash recovery ---
   /** Writes the recovery copy if there are unsaved changes and the interval has passed (force: now). */
   void autosaveTick(bool force = false);
@@ -158,6 +162,9 @@ class App {
   void toggleIsolate();
   // camera bookmarks (saved in the scene)
   std::vector<CameraBookmark> bookmarks;
+  std::vector<PointLight> lights;  // scene point lights (saved in the scene)
+  /** The point lights for a frame: enabled scene lights, then emissive objects (if enabled). */
+  std::vector<LightParam> frameLights();
   void addBookmark(const std::string& name = "");
   void gotoBookmark(size_t i);
   void updateBookmark(size_t i);

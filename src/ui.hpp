@@ -64,6 +64,7 @@ class UI {
   std::string exportPrimId_;
   int captureAction_ = -1, captureSlot_ = 0;  // Settings > Keys: waiting for a key press
   void keysTab();
+  void lightsWindow();
 };
 
 }  // namespace fd
