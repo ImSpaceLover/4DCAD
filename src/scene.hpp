@@ -55,8 +55,10 @@ struct Anchor {
 
 // Surface material of a leaf. Textures are procedural 4D solid textures evaluated in
 // the object's local coordinates, so they move and rotate with the object.
-enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, TEX_RINGS, TEX_COUNT };
-inline const char* TEXTURE_NAMES[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings"};
+enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, TEX_RINGS,
+                   TEX_DOTS, TEX_WAVES, TEX_MARBLE, TEX_WOOD, TEX_CELLS, TEX_BRICKS, TEX_GRADIENT, TEX_COUNT };
+inline const char* TEXTURE_NAMES[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings",
+                                               "Dots", "Waves", "Marble", "Wood", "Cells", "Bricks", "Gradient"};
 struct Material {
   double emissive = 0;   // 0..1: always lit, casts no shadow, does not light others
   int texture = TEX_NONE;

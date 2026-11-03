@@ -72,6 +72,42 @@ float texNoise(vec4 p) {
   return clamp(0.5 + 0.2 * n, 0.0, 1.0);
 }
 float texRings(vec4 p) { return step(0.5, fract(length(p))); }
+// 4D value noise: hashed lattice values, smoothly interpolated over the 16 corners of a cell
+float h4(vec4 c) { return fract(sin(dot(c, vec4(127.1, 311.7, 74.7, 269.5))) * 43758.5453); }
+vec4 corner(int k) { return vec4(float(k & 1), float((k >> 1) & 1), float((k >> 2) & 1), float((k >> 3) & 1)); }
+float vnoise(vec4 p) {
+  vec4 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float r = 0.0;
+  for (int k = 0; k < 16; k++) {
+    vec4 o = corner(k), w = mix(1.0 - f, f, o);
+    r += h4(i + o) * w.x * w.y * w.z * w.w;
+  }
+  return r;
+}
+float fbm(vec4 p) { return 0.5 * vnoise(p) + 0.25 * vnoise(p * 2.03 + 1.7) + 0.125 * vnoise(p * 4.01 + 3.1); }
+float texDots(vec4 p) { return step(length(fract(p) - 0.5), 0.32); }
+float texWaves(vec4 p) { return 0.5 + 0.5 * sin(6.2832 * (p.x + 0.35 * sin(2.5 * p.y + p.w) + 0.25 * p.z)); }
+float texMarble(vec4 p) { return 0.5 + 0.5 * sin(3.0 * p.x + 6.0 * fbm(p)); }
+float texWood(vec4 p) { return smoothstep(0.35, 0.65, fract(length(p.xz) * 3.0 + 1.5 * fbm(p * 0.8))); }
+float texCells(vec4 p) {  // edges of 4D Voronoi cells (feature points of the 16 nearest lattice cells)
+  vec4 base = floor(p) + step(0.5, fract(p)) - 1.0;
+  float d1 = 9.0, d2 = 9.0;
+  for (int k = 0; k < 16; k++) {
+    vec4 c = base + corner(k);
+    float d = length(p - c - vec4(h4(c), h4(c + 11.3), h4(c + 23.7), h4(c + 37.1)));
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+  }
+  return 1.0 - smoothstep(0.03, 0.08, d2 - d1);
+}
+float texBricks(vec4 p) {
+  vec4 q = p * vec4(1.0, 2.0, 1.0, 1.0);
+  float shift = 0.5 * mod(floor(q.y), 2.0);  // every other row offset by half a brick
+  q.x += shift; q.z += shift;
+  vec4 e = 0.5 - abs(fract(q) - 0.5);
+  return 1.0 - step(0.06, min(min(e.x, e.y), e.z));  // mortar
+}
+float texGradient(vec4 p) { return clamp(0.5 + 0.5 * p.y, 0.0, 1.0); }
 )";
 
 const char* sdfHelpersGLSL() { return SDF_HELPERS; }
@@ -97,6 +133,13 @@ static const char* texFn(int t) {
     case TEX_GRID: return "texGrid";
     case TEX_NOISE: return "texNoise";
     case TEX_RINGS: return "texRings";
+    case TEX_DOTS: return "texDots";
+    case TEX_WAVES: return "texWaves";
+    case TEX_MARBLE: return "texMarble";
+    case TEX_WOOD: return "texWood";
+    case TEX_CELLS: return "texCells";
+    case TEX_BRICKS: return "texBricks";
+    case TEX_GRADIENT: return "texGradient";
     default: return nullptr;
   }
 }
