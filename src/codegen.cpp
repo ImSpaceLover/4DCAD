@@ -41,11 +41,12 @@ vec2 opRadial(vec2 v, float r, float n, float s, float st) {
 float sS(float a, float b, float k) { if (b >= INF * 0.5 || a >= INF * 0.5) return a; float h = clamp(0.5 - 0.5 * (a + b) / k, 0.0, 1.0); return mix(a, -b, h) + k * h * (1.0 - h); }
 )";
 
-// Material = mat2x4: column 0 (rgb, selection highlight), column 1 (emissive, 0, 0, 0).
+// Material = mat3x4: column 0 (rgb, selection highlight), column 1 (emissive, roughness, specular,
+// transparency), column 2 (metallic, index of refraction, 0, 0).
 static const char* SCENE_HELPERS = R"(
 bool g_exact = false;      // disable bounding-sphere shortcuts (shadow / AO samples need true distances)
 bool g_noEmissive = false; // shadow / AO rays ignore emissive objects
-#define MAT mat2x4
+#define MAT mat3x4
 float opU(float a, inout MAT ma, float b, MAT mb) { if (b < a) { ma = mb; return b; } return a; }
 float opI(float a, inout MAT ma, float b, MAT mb) { if (b > a) { ma = mb; return b; } return a; }
 float opS(float a, inout MAT ma, float b, MAT mb) { if (-b > a) { ma = mb; return -b; } return a; }
@@ -244,7 +245,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
       if (const char* tf = texFn(n.mat.texture))
         L << "  if (u_simple == 0) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(q0 * m9.y) * m9.z);\n";  // textures: off in simple mode
-      L << "  m = MAT(vec4(col, c6.w), vec4(m9.x, " << D(i, 11) << ".xyz));\n";
+      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
       if (anchored) L << "  return max(d * s, -nd * s - par.y);\n}\n";
       else L << "  return d * s;\n}\n";
     } else {
@@ -327,6 +328,8 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       slot(11)[0] = (float)n.mat.roughness;
       slot(11)[1] = (float)n.mat.specular;
       slot(11)[2] = (float)n.mat.transparency;
+      slot(11)[3] = (float)n.mat.metallic;
+      slot(8)[1] = (float)n.mat.ior;
     } else slot(6)[3] = (float)reach;  // groups: colour unused, store reach
     auto b = bounds.find(n.id);
     slot(8)[0] = 1e9f;

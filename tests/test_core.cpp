@@ -298,7 +298,7 @@ int main() {
   // node data buffer: 12 vec4 per node; new material fields and lights survive JSON
   {
     Node l = makeShape("cube", "c");
-    l.mat.roughness = 0.2; l.mat.specular = 1.1; l.mat.transparency = 0.4;
+    l.mat.roughness = 0.2; l.mat.specular = 1.1; l.mat.transparency = 0.4; l.mat.ior = 1.33; l.mat.metallic = 0.8;
     Node r = makeGroup(BoolOp::Union, {l});
     auto cs = compileScene(r, reg, "", false, nullptr);
     auto d = packNodes(r, reg, cs, {});
@@ -308,7 +308,10 @@ int main() {
     CLOSE(d[li * 48 + 46], 0.4, 1e-6);
     CHECK(cs.glsl.find("uniform") == std::string::npos, "no uniform arrays in the scene code (node data buffer)");
     Node rt = nodeFromJson(nodeToJson(l));
-    CHECK(rt.mat.roughness == 0.2 && rt.mat.specular == 1.1 && rt.mat.transparency == 0.4, "material round trip");
+    CHECK(rt.mat.roughness == 0.2 && rt.mat.specular == 1.1 && rt.mat.transparency == 0.4 && rt.mat.ior == 1.33 && rt.mat.metallic == 0.8,
+          "material round trip");
+    CLOSE(d[li * 48 + 47], 0.8, 1e-6);  // metallic
+    CLOSE(d[li * 48 + 33], 1.33, 1e-6); // index of refraction
     std::vector<PointLight> ls(1);
     ls[0].pos = {1, 2, 3, 4}; ls[0].range = 3; ls[0].shadows = false;
     auto back = lightsFromJson(lightsToJson(ls));

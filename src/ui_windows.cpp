@@ -83,8 +83,8 @@ void UI::qualityWindow() {
       Ff("Sun intensity", q.sunIntensity, 0, 3);
       ImGui::Checkbox("Point light shadows", &q.pointShadows);
       ImGui::Checkbox("Emissive objects light the scene", &q.emissiveLights);
-      ImGui::SliderInt("Transparent layers", &q.transparentLayers, 0, 4);
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("See-through surfaces passed per pixel (0 = transparency off)");
+      ImGui::SliderInt("Bounces", &q.transparentLayers, 0, 6);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflections / refractions followed per pixel (0 = mirrors and glass off)");
       ImGui::Checkbox("Over-relaxed marching", &q.relaxedMarching);
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Longer steps with a safety check: usually faster (Full 4D)");
       ImGui::SeparatorText("Explore mode (fast)");

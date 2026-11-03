@@ -112,7 +112,7 @@ float map(vec4 p, out MAT m) {
     float body = length(p - u_marker) - r;
     float nose = length(p - (u_marker + u_markerFwd * r * 0.95)) - r * 0.4;
     float dm = min(body, nose);
-    if (dm < d) { d = dm; m = MAT(vec4(nose < body ? u_markerCol.rgb * 0.55 : u_markerCol.rgb, 0.0), vec4(0.0, 0.6, 0.3, 0.0)); }
+    if (dm < d) { d = dm; m = MAT(vec4(nose < body ? u_markerCol.rgb * 0.55 : u_markerCol.rgb, 0.0), vec4(0.0, 0.6, 0.3, 0.0), vec4(0.0)); }
   }
   // debug ray: a thin glowing tube along its path (emissive: no shadows), end marker coloured by the stop reason
   if (u_dbgN > 1 && !g_noEmissive && !g_noDbg) {
@@ -127,8 +127,8 @@ float map(vec4 p, out MAT m) {
     // a minimum step outside the thin tube (smaller than its diameter, so it cannot be skipped):
     // rays grazing it along its length would otherwise run out of steps
     dt = dt < u_eps * 2.0 ? dt : max(dt, 0.02);
-    if (dt < d) { d = dt; m = MAT(vec4(1.0, 0.55, 0.1, 0.0), vec4(1.0, 0.0, 0.0, 0.0)); }
-    if (de < d) { d = de; m = MAT(vec4(u_dbgEndCol, 0.0), vec4(1.0, 0.0, 0.0, 0.0)); }
+    if (dt < d) { d = dt; m = MAT(vec4(1.0, 0.55, 0.1, 0.0), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0)); }
+    if (de < d) { d = de; m = MAT(vec4(u_dbgEndCol, 0.0), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0)); }
   }
   return d;
 }
@@ -208,7 +208,7 @@ void main() {
   int steps = 0;
   vec4 wn = u_frame[3];
   int phase = MARCH, k = 0;
-  bool hit = false, inside = false;
+  bool hit = false, inside = false, exiting = false, toSky = true;
   MAT hm = MAT(0.0);
   vec4 hp = p, n = vec4(0.0);
   float nv[5];
@@ -222,10 +222,11 @@ void main() {
   vec4 Ll = vec4(0.0);
   vec3 lc = vec3(0.0), diffAcc = vec3(0.0), specAcc = vec3(0.0);
   float dif = 0.0, firstT = -1.0;
-  // transparency: colour gathered so far and the light still passing through
-  vec3 accum = vec3(0.0);
-  float thr = 1.0;
+  // reflections / transparency: colour gathered so far and the light still travelling
+  vec3 accum = vec3(0.0), thr = vec3(1.0);
   int layers = 0;
+  vec4 gro = ro, grd = rd;  // primary ray (ground grid)
+  float t0 = 0.0;           // Full 4D: t at the start of the current straight segment (ro, rd)
   // over-relaxed sphere tracing (Full 4D primary rays)
   float omega = u_relax == 1 ? 1.4 : 1.0, prevR = 0.0, stepLen = 0.0;
 
@@ -248,14 +249,18 @@ void main() {
     float h = 0.0;
 
     if (phase == MARCH) {
-      if (inside) {  // passing through a transparent object: no hits until we are out again
-        if (d > u_eps) inside = false;
-        h = max(-d, u_eps * 2.0);
+      if (inside) {  // travelling through a transparent object until its far side
+        if (d > -u_eps * 0.5) {
+          // reached the far side: find its normal, then bend the ray out of the object
+          exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = 1;
+        } else {
+          h = max(-d, u_eps * 2.0);
 #ifdef VIEW_GEO
-        h = min(h, u_geoMaxStep);
+          h = min(h, u_geoMaxStep);
 #endif
-        ap = p; adir = dir; advance = true; t += h; steps++;
-        if (steps >= u_maxSteps || t > u_maxDist) phase = DONE;
+          ap = p; adir = dir; advance = true; t += h; steps++;
+          if (steps >= u_maxSteps || t > u_maxDist) phase = DONE;
+        }
       } else {
 #ifdef VIEW_GEO
         bool sorFail = false;
@@ -289,6 +294,18 @@ void main() {
         n = normalize(n - dot(n, wn) * wn + 1e-6);
 #endif
         k = 0;
+        if (exiting) {
+          // leaving a transparent object: refract outward (total internal reflection keeps it inside)
+          exiting = false;
+          float ior = max(hm[2].y, 1.0);
+          vec4 nd2 = refract(dir, -n, ior);
+          phase = MARCH;
+          if (dot(nd2, nd2) < 1e-6) { dir = reflect(dir, -n); p = hp - n * (u_eps * 3.0); }
+          else { dir = normalize(nd2); inside = false; p = hp + n * (u_eps * 3.0); }
+          ro = p; rd = dir; t0 = t;
+          omega = 1.0; prevR = 0.0; stepLen = 0.0;
+          continue;
+        }
         occ = 0.0; aow = 1.0;
         diffAcc = vec3(0.0); specAcc = vec3(0.0);
         li = -1;
@@ -360,20 +377,29 @@ void main() {
         float f = t / u_maxDist;
         c = mix(c, sky(dir, rayWorldCol), clamp(u_fog * f * f * 1.5, 0.0, 1.0));
         float transp = u_simple == 1 ? 0.0 : clamp(hm[1].w, 0.0, 1.0);
-        accum += thr * (1.0 - transp) * c;
-        thr *= transp;
-        if (transp > 0.01 && layers < u_maxLayers && thr > 0.02) {
-          // see through it: continue the primary ray inside the object
+        float metal = u_simple == 1 ? 0.0 : clamp(hm[2].x, 0.0, 1.0);
+        float wSurf = (1.0 - transp) * (1.0 - metal);  // the surface's own colour
+        accum += thr * wSurf * c;
+        float cont = 1.0 - wSurf;                      // what continues as a reflected / refracted ray
+        if (cont > 0.01 && layers < u_maxLayers && max(thr.r, max(thr.g, thr.b)) * cont > 0.02) {
           layers++;
-          phase = MARCH; inside = true; hit = false;
-          p = hp; t += u_eps * 3.0;
-#ifndef VIEW_GEO
-          p = ro + rd * t;
-#else
-          p = hp + dir * (u_eps * 3.0);
-#endif
+          phase = MARCH; hit = false;
+          if (metal >= transp) {
+            // mirror: reflect, tinted by the surface colour (like a metal)
+            thr *= cont * mix(vec3(1.0), base, 0.6);
+            dir = reflect(dir, n);
+            p = hp + n * (u_eps * 4.0);
+          } else {
+            // glass: bend into the object by its index of refraction
+            thr *= cont * mix(vec3(1.0), base, 0.25);
+            vec4 nd2 = refract(dir, n, 1.0 / max(hm[2].y, 1.0));
+            dir = dot(nd2, nd2) < 1e-6 ? reflect(dir, n) : normalize(nd2);
+            inside = dot(nd2, nd2) >= 1e-6;
+            p = inside ? hp - n * (u_eps * 4.0) : hp + n * (u_eps * 4.0);
+          }
+          ro = p; rd = dir; t0 = t;
           omega = 1.0; prevR = 0.0; stepLen = 0.0;
-        } else phase = DONE;
+        } else { phase = DONE; toSky = false; }
       }
     }
 
@@ -383,7 +409,7 @@ void main() {
       vec4 nn = projectToWorld(ap);   // the only world-projection site
       adir = normalize(adir - dot(adir, nn) * nn);
 #else
-      if (phase == MARCH) ap = ro + rd * t;  // straight ray: exact (and over-relaxation may step back)
+      if (phase == MARCH) ap = ro + rd * (t - t0);  // straight segment: exact (and over-relaxation may step back)
       else ap += adir * h;
 #endif
       if (phase == MARCH) {
@@ -397,12 +423,12 @@ void main() {
   }
 
   vec3 col = accum;
-  if (thr > 0.0) col += thr * sky(dir, rayWorldCol);  // nothing (more) was hit: the sky
+  if (toSky) col += thr * sky(dir, rayWorldCol);  // the ray (or what continued of it) ended in the sky
   float tGrid = firstT >= 0.0 ? firstT : 1e9;
 
 #ifndef VIEW_GEO
   // ground grid in display coordinates (the shown axes: X, up, Z; lines along the slider axis)
-  vec4 rod = ro * u_axes, rdd = rd * u_axes;
+  vec4 rod = gro * u_axes, rdd = grd * u_axes;
   if (u_grid == 1 && abs(rdd.y) > 1e-4) {
     float tg = -rod.y / rdd.y;
     if (tg > 0.0 && tg < tGrid) {

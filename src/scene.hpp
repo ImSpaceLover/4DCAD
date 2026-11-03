@@ -66,6 +66,8 @@ struct Material {
   double roughness = 0.75;   // 0 = sharp highlights, 1 = matte
   double specular = 0.35;    // highlight strength
   double transparency = 0;   // 0 = opaque, 1 = invisible (see-through surfaces)
+  double ior = 1.45;         // index of refraction of transparent materials (1 = no bending)
+  double metallic = 0;       // 0 = plain, 1 = mirror (reflections tinted by the colour)
 };
 
 /** Default code of a custom SDF leaf (GLSL). */
@@ -132,7 +134,7 @@ struct QualitySettings {
   float sunIntensity = 1.0f;      // directional light
   bool pointShadows = true;       // point lights cast shadows (each one costs a shadow ray)
   bool emissiveLights = true;     // emissive objects light their surroundings (as point lights)
-  int transparentLayers = 2;      // see-through surfaces passed per pixel (0 = transparency off)
+  int transparentLayers = 3;      // reflections / refractions followed per pixel (0 = mirrors and glass off)
   bool relaxedMarching = true;    // over-relaxed sphere tracing (fewer steps)
   // Explore mode (moving: keep it fast)
   bool exploreSimple = true;      // no textures / transparency, cheaper AO

@@ -119,8 +119,20 @@ void UI::propertiesPanel() {
     mixed([](const Node& x) { return x.mat.specular; });
     if (ImGui::SliderFloat("Transparency", &tr, 0, 1)) n->mat.transparency = tr;
     track();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("See-through surfaces (layers per pixel: Settings > Rendering)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("See-through surfaces (bounces per pixel: Settings > Rendering)");
     mixed([](const Node& x) { return x.mat.transparency; });
+    if (n->mat.transparency > 0) {
+      float io = (float)n->mat.ior;
+      if (ImGui::SliderFloat("Refraction index", &io, 1.0f, 2.5f, "%.2f")) n->mat.ior = io;
+      track();
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("How much light bends entering / leaving it: 1 = none, 1.33 water, 1.5 glass, 2.4 diamond");
+      mixed([](const Node& x) { return x.mat.ior; });
+    }
+    float me = (float)n->mat.metallic;
+    if (ImGui::SliderFloat("Metallic (mirror)", &me, 0, 1)) n->mat.metallic = me;
+    track();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflects the scene, tinted by the colour (1 = mirror)");
+    mixed([](const Node& x) { return x.mat.metallic; });
     if (n->isCustom()) {
       ImGui::SeparatorText("Custom SDF (GLSL)");
       if (codeEditId_ != n->id) { codeEditId_ = n->id; codeBuf_ = n->code; }
