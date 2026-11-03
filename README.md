@@ -83,6 +83,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 - WASD moves, Space/Shift move up/down, and the wheel sets speed.
 - Full 4D: R/F move along the slider axis (W by default), Q/E roll (as in Geodesic), Z/X turn into W, C/V turn sideways in W, Backspace resets the 4D orientation.
 - Geodesic: you move on the world's surface and Q/E roll.
+- **Debug ray** (T): shows the path of the ray leaving your eye along the view direction, marched exactly like the renderer's rays (it follows the geodesic in the Geodesic view, straight in Full 4D). It is drawn as a thin glowing tube; the ball at its end shows why it stopped (red: hit an object, blue: max ray distance, yellow: max march steps, grey: left the scene), and the status line gives its length and step count. It is re-traced from your view every frame; **Shift+T** freezes it so you can walk around it and see it bend. The outside thumbnail also shows its path.
 - **Your body** is part of the scene. It casts a shadow, and on closed worlds light comes back around so you can see yourself. On a hypersphere world every ray that misses everything returns to you, so the "sky" is your own back. Toggle it in Settings > Explore mode.
 
 ## Editor

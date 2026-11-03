@@ -797,7 +797,8 @@ void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
   if (mode == Mode::Explore) {
     if (P(Action::ReleaseMouse)) { if (mouseCaptured) wantRelease = true; else setMode(Mode::Edit); }
     if (P(Action::Reset4D) && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
-    if (P(Action::DebugRay)) { debugRay = !debugRay; toast(debugRay ? "Debug ray on" : "Debug ray off"); }
+    if (P(Action::DebugRay)) { debugRay = !debugRay; debugFrozen = false; lastChange_ = now; toast(debugRay ? "Debug ray on" : "Debug ray off"); }
+    if (P(Action::DebugRayFreeze) && debugRay) { debugFrozen = !debugFrozen; toast(debugFrozen ? "Debug ray frozen: walk around it" : "Debug ray follows the view"); }
     return;
   }
   if (drag_ == Drag::Fly) return;  // movement keys while RMB is held
@@ -1084,6 +1085,18 @@ void App::renderFrame() {
   fp.quality = &quality;
   fp.light = light();
   fp.skyCol = worldColor();
+  // debug ray: re-traced from the view every frame unless frozen
+  if (debugRay && ev) {
+    if (!debugFrozen) debugTrace = traceRay(*ev, fp.geo, v.eye, col(v.frame, 2), quality);
+    fp.debugPts = debugTrace.pts;
+    {  // the start sits in (or next to) the eye: skip it, or it would cover the screen
+      size_t k = 0;
+      while (k + 2 < fp.debugPts.size() && length(fp.debugPts[k] - debugTrace.pts[0]) < 0.35) k++;
+      fp.debugPts.erase(fp.debugPts.begin(), fp.debugPts.begin() + k);
+    }
+    fp.debugReason = (int)debugTrace.reason;
+    for (auto& p : fp.debugPts) for (double x : p) key << (float)x << ',';
+  }
   if (!fp.geo) fp.axes = editCam.axes();
   key << editCam.slider << ',';
   for (float x : fp.skyCol) key << x << ',';

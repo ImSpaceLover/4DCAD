@@ -43,8 +43,12 @@ uniform vec4 u_markerFwd;
 uniform float u_markerSkip;
 uniform vec3 u_skyCol;     // Geodesic sky colour (= world surface colour)
 uniform mat4 u_axes;       // world axes acting as the display X, Y (up), Z and slider axis
+uniform vec4 u_dbg[48];    // debug ray polyline (Explore)
+uniform int u_dbgN;        // number of points (0 = off)
+uniform vec3 u_dbgEndCol;  // end marker colour = why the ray stopped
 
 bool g_noBody = false;     // primary ray still inside the player's own body
+bool g_noDbg = false;      // primary ray still next to the eye (the debug ray may pass through it)
 
 // scene + the player's body (a sphere with a small "nose" showing where it faces)
 float map(vec4 p, out MAT m) {
@@ -55,6 +59,22 @@ float map(vec4 p, out MAT m) {
     float nose = length(p - (u_marker + u_markerFwd * r * 0.95)) - r * 0.4;
     float dm = min(body, nose);
     if (dm < d) { d = dm; m = MAT(vec4(nose < body ? u_markerCol.rgb * 0.55 : u_markerCol.rgb, 0.0), vec4(0.0)); }
+  }
+  // debug ray: a thin glowing tube along its path (emissive: no shadows), end marker coloured by the stop reason
+  if (u_dbgN > 1 && !g_noEmissive && !g_noDbg) {
+    float dt = INF;
+    for (int i = 0; i < 47; i++) {
+      if (i + 1 >= u_dbgN) break;
+      vec4 a = u_dbg[i], ba = u_dbg[i + 1] - a, pa = p - a;
+      float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-12), 0.0, 1.0);
+      dt = min(dt, length(pa - ba * h) - 0.03);
+    }
+    float de = length(p - u_dbg[u_dbgN - 1]) - 0.09;
+    // a minimum step outside the thin tube (smaller than its diameter, so it cannot be skipped):
+    // rays grazing it along its length would otherwise run out of steps
+    dt = dt < u_eps * 2.0 ? dt : max(dt, 0.02);
+    if (dt < d) { d = dt; m = MAT(vec4(1.0, 0.55, 0.1, 0.0), vec4(1.0, 0.0, 0.0, 0.0)); }
+    if (de < d) { d = de; m = MAT(vec4(u_dbgEndCol, 0.0), vec4(1.0, 0.0, 0.0, 0.0)); }
   }
   return d;
 }
@@ -137,6 +157,7 @@ void main() {
     g_exact = phase == AO || phase == SHADOW;
     g_noEmissive = g_exact;
     g_noBody = phase == MARCH && t < u_markerSkip;
+    g_noDbg = phase == MARCH && t < 0.12;
     float d = map(q, mm);   // the only scene evaluation site
 
     bool advance = false;

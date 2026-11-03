@@ -460,6 +460,24 @@ int main() {
     auto sc = app.worldColor();
     CHECK(std::abs(sc[0] - 0.35f) < 1e-4 && std::abs(sc[2] - 0.75f) < 1e-4, "geodesic sky = world surface colour");
   }
+  // debug ray: geodesic on the planet stays on the surface and stops at the distance limit or a hit
+  {
+    QualitySettings q = app.quality;
+    View gv = app.currentView();
+    RayTrace r = traceRay(*app.ev, true, gv.eye, col(gv.frame, 2), q);
+    CHECK(r.pts.size() > 5 && r.steps == (int)r.pts.size() - 1, "trace recorded %d steps", r.steps);
+    double off = 0;
+    for (auto& p : r.pts) off = std::max(off, std::abs(length(p) - 3));
+    CHECK(off < 1e-2, "geodesic ray stays on the surface (%.4f)", off);
+    CHECK(r.reason == RayTrace::Hit || r.reason == RayTrace::MaxDistance || r.reason == RayTrace::MaxSteps, "stop reason %s", rayReasonText(r.reason));
+    if (r.reason == RayTrace::MaxDistance) CHECK(r.t > q.maxDistGeo, "max distance reached");
+    // Full 4D: straight down onto the ground is a hit
+    RayTrace d = traceRay(*app.ev, false, V4{0, 5, 0, 7}, V4{0, -1, 0, 0}, q);
+    CHECK(d.reason == RayTrace::Hit || d.reason == RayTrace::Escaped || d.reason == RayTrace::MaxDistance, "full trace ends");
+    double maxDev = 0;
+    for (auto& p : d.pts) maxDev = std::max(maxDev, std::abs(p[0]) + std::abs(p[2]) + std::abs(p[3] - 7));
+    CHECK(maxDev < 1e-12, "Full 4D ray is straight");
+  }
   View tv = app.thumbnailView();
   V4 cam = app.currentView().eye;
   CHECK(std::abs(dot(cam - tv.eye, col(tv.frame, 3))) < 1e-6, "thumbnail slice contains camera");

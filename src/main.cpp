@@ -2,6 +2,7 @@
 // Command line (mainly for automated testing):
 //   4DCAD [scene.json] [--example playground|planet] [--geo] [--explore]
 //         [--select NAME] [--tool move|rotate] [--size WxH] [--screenshot out.ppm --frames N]
+//         [--debug-ray] (debug ray on, frozen after the first frame) [--strafe D] [--turn DEG] (then move / turn)
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -55,7 +56,8 @@ static void loadFonts(float scale) {
 int main(int argc, char** argv) {
   std::string sceneArg, example, screenshot;
   std::string selectName, toolName, openWindow;
-  bool startGeo = false, startExplore = false;
+  bool startGeo = false, startExplore = false, debugRayArg = false;
+  double turnDeg = 0, strafe = 0;
   int frames = 30, W = 1600, H = 900;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
@@ -65,6 +67,9 @@ int main(int argc, char** argv) {
     else if (a == "--tool" && i + 1 < argc) toolName = argv[++i];
     else if (a == "--open" && i + 1 < argc) openWindow = argv[++i];
     else if (a == "--explore") startExplore = true;
+    else if (a == "--debug-ray") debugRayArg = true;
+    else if (a == "--turn" && i + 1 < argc) turnDeg = std::atof(argv[++i]);
+    else if (a == "--strafe" && i + 1 < argc) strafe = std::atof(argv[++i]);
     else if (a == "--screenshot" && i + 1 < argc) screenshot = argv[++i];
     else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
     else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &W, &H);
@@ -121,6 +126,7 @@ int main(int argc, char** argv) {
   if (toolName == "rotate") app.tool = Tool::Rotate;
   if (!openWindow.empty()) ui->debugOpen(openWindow);
   if (startExplore) app.setMode(Mode::Explore);
+  app.debugRay = debugRayArg;
 
   auto t0 = std::chrono::steady_clock::now();
   double last = 0;
@@ -155,6 +161,17 @@ int main(int argc, char** argv) {
     gl::ClearColor(0.09f, 0.1f, 0.12f, 1);
     gl::Clear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    if (debugRayArg && frame == 1 && !app.debugFrozen) {  // freeze the ray, then look at it from the side
+      app.debugFrozen = true;
+      double px = turnDeg * PI / 180 / 0.003;
+      if (app.geo && app.geoEdit.valid) {
+        if (strafe != 0) app.geoEdit.move(worldField(*app.ev), {strafe, 0, 0}, app.quality.geoMaxStep * 0.5, nullptr);
+        app.geoEdit.look(px, 0);
+      } else {
+        if (strafe != 0) app.editCam.move({strafe, 0, 0, 0}, nullptr);
+        app.editCam.look(px, 0);
+      }
+    }
     if (!screenshot.empty() && ++frame >= frames) {
       writePPM(screenshot, fw, fh);
       break;

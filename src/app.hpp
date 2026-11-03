@@ -188,6 +188,8 @@ class App {
   void handleKey(int key, bool shift, bool ctrl, bool alt = false);
   KeyBindings keys;      // rebindable shortcuts (saved with the settings)
   bool debugRay = false; // Explore: show the debug ray
+  bool debugFrozen = false;  // keep the current debug ray instead of re-tracing it from the view
+  RayTrace debugTrace;       // the debug ray (traced from the eye along the view direction)
   void renderFrame();
   View thumbnailView();
   double sliceW() { return editCam.sliceW(); }

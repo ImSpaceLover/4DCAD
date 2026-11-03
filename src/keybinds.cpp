@@ -47,6 +47,7 @@ static const ActionInfo INFO[(int)Action::Count] = {
     {"cancel", "Cancel", "Transform", false},
     {"releaseMouse", "Release mouse / back to Edit", "Explore", false},
     {"debugRay", "Debug ray on / off", "Explore", false},
+    {"debugRayFreeze", "Debug ray: freeze / follow view", "Explore", false},
     {"moveForward", "Forward", "Movement", true},
     {"moveBack", "Back", "Movement", true},
     {"moveLeft", "Left", "Movement", true},
@@ -109,6 +110,7 @@ void KeyBindings::resetDefaults() {
   set(Action::Cancel, K(GLFW_KEY_ESCAPE));
   set(Action::ReleaseMouse, K(GLFW_KEY_ESCAPE));
   set(Action::DebugRay, K(GLFW_KEY_T));
+  set(Action::DebugRayFreeze, S(GLFW_KEY_T));
   set(Action::MoveForward, K(GLFW_KEY_W));
   set(Action::MoveBack, K(GLFW_KEY_S));
   set(Action::MoveLeft, K(GLFW_KEY_A));

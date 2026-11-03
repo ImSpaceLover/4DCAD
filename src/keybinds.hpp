@@ -21,7 +21,7 @@ enum class Action {
   // during G / R / S
   AxisX, AxisY, AxisZ, AxisW, Confirm, Cancel,
   // Explore
-  ReleaseMouse, DebugRay,
+  ReleaseMouse, DebugRay, DebugRayFreeze,
   // held (Explore and Geodesic fly)
   MoveForward, MoveBack, MoveLeft, MoveRight, MoveUp, MoveDown, RollLeft, RollRight,
   MoveAnaPlus, MoveAnaMinus, TurnWPlus, TurnWMinus, SideWPlus, SideWMinus,

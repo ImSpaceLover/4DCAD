@@ -197,6 +197,20 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
   float ax[16];
   for (int i = 0; i < 16; i++) ax[i] = (float)fp.axes[i];
   gl::UniformMatrix4fv(u(*p, "u_axes"), 1, GL_FALSE, ax);
+  {  // debug ray: resampled to at most 48 points
+    const int MAXP = 48;
+    std::vector<float> dp(MAXP * 4, 0.f);
+    int n = (int)std::min<size_t>(fp.debugPts.size(), MAXP);
+    for (int i = 0; i < n; i++) {
+      size_t src = fp.debugPts.size() <= (size_t)MAXP ? (size_t)i : (size_t)std::llround((double)i * (fp.debugPts.size() - 1) / (MAXP - 1));
+      for (int c = 0; c < 4; c++) dp[i * 4 + c] = (float)fp.debugPts[src][c];
+    }
+    gl::Uniform4fv(u(*p, "u_dbg"), MAXP, dp.data());
+    gl::Uniform1i(u(*p, "u_dbgN"), n >= 2 ? n : 0);
+    static const float rc[4][3] = {{1.0f, 0.25f, 0.2f}, {0.3f, 0.6f, 1.0f}, {1.0f, 0.9f, 0.2f}, {0.8f, 0.8f, 0.8f}};
+    int r = std::clamp(fp.debugReason, 0, 3);
+    gl::Uniform3f(u(*p, "u_dbgEndCol"), rc[r][0], rc[r][1], rc[r][2]);
+  }
   gl::Disable(GL_SCISSOR_TEST);
   gl::Disable(GL_BLEND);
   gl::Disable(GL_DEPTH_TEST);

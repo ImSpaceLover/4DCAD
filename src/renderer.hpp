@@ -33,6 +33,8 @@ struct FrameParams {
   float markerSkip = 0;                         // primary rays ignore the body for t < skip (first person)
   std::array<float, 3> skyCol{0.35f, 0.4f, 0.55f};  // Geodesic sky = world surface colour
   M4 axes = identity();  // world axes shown as display X, Y, Z and on the slider (FullCamera::axes)
+  std::vector<V4> debugPts;  // debug ray polyline (drawn as a glowing tube, end marker coloured by reason)
+  int debugReason = 0;
 };
 
 class Renderer {

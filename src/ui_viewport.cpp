@@ -115,6 +115,22 @@ void UI::thumbnail() {
   ImDrawList* dl = ImGui::GetWindowDrawList();
   ImVec2 p1 = {p0.x + app.thumbW, p0.y + app.thumbH};
   if (app.thumbRT.tex) dl->AddImage(tex(app.thumbRT.tex), p0, p1, {0, 1}, {1, 0});
+  // debug ray seen from outside (projected onto the thumbnail's view)
+  if (app.debugRay && app.debugTrace.pts.size() > 1) {
+    View tv = app.thumbnailView();
+    double th = std::tan(40 * PI / 360), aspect = (double)app.thumbW / app.thumbH;
+    std::vector<ImVec2> pts;
+    for (auto& p : app.debugTrace.pts) {
+      V4 r = p - tv.eye;
+      double z = dot(r, col(tv.frame, 2));
+      if (z < 1e-3) continue;
+      double x = dot(r, col(tv.frame, 0)) / (z * th), y = dot(r, col(tv.frame, 1)) / (z * th);
+      pts.push_back({(float)(p0.x + (x / aspect + 1) * 0.5 * app.thumbW), (float)(p0.y + (1 - y) * 0.5 * app.thumbH)});
+    }
+    dl->PushClipRect(p0, p1, true);
+    if (pts.size() > 1) dl->AddPolyline(pts.data(), (int)pts.size(), IM_COL32(255, 140, 25, 255), 0, 2);
+    dl->PopClipRect();
+  }
   dl->AddRect(p0, p1, IM_COL32(230, 180, 60, 255), 0, 0, 2);
   dl->AddText({p0.x + 6, p0.y + 4}, IM_COL32(240, 240, 240, 255), "Outside view");
 }
@@ -134,6 +150,12 @@ void UI::overlays(ImDrawList* dl) {
     if (!app.mouseCaptured) lines.push_back("Click the viewport to capture the mouse (Esc releases)");
     else if (!app.geo) lines.push_back("WASD move | Space/Shift up/down | R/F along the slider axis | Q/E roll | Z/X, C/V turn into it | Backspace reset");
     else lines.push_back("WASD move | Space/Shift up/down (tangent) | Q/E roll | wheel speed | Esc release");
+    if (app.debugRay) {
+      const auto& d = app.debugTrace;
+      std::snprintf(buf, sizeof buf, "Debug ray%s: length %.2f, %d steps, stopped: %s", app.debugFrozen ? " (frozen)" : "", d.t, d.steps,
+                    rayReasonText(d.reason));
+      lines.push_back(buf);
+    }
   } else if (app.modal != Modal::None) lines.push_back(app.transformHint());
   else {
     const char* tool = app.tool == Tool::Move ? "Move: drag an arrow (local X/Y/Z) or the centre square; drag the object to move it in the screen plane"
