@@ -21,19 +21,23 @@ inline bool isSmooth(BoolOp o) { return o >= BoolOp::SmoothUnion; }
 // Modifier stack of a node, listed in the order they are applied to the shape
 // (first = innermost). Dimension-raising modifiers (Extrude, Revolve) each add
 // the next axis (X -> Y -> Z -> W) after the node's base dimension.
-enum ModType { MOD_MIRROR = 1, MOD_REPEAT = 2, MOD_EXTRUDE = 3, MOD_REVOLVE = 4, MOD_ROTATE = 5 };
-inline const char* MOD_NAMES[6] = {"", "Mirror", "Repeat", "Extrude", "Revolve", "Rotate"};
+// MOD_RADIAL replaced the old Rotate modifier (an old rotation = one radial copy at its angle).
+enum ModType { MOD_MIRROR = 1, MOD_REPEAT = 2, MOD_EXTRUDE = 3, MOD_REVOLVE = 4, MOD_RADIAL = 5 };
+inline const char* MOD_NAMES[6] = {"", "Mirror", "Repeat", "Extrude", "Revolve", "Radial repeat"};
 
 struct Modifier {
   int type = MOD_MIRROR;
   int axis = 0;          // mirror / repeat axis; revolve: existing axis spun into the new one (-1 = newest)
   double spacing = 3;    // repeat
-  int count = 2;         // repeat: copies on each side, 0 = infinite
+  int count = 2;         // repeat: copies on each side, 0 = infinite; radial: number of copies (>= 1)
   ExtrudeMode mode = ExtrudeMode::Finite;  // extrude
   double length = 2;     // extrude
-  double radius = 0;     // revolve
-  int i = 0, j = 1;      // rotate plane
-  double angle = 45;     // rotate (degrees)
+  double radius = 0;     // revolve; radial: distance of the copies from the axis
+  int i = 0, j = 2;      // radial: plane of rotation (i -> j)
+  double angle = 60;     // radial: degrees between copies
+  double startAngle = 0; // radial: angle of the first copy (degrees)
+  double offset = 0;     // mirror: shape and mirror image sit this far from the mirror plane
+  // (new fields go last: code brace-initialises the leading ones)
   bool raises() const { return type == MOD_EXTRUDE || type == MOD_REVOLVE; }
 };
 
@@ -64,7 +68,7 @@ struct Material {
 /** Default code of a custom SDF leaf (GLSL). */
 inline const char* DEFAULT_CUSTOM_SDF =
     "// Signed distance in the object's local 4D space.\n"
-    "// Helpers: opExtrude(d, h), sU/sI/sS(a, b, k) smooth booleans, INF.\n"
+    "// Helpers: opExtrude(d, h), opRadial(v, r, n, start, step), sU/sI/sS(a, b, k) smooth booleans, INF.\n"
     "float sdf(vec4 p) {\n"
     "  // a hypersphere of radius 1 with a wavy surface\n"
     "  return length(p) - 1.0 + 0.05 * sin(8.0 * p.x) * sin(8.0 * p.y);\n"

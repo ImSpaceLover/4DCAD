@@ -652,10 +652,16 @@ void UI::propertiesPanel() {
     if (ImGui::SmallButton("x")) remove = (int)i;
     ImGui::Indent(10);
     switch (m.type) {
-      case MOD_MIRROR:
+      case MOD_MIRROR: {
         ImGui::SetNextItemWidth(60);
         if (ImGui::Combo("Axis", &m.axis, axn, 4)) done = true;
+        float off = (float)m.offset;
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragFloat("Offset", &off, 0.02f, 0.f, 100.f)) m.offset = std::max(0.f, off);
+        track();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distance of the shape and of its mirror image from the mirror plane");
         break;
+      }
       case MOD_REPEAT: {
         ImGui::SetNextItemWidth(60);
         if (ImGui::Combo("Axis", &m.axis, axn, 4)) done = true;
@@ -698,17 +704,33 @@ void UI::propertiesPanel() {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Radius of revolution: 0 = around the centre (disk/sphere), > 0 = torus-like");
         break;
       }
-      case MOD_ROTATE: {
-        std::string pl = std::string(1, AXIS[m.i]) + AXIS[m.j];
-        ImGui::SetNextItemWidth(70);
-        if (ImGui::BeginCombo("Plane", pl.c_str())) {
+      case MOD_RADIAL: {
+        // planes of rotation; the 3D ones are named by the axis they turn around
+        static const char* PLANE_LABELS[6] = {"XY (around Z)", "XZ (around Y)", "XW", "YZ (around X)", "YW", "ZW"};
+        int cur = -1;
+        for (int p = 0; p < 6; p++) if ((m.i == PLANES[p][0] && m.j == PLANES[p][1]) || (m.i == PLANES[p][1] && m.j == PLANES[p][0])) cur = p;
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::BeginCombo("Plane", cur >= 0 ? PLANE_LABELS[cur] : "?")) {
           for (int p = 0; p < 6; p++)
-            if (ImGui::Selectable(PLANE_NAMES[p], m.i == PLANES[p][0] && m.j == PLANES[p][1])) { m.i = PLANES[p][0]; m.j = PLANES[p][1]; done = true; }
+            if (ImGui::Selectable(PLANE_LABELS[p], p == cur)) { m.i = PLANES[p][0]; m.j = PLANES[p][1]; done = true; }
           ImGui::EndCombo();
         }
-        float an = (float)m.angle;
+        float R = (float)m.radius, an = (float)m.angle, st = (float)m.startAngle;
         ImGui::SetNextItemWidth(120);
-        if (ImGui::DragFloat("Angle", &an, 0.5f)) m.angle = an;
+        if (ImGui::DragFloat("Radius", &R, 0.02f, 0.f, 100.f)) m.radius = std::max(0.f, R);
+        track();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distance of the copies from the axis");
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragInt("Copies", &m.count, 0.1f, 1, 360)) m.count = std::max(1, m.count);
+        track();
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragFloat("Angle step", &an, 0.5f, 0.1f, 360.f, "%.1f deg")) m.angle = std::clamp(an, 0.1f, 360.f);
+        track();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Angle between neighbouring copies (copies x step may be less than 360)");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Fill 360")) { m.angle = 360.0 / std::max(1, m.count); done = true; }
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragFloat("Start angle", &st, 0.5f, -360.f, 360.f, "%.1f deg")) m.startAngle = st;
         track();
         break;
       }
@@ -722,12 +744,13 @@ void UI::propertiesPanel() {
   if (ImGui::Button("+ Add modifier")) ImGui::OpenPopup("addmod");
   if (ImGui::BeginPopup("addmod")) {
     auto add = [&](int type, const char* label, const char* tip) {
-      if (ImGui::MenuItem(label)) { Modifier m; m.type = type; if (type == MOD_REVOLVE) { m.axis = -1; m.radius = 0; } n->mods.push_back(m); done = true; modOp = {ModStackOp::Add, -1, m}; }
+      if (ImGui::MenuItem(label)) { Modifier m; m.type = type; if (type == MOD_REVOLVE) { m.axis = -1; m.radius = 0; }
+        if (type == MOD_RADIAL) { m.i = 0; m.j = 2; m.radius = 2; m.count = 6; m.angle = 60; m.startAngle = 0; } n->mods.push_back(m); done = true; modOp = {ModStackOp::Add, -1, m}; }
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
     };
     add(MOD_EXTRUDE, "Extrude", "Adds the next axis: sweeps the shape along it (finite, infinite or half-space)");
     add(MOD_REVOLVE, "Revolve", "Adds the next axis: spins an existing axis into it at a radius");
-    add(MOD_ROTATE, "Rotate", "Rotates the shape built so far within one plane (e.g. before a Revolve)");
+    add(MOD_RADIAL, "Radial repeat", "Copies the shape built so far around an axis: radius, number of copies, angle between them");
     add(MOD_MIRROR, "Mirror", "Mirrors the shape built so far across an axis");
     add(MOD_REPEAT, "Repeat", "Repeats the shape built so far along an axis");
     ImGui::EndPopup();
@@ -1085,7 +1108,7 @@ void UI::sdfWindow() {
   }
   ImGui::SameLine();
   ImGui::TextDisabled("(?)");
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shapes are a point + modifiers; this is the equivalent GLSL.\nCustom SDFs can use: opExtrude(d, h), sU/sI/sS(a, b, k), INF.");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shapes are a point + modifiers; this is the equivalent GLSL.\nCustom SDFs can use: opExtrude(d, h), opRadial(v, r, n, start, step), sU/sI/sS(a, b, k), INF.");
   ImGui::InputTextMultiline("##sdf", code.data(), code.size() + 1, {-1, -1}, ImGuiInputTextFlags_ReadOnly);
   ImGui::End();
 }
@@ -1145,7 +1168,7 @@ void UI::helpWindow() {
   ImGui::BulletText("Several objects selected: Properties edits all of them (position / rotation / scale relatively). Groups take their first object as origin");
   ImGui::BulletText("Click: select the object | Ctrl+click: its group | Shift+click: multi | A all | Esc none | Shift+D duplicate | X/Del delete | Ctrl+G group | F focus");
   ImGui::BulletText("Properties > View SDF code shows any object as GLSL; Custom SDF objects (4D shapes folder) take your own GLSL");
-  ImGui::BulletText("Shapes are a point plus modifiers: Extrude / Revolve add the next axis (X, Y, Z, W); Rotate, Mirror, Repeat reshape");
+  ImGui::BulletText("Shapes are a point plus modifiers: Extrude / Revolve add the next axis (X, Y, Z, W); Mirror, Repeat, Radial repeat copy it");
   ImGui::SeparatorText("Explore (game-like)");
   ImGui::BulletText("Edit and Explore share one camera: switching never moves you. Click to capture the mouse, Esc releases (again: back to Edit)");
   ImGui::BulletText("WASD, Space/Shift up/down, wheel = speed. Full 4D: Q/E along W, Z/X turn into W, C/V sideways in W, R reset");

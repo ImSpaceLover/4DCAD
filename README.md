@@ -89,8 +89,8 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 * **Shapes are a point plus modifiers.** The modifier stack is applied top to bottom and works on any object or group:
   * **Extrude**: adds the next axis (X → Y → Z → W). Finite length, infinite, or half-space.
   * **Revolve**: adds the next axis by spinning an existing axis into it at a radius. R = 0 makes a disk/sphere; R > 0 makes a torus-like shape.
-  * **Rotate**: rotates the shape built so far within a plane (useful before a Revolve).
-  * **Mirror** and **Repeat** (spacing, copies; 0 = infinite).
+  * **Mirror** (axis, **offset**: the shape and its mirror image sit that far from the mirror plane) and **Repeat** (spacing, copies; 0 = infinite).
+  * **Radial repeat**: copies the shape around an axis (a plane of rotation in 4D), with a **radius** (distance from the axis), number of **copies**, **angle step** between them and a **start angle**. Copies × step may be less than 360° (an arc); "Fill 360" spreads them around the full circle. One copy at radius 0 just rotates the shape. (It replaces the old Rotate modifier; files using Rotate load as a one-copy Radial repeat with the same result.)
 
   Examples: Point → Extrude → Extrude → Extrude → Extrude is a tesseract. Point → Extrude → Revolve → Extrude (infinite) is an infinite rod. A whole group can be extruded or revolved into the next dimension.
 * **Library** (left):
@@ -107,7 +107,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 * **Materials** (Properties): colour, **rounding** (inflates the solid, rounding its edges), **shell** (hollows it into a skin of that half-thickness), **emissive** (always fully lit, casts no shadow, does not light other objects), and a **procedural 4D texture** (checker, stripes, grid, noise, rings) with a second colour, scale and strength. Textures are solid 4D textures in the object's local space, so they move and rotate with it.
 * **SDF code:** Properties > **View SDF code** shows any object (shape, group, whole tree) as a self-contained GLSL `float sdf(vec4 p)`. "Create editable custom SDF from it" turns it into a custom object.
 * **Custom SDFs:** the "Custom SDF (GLSL)" item (4D shapes folder) holds your own GLSL defining `float sdf(vec4 p)` in the object's local 4D space.
-  * You can write helper functions, and use `opExtrude(d, h)`, `sU / sI / sS(a, b, k)` and `INF`.
+  * You can write helper functions, and use `opExtrude(d, h)`, `opRadial(v, r, n, start, step)`, `sU / sI / sS(a, b, k)` and `INF`.
   * "Apply code" test-compiles it and shows compiler errors. Code that does not compile is drawn as its bounding box.
   * Set **Bound** so the shape fits inside it. The renderer uses it to skip far-away work, and on the CPU clicking, collisions and placement treat the shape as that box.
   * Custom SDFs combine with booleans and modifiers like any other object.
@@ -166,7 +166,7 @@ tests/                        core and app-level unit tests (ctest)
   node has `xf: {pos[4], rotm[16], scale}`, `modifiers`, an optional `anchor`,
   and either leaf fields or group fields.
   * Leaves: `prim` (always `point`; older files with other primitive types are converted), `color`, `thickness`, `round`, `shell`.
-  * `modifiers`: a list of `{type: extrude|revolve|rotate|mirror|repeat, ...}`, applied in order.
+  * `modifiers`: a list of `{type: extrude|revolve|radial|mirror|repeat, ...}`, applied in order (old `rotate` entries load as `radial`).
   * Groups: `op`, `k`, `children`.
   * Custom primitives are embedded in the file.
   * Files from the earlier browser version (6 rotation angles) still load.

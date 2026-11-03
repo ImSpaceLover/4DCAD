@@ -14,16 +14,35 @@ Role nodeRole(const Node& n, EvalCtx ctx, const std::string& activeWorld, const 
   return Role::Normal;
 }
 
+double radialCopyAngle(const Modifier& m, double a) {
+  // angle (radians) of the radial copy nearest to the polar angle a; copies at start + k * step
+  int n = std::max(1, m.count);
+  double start = m.startAngle * PI / 180, step = m.angle * PI / 180;
+  auto wrapd = [](double x) { x = std::fmod(x + PI, 2 * PI); if (x < 0) x += 2 * PI; return std::abs(x - PI); };
+  double rel = std::fmod(a - start, 2 * PI);
+  if (rel < 0) rel += 2 * PI;
+  int k0 = std::abs(step) > 1e-9 ? (int)clampd(std::floor(rel / step), 0, n - 1) : 0;
+  int cand[4] = {k0, std::min(k0 + 1, n - 1), 0, n - 1};
+  double best = 1e9, out = start;
+  for (int k : cand) {
+    double ang = start + k * step, dd = wrapd(a - ang);
+    if (dd < best) { best = dd; out = ang; }
+  }
+  return out;
+}
+
 void applyModifier(V4& q, const Modifier& m) {
-  if (m.type == MOD_MIRROR) q[m.axis] = std::abs(q[m.axis]);
+  if (m.type == MOD_MIRROR) q[m.axis] = std::abs(q[m.axis]) - m.offset;
   else if (m.type == MOD_REPEAT) {
     if (m.spacing <= 0) return;
     double r = std::floor(q[m.axis] / m.spacing + 0.5);
     if (m.count > 0) r = clampd(r, -m.count, m.count);
     q[m.axis] -= m.spacing * r;
-  } else if (m.type == MOD_ROTATE && m.i != m.j) {
-    double ang = -m.angle * PI / 180, ci = q[m.i], cj = q[m.j];
-    q[m.i] = std::cos(ang) * ci - std::sin(ang) * cj;
+  } else if (m.type == MOD_RADIAL && m.i != m.j) {
+    // rotate the nearest copy back onto the axis direction, then remove the radial offset
+    double ci = q[m.i], cj = q[m.j];
+    double ang = -radialCopyAngle(m, (ci == 0 && cj == 0) ? 0 : std::atan2(cj, ci));
+    q[m.i] = std::cos(ang) * ci - std::sin(ang) * cj - m.radius;
     q[m.j] = std::sin(ang) * ci + std::cos(ang) * cj;
   }
 }
@@ -117,10 +136,11 @@ std::unordered_map<std::string, Bound> computeBounds(const Node& root, const Pri
     for (size_t k = 0; k < n.mods.size(); k++) {
       auto& m = n.mods[k];
       if (!ax[k].valid) continue;
-      if (m.type == MOD_REPEAT) e[m.axis] = m.count > 0 ? e[m.axis] + m.count * m.spacing : INFINITY;
+      if (m.type == MOD_MIRROR) e[m.axis] += m.offset;
+      else if (m.type == MOD_REPEAT) e[m.axis] = m.count > 0 ? e[m.axis] + m.count * m.spacing : INFINITY;
       else if (m.type == MOD_EXTRUDE) e[ax[k].newAxis] = m.mode == ExtrudeMode::Finite ? m.length / 2 : INFINITY;
       else if (m.type == MOD_REVOLVE) { double v = m.radius + e[ax[k].srcAxis]; e[ax[k].srcAxis] = v; e[ax[k].newAxis] = v; }
-      else if (m.type == MOD_ROTATE) { double v = std::hypot(e[m.i], e[m.j]); e[m.i] = v; e[m.j] = v; }
+      else if (m.type == MOD_RADIAL) { double v = m.radius + std::hypot(e[m.i], e[m.j]); e[m.i] = v; e[m.j] = v; }
     }
     double r = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2] + e[3] * e[3]);
     if (n.isLeaf()) {
@@ -215,11 +235,13 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
       for (int a = 0; a < 4; a++) { e[a] = std::abs(q[a]) - n.codeBound; o += std::max(e[a], 0.0) * std::max(e[a], 0.0); in = std::max(in, e[a]); }
       d = std::sqrt(o) + std::min(in, 0.0);
     } else d = evalPrimitive(*pr.prim, q);
-    for (int a = pr.dim; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
     d = modifierDistance(n, pr.axes, d, t);
+    // shell / rounding act on the object's own shape, before it gets its thickness along
+    // the unused axes (otherwise they would act on that thin 4D slab instead)
     double shell = n.shell.value_or(0.0);
     if (shell > 0) d = std::abs(d) - shell;
     d -= n.round.value_or(0.0);
+    for (int a = pr.dim; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
     r = {d, n.color, &n};
   } else {
     bool first = true;

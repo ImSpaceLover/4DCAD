@@ -228,6 +228,73 @@ int main() {
     CLOSE(length(c2.view().eye - v.eye), 0, 1e-9);
   }
 
+  // shell / rounding act on a thin object's own shape (not on its 4D slab)
+  {
+    Node cube = makeShape("cube", "c");  // 3D, thickness 0.1, half size 1
+    cube.shell = 0.2;
+    Node r = makeGroup(BoolOp::Union, {cube});
+    SceneEvaluator ev(r, reg, "");
+    CHECK(ev.evalFull({0, 0, 0, 0}).d > 0.5, "shelled cube is hollow: %.3f", ev.evalFull({0, 0, 0, 0}).d);
+    CHECK(ev.evalFull({0.9, 0, 0, 0}).d < 0, "shelled cube has a skin");
+    CLOSE(ev.evalFull({0.9, 0, 0, 0.5}).d, 0.45, 1e-6);  // slab thickness unchanged: still 0.1 in W
+    Node c2 = makeShape("cube", "c2");
+    c2.round = -0.06;  // more than half the thickness: used to delete the object
+    Node r2 = makeGroup(BoolOp::Union, {c2});
+    SceneEvaluator ev2(r2, reg, "");
+    CHECK(ev2.evalFull({0, 0, 0, 0}).d < 0, "negative rounding shrinks, keeps the object");
+    CLOSE(ev2.evalFull({1.5, 0, 0, 0}).d, 0.56, 1e-6);
+  }
+  // mirror offset
+  {
+    Node s = makeShape("sphere", "s");  // radius 1
+    Modifier m; m.type = MOD_MIRROR; m.axis = 0; m.offset = 3;
+    s.mods.push_back(m);
+    Node r = makeGroup(BoolOp::Union, {s});
+    SceneEvaluator ev(r, reg, "");
+    CLOSE(ev.evalFull({3, 0, 0, 0}).d, -0.05, 1e-9);
+    CLOSE(ev.evalFull({-3, 0, 0, 0}).d, -0.05, 1e-9);
+    CLOSE(ev.evalFull({0, 0, 0, 0}).d, 2, 1e-9);
+  }
+  // radial repeat: full ring, partial arc, single copy = rotation
+  {
+    auto radial = [&](int count, double step, double start, double radius) {
+      Node s = makeShape("sphere", "s");
+      s.xf.scale = 0.5;
+      Node g = makeGroup(BoolOp::Union, {s});
+      Modifier m; m.type = MOD_RADIAL; m.i = 0; m.j = 2; m.count = count; m.angle = step; m.startAngle = start; m.radius = radius;
+      g.mods.push_back(m);
+      return makeGroup(BoolOp::Union, {g});
+    };
+    auto at = [](double deg, double r) { double a = deg * PI / 180; return V4{r * std::cos(a), 0, r * std::sin(a), 0}; };
+    Node ring = radial(4, 90, 0, 2);
+    SceneEvaluator ev(ring, reg, "");
+    for (double d : {0.0, 90.0, 180.0, 270.0}) CHECK(ev.evalFull(at(d, 2)).d < 0, "ring copy at %.0f", d);
+    CHECK(ev.evalFull(at(45, 2)).d > 0.5, "gap between copies");
+    Node arc = radial(3, 60, 0, 2);
+    SceneEvaluator ev2(arc, reg, "");
+    for (double d : {0.0, 60.0, 120.0}) CHECK(ev2.evalFull(at(d, 2)).d < 0, "arc copy at %.0f", d);
+    CHECK(ev2.evalFull(at(240, 2)).d > 1, "no copy outside the arc");
+    CHECK(ev2.evalFull(at(-60, 2)).d > 0.5, "no copy before the start");
+    // one copy, radius 0 = rotation of the shape (an off-centre sphere ends up rotated by 30 degrees)
+    Node s = makeShape("sphere", "s");
+    s.xf.scale = 0.5;
+    s.xf.pos = {2, 0, 0, 0};
+    Node g = makeGroup(BoolOp::Union, {s});
+    Modifier m; m.type = MOD_RADIAL; m.i = 0; m.j = 2; m.count = 1; m.startAngle = 30; m.radius = 0;
+    g.mods.push_back(m);
+    Node r3 = makeGroup(BoolOp::Union, {g});
+    SceneEvaluator ev3(r3, reg, "");
+    CHECK(ev3.evalFull(at(30, 2)).d < 0 && ev3.evalFull(at(0, 2)).d > 0, "single copy rotates");
+    // legacy "rotate" modifiers load as the same rotation
+    Node legacy = nodeFromJson(R"({"id":"a","name":"a","kind":"leaf","prim":"point","modifiers":[{"type":"rotate","i":0,"j":2,"angle":30}]})");
+    CHECK(legacy.mods.size() == 1 && legacy.mods[0].type == MOD_RADIAL && legacy.mods[0].count == 1 && legacy.mods[0].radius == 0 &&
+              std::abs(legacy.mods[0].startAngle - 30) < 1e-12, "legacy rotate -> radial");
+    // JSON round trip of the new fields
+    Node rt = nodeFromJson(nodeToJson(ring));
+    const Modifier& q = rt.children[0].mods[0];
+    CHECK(q.type == MOD_RADIAL && q.count == 4 && std::abs(q.angle - 90) < 1e-12 && std::abs(q.radius - 2) < 1e-12, "radial round trip");
+  }
+
   // frame conversions: compose / relative round trip
   {
     Transform P; P.pos = {1, -2, 0.5, 3}; P.rot = mul(planeRotation(0, 3, 0.7), planeRotation(1, 2, -0.4)); P.scale = 2;

@@ -193,6 +193,8 @@ void propagateEdit(const Node& B, const Node& A, Node& T, bool stacksMatch, cons
     ch(b.i, a.i, t.i);
     ch(b.j, a.j, t.j);
     ch(b.angle, a.angle, t.angle);
+    ch(b.offset, a.offset, t.offset);
+    ch(b.startAngle, a.startAngle, t.startAngle);
   }
 }
 
@@ -247,7 +249,7 @@ std::vector<ModAxis> modifierAxes(const Node& n, const PrimitiveRegistry& reg) {
         if (m.type == MOD_REVOLVE) a.srcAxis = (m.axis < 0 || m.axis >= dim) ? dim - 1 : m.axis;
         dim++;
       }
-    } else if (m.type == MOD_ROTATE) a.valid = m.i != m.j;
+    } else if (m.type == MOD_RADIAL) a.valid = m.i != m.j;
     out.push_back(a);
   }
   return out;
@@ -285,7 +287,7 @@ std::vector<Modifier> stepsToModifiers(const std::vector<Step>& steps) {
     Modifier m;
     if (s.op == StepOp::Extrude) { m.type = MOD_EXTRUDE; m.mode = s.mode; m.length = s.length; }
     else if (s.op == StepOp::Revolve) { m.type = MOD_REVOLVE; m.radius = s.radius; m.axis = s.axis; }
-    else { m.type = MOD_ROTATE; m.i = s.i; m.j = s.j; m.angle = s.angle; }
+    else { m.type = MOD_RADIAL; m.i = s.i; m.j = s.j; m.count = 1; m.radius = 0; m.startAngle = s.angle; }  // old rotate step
     mods.push_back(m);
   }
   return mods;
@@ -336,17 +338,17 @@ static PrimitiveDef jPrim(const json& j) {
 
 static json modJ(const Modifier& m) {
   switch (m.type) {
-    case MOD_MIRROR: return {{"type", "mirror"}, {"axis", m.axis}};
+    case MOD_MIRROR: return {{"type", "mirror"}, {"axis", m.axis}, {"offset", m.offset}};
     case MOD_REPEAT: return {{"type", "repeat"}, {"axis", m.axis}, {"spacing", m.spacing}, {"count", m.count}};
     case MOD_EXTRUDE: return {{"type", "extrude"}, {"mode", modeName(m.mode)}, {"length", m.length}};
     case MOD_REVOLVE: return {{"type", "revolve"}, {"radius", m.radius}, {"axis", m.axis}};
-    default: return {{"type", "rotate"}, {"i", m.i}, {"j", m.j}, {"angle", m.angle}};
+    default: return {{"type", "radial"}, {"i", m.i}, {"j", m.j}, {"radius", m.radius}, {"count", m.count}, {"angle", m.angle}, {"startAngle", m.startAngle}};
   }
 }
 static Modifier jMod(const json& mj) {
   Modifier m;
   std::string t = mj.value("type", std::string("mirror"));
-  m.type = t == "repeat" ? MOD_REPEAT : t == "extrude" ? MOD_EXTRUDE : t == "revolve" ? MOD_REVOLVE : t == "rotate" ? MOD_ROTATE : MOD_MIRROR;
+  m.type = t == "repeat" ? MOD_REPEAT : t == "extrude" ? MOD_EXTRUDE : t == "revolve" ? MOD_REVOLVE : (t == "radial" || t == "rotate") ? MOD_RADIAL : MOD_MIRROR;
   m.axis = std::clamp(mj.value("axis", m.type == MOD_REVOLVE ? -1 : 0), -1, 3);
   if (m.type != MOD_REVOLVE && m.axis < 0) m.axis = 0;
   m.spacing = mj.value("spacing", 3.0);
@@ -356,7 +358,16 @@ static Modifier jMod(const json& mj) {
   m.radius = mj.value("radius", 0.0);
   m.i = std::clamp(mj.value("i", 0), 0, 3);
   m.j = std::clamp(mj.value("j", 1), 0, 3);
-  m.angle = mj.value("angle", 45.0);
+  m.angle = mj.value("angle", 60.0);
+  m.offset = std::max(0.0, mj.value("offset", 0.0));
+  m.startAngle = mj.value("startAngle", 0.0);
+  if (t == "rotate") {  // the removed Rotate modifier: one radial copy at its angle (same shape)
+    m.count = 1;
+    m.radius = 0;
+    m.startAngle = mj.value("angle", 45.0);
+    m.angle = 60;
+  }
+  if (m.type == MOD_RADIAL) m.count = std::max(1, m.count);
   return m;
 }
 
