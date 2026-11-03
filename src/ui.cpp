@@ -61,6 +61,8 @@ void UI::onKey(int key, int action, int mods) {
   if (P(Action::SaveAs)) { fileAction(2); return; }
   if (P(Action::Open)) { guarded([this] { fileAction(1); }); return; }
   if (P(Action::New)) { guarded([this] { app.newScene(); }); return; }
+  if (P(Action::Copy)) { copy(); return; }
+  if (P(Action::Paste)) { paste(); return; }
   app.handleKey(key, shift, ctrl, alt);
 }
 
@@ -132,6 +134,18 @@ void UI::saveScene() {
 }
 
 void UI::requestQuit() { guarded([this] { exitNow = true; }); }
+
+void UI::copy() {
+  std::string s = app.copySelection();
+  if (s.empty()) return;
+  glfwSetClipboardString(win_, s.c_str());
+  app.toast("Copied " + std::to_string(app.selection.size()) + " object(s)");
+}
+
+void UI::paste() {
+  const char* s = glfwGetClipboardString(win_);
+  if (!s || !app.pasteNodes(s)) app.toast("The clipboard holds no 4DCAD objects", true);
+}
 
 void UI::recoveryPrompt() {
   if (app.pendingRecovery && !ImGui::IsPopupOpen("Recover unsaved work?")) ImGui::OpenPopup("Recover unsaved work?");

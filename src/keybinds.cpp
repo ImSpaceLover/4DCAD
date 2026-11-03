@@ -30,7 +30,9 @@ static const ActionInfo INFO[(int)Action::Count] = {
     {"scale", "Scale (S)", "Edit", false},
     {"delete", "Delete", "Edit", false},
     {"duplicate", "Duplicate", "Edit", false},
+    {"duplicateLinked", "Duplicate linked", "Edit", false},
     {"group", "Group selection", "Edit", false},
+    {"isolate", "Isolate selection / show all", "Edit", false},
     {"focus", "Focus selection", "Edit", false},
     {"deselect", "Deselect", "Edit", false},
     {"selectAll", "Select all", "Edit", false},
@@ -93,6 +95,8 @@ void KeyBindings::resetDefaults() {
   set(Action::Scale, K(GLFW_KEY_S));
   set(Action::Delete, K(GLFW_KEY_X), K(GLFW_KEY_DELETE));
   set(Action::Duplicate, S(GLFW_KEY_D));
+  set(Action::DuplicateLinked, KeyCombo{GLFW_KEY_D, false, false, true});
+  set(Action::Isolate, K(GLFW_KEY_I), K(GLFW_KEY_KP_DIVIDE));
   set(Action::Group, C(GLFW_KEY_G));
   set(Action::Focus, K(GLFW_KEY_F), K(GLFW_KEY_KP_DECIMAL));
   set(Action::Deselect, K(GLFW_KEY_ESCAPE));

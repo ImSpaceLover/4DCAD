@@ -54,6 +54,17 @@ void UI::propertiesPanel() {
   ImGui::TextDisabled("%dD %s", dim, n->isCustom() ? "custom SDF" : n->isLeaf() ? "shape (point + modifiers)" : "group");
   ImGui::SameLine();
   if (ImGui::SmallButton("View SDF code")) { showSdf_ = true; sdfNodeId_ = n->id; }
+  if (!isRoot) {
+    if (ImGui::Checkbox("Locked", &n->locked)) done = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Cannot be clicked or moved in the viewport (still editable here)");
+    if (!n->linkId.empty()) {
+      ImGui::SameLine();
+      ImGui::TextColored({0.55f, 0.8f, 1, 1}, "Linked (%d copies)", app.linkCount(n->linkId));
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shape, material, modifiers and contents are shared: editing one edits all.\nEach copy keeps its own position, rotation and scale.");
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Unlink")) { app.unlink(nid); ImGui::End(); return; }
+    }
+  }
 
   if (n->isLeaf()) {
     ImGui::SeparatorText("Shape");

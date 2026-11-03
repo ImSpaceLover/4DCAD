@@ -80,6 +80,8 @@ struct Node {
   Transform xf;
   std::vector<Modifier> mods;
   bool hidden = false;
+  bool locked = false;   // cannot be selected / moved in the viewport
+  std::string linkId;    // linked duplicates share one: editing one edits all (except their own transform)
   std::optional<Anchor> anchor;
   // leaf
   std::string prim;
@@ -203,7 +205,17 @@ std::vector<std::pair<int, std::string>> modifierProblems(const Node& n, const P
 std::vector<Modifier> stepsToModifiers(const std::vector<Step>& steps);
 Node nodeFromPrimitive(const PrimitiveDef& p, const std::string& name);
 
+/** A saved camera position (Full 4D camera, plus the Geodesic camera if it was used). */
+struct CameraBookmark {
+  std::string name;
+  CameraState cam;
+  bool geo = false;
+  V4 geoPivot{0, 0, 0, 0};
+  M4 geoFrame = identity();
+};
+
 struct SceneFile {
+  std::vector<CameraBookmark> bookmarks;
   Node root;
   std::vector<PrimitiveDef> primitives;
   std::string world;  // empty = none
@@ -225,7 +237,22 @@ struct LibraryFolder {
 std::vector<LibraryFolder> builtinFolders();
 
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
-std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam);
+std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
+                        const std::vector<CameraBookmark>* bookmarks = nullptr);
+std::string bookmarksToJson(const std::vector<CameraBookmark>& b);
+std::vector<CameraBookmark> bookmarksFromJson(const std::string& text);
+
+// ---- linked duplicates ----
+/** The shared part of a linked node (shape, material, modifiers, children), without ids,
+ *  the node's own transform, name, visibility, lock or anchor. Equal strings = same definition. */
+std::string linkDefinition(const Node& n);
+/** Copies src's definition onto dst, keeping dst's ids where the structure matches. */
+void copyDefinition(Node& dst, const Node& src);
+/** Makes every linked group consistent: for each linkId, the member whose definition changed
+ *  since `defs` (last known definitions) is copied to the others. Returns true if anything changed. */
+bool syncLinks(Node& root, std::map<std::string, std::string>& defs);
+/** Records the current definitions (after loading / undo). */
+void recordLinks(Node& root, std::map<std::string, std::string>& defs);
 SceneFile sceneFromJson(const std::string& text);
 std::string nodeToJson(const Node& n);  // compact snapshot (undo)
 Node nodeFromJson(const std::string& text);

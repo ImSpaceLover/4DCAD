@@ -144,6 +144,23 @@ class App {
   std::unordered_set<std::string> highlightSet();
   void deleteSelection();
   void duplicateSelection();
+  /** Linked duplicates: the copies share their definition (editing one edits all). */
+  void duplicateLinked();
+  void unlink(const std::string& id);
+  int linkCount(const std::string& linkId);
+  /** Clipboard text (JSON) of the selected objects, with their world transforms. */
+  std::string copySelection();
+  /** Adds objects from clipboard text to the scene root (new ids); false if it is not 4DCAD data. */
+  bool pasteNodes(const std::string& text);
+  bool isLocked(const std::string& id);  // the node or an ancestor is locked
+  // Isolate (view only, not saved): only these objects (and the world) are drawn and pickable
+  std::unordered_set<std::string> isolate;
+  void toggleIsolate();
+  // camera bookmarks (saved in the scene)
+  std::vector<CameraBookmark> bookmarks;
+  void addBookmark(const std::string& name = "");
+  void gotoBookmark(size_t i);
+  void updateBookmark(size_t i);
   void groupSelection(BoolOp op);
   void ungroup(const std::string& id);
   /** Moves a group's origin to its first object, without moving anything. */
@@ -214,6 +231,8 @@ class App {
  private:
   std::vector<std::string> history_, future_;
   std::string committed_, saved_, autosaved_;
+  std::map<std::string, std::string> linkDefs_;  // last known definition of each linked group
+  Node viewRoot_;                                 // the tree as drawn while isolating
   double lastAutosave_ = 0;
   std::vector<std::string> selectionAtPress_;
   int version_ = 0;

@@ -96,16 +96,22 @@ void App::toast(const std::string& msg, bool error) {
 }
 
 // ============================================================ scene lifecycle
-std::string App::snapshot() { return world + "\n" + nodeToJson(root); }
+// undo snapshot: world id, bookmarks, scene tree (one line each)
+std::string App::snapshot() { return world + "\n" + bookmarksToJson(bookmarks) + "\n" + nodeToJson(root); }
 void App::restore(const std::string& s) {
-  auto nl = s.find('\n');
+  auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1);
   world = s.substr(0, nl);
-  root = nodeFromJson(s.substr(nl + 1));
+  bookmarks = bookmarksFromJson(s.substr(nl + 1, nl2 - nl - 1));
+  root = nodeFromJson(s.substr(nl2 + 1));
+  recordLinks(root, linkDefs_);
 }
 
 void App::loadScene(SceneFile f) {
   root = std::move(f.root);
   world = (!f.world.empty() && findNode(root, f.world)) ? f.world : "";
+  bookmarks = std::move(f.bookmarks);
+  recordLinks(root, linkDefs_);
+  isolate.clear();
   selection.clear();
   if (f.camera) editCam.load(*f.camera);
   mode = Mode::Edit;
@@ -140,7 +146,7 @@ bool App::loadSceneFile(const std::string& path, std::string& err) {
 
 std::string App::serialize() {
   CameraState cs = editCam.save();
-  return sceneToJson(root, reg, world, &cs);
+  return sceneToJson(root, reg, world, &cs, &bookmarks);
 }
 
 bool App::saveSceneFile(const std::string& path, std::string& err) {
@@ -162,7 +168,21 @@ void App::rebuild() {
   version_++;
   lastChange_ = now;
   if (!world.empty() && !findNode(root, world)) world.clear();
-  ev = std::make_unique<SceneEvaluator>(root, reg, world);
+  syncLinks(root, linkDefs_);  // an edit of one linked duplicate reaches the others
+  // Isolate (view only): a copy of the tree with everything else hidden; picking and drawing use it
+  for (auto it = isolate.begin(); it != isolate.end();) it = findNode(root, *it) ? std::next(it) : isolate.erase(it);
+  if (!isolate.empty()) {
+    viewRoot_ = root;
+    std::unordered_set<std::string> keep;
+    for (auto& id : isolate) {
+      for (Node* n : pathTo(root, id)) keep.insert(n->id);           // ancestors (their transforms)
+      if (Node* n = findNode(root, id)) walk(*n, [&](Node& m, Node*, int) { keep.insert(m.id); });
+    }
+    if (!world.empty()) for (Node* n : pathTo(root, world)) keep.insert(n->id);
+    if (Node* w = world.empty() ? nullptr : findNode(root, world)) walk(*w, [&](Node& m, Node*, int) { keep.insert(m.id); });
+    walk(viewRoot_, [&](Node& m, Node*, int) { if (!keep.count(m.id)) m.hidden = true; });
+  }
+  ev = std::make_unique<SceneEvaluator>(isolate.empty() ? root : viewRoot_, reg, world);
 }
 
 void App::commit() {
@@ -222,6 +242,7 @@ void App::duplicateSelection() {
     if (!p || !n) continue;
     Node c = cloneFresh(*n);
     c.name += " copy";
+    c.linkId.clear();  // a plain copy is independent (Duplicate linked keeps the link)
     size_t i = 0;
     while (i < p->children.size() && p->children[i].id != id) i++;
     out.push_back(c.id);
@@ -230,6 +251,109 @@ void App::duplicateSelection() {
   selection = out;
   commit();
   if (!out.empty()) startModal(Modal::Grab);
+}
+
+void App::duplicateLinked() {
+  std::vector<std::string> out;
+  for (auto& id : selection) {
+    Node* p = findParent(root, id);
+    Node* n = findNode(root, id);
+    if (!p || !n) continue;
+    if (n->linkId.empty()) n->linkId = newId("l");
+    Node c = cloneFresh(*n);  // keeps the link id
+    c.name += " (linked)";
+    size_t i = 0;
+    while (i < p->children.size() && p->children[i].id != id) i++;
+    out.push_back(c.id);
+    p->children.insert(p->children.begin() + i + 1, std::move(c));
+  }
+  selection = out;
+  commit();
+  if (!out.empty()) startModal(Modal::Grab);
+}
+
+void App::unlink(const std::string& id) {
+  if (Node* n = findNode(root, id)) { n->linkId.clear(); commit(); }
+}
+
+int App::linkCount(const std::string& linkId) {
+  int c = 0;
+  if (!linkId.empty()) walk(root, [&](Node& n, Node*, int) { if (n.linkId == linkId) c++; });
+  return c;
+}
+
+std::string App::copySelection() {
+  nlohmann::json j = {{"format", "4dcad-clipboard"}, {"nodes", nlohmann::json::array()}};
+  for (auto& id : selection) {
+    Node* n = findNode(root, id);
+    if (!n || id == root.id) continue;
+    bool covered = false;
+    for (auto& o : selection) if (o != id && isAncestor(root, o, id)) covered = true;
+    if (covered) continue;  // copied with its parent
+    Node c = *n;
+    if (auto w = worldXf(root, id)) c.xf = *w;  // pasted at the scene root: same place in the world
+    j["nodes"].push_back(nlohmann::json::parse(nodeToJson(c)));
+  }
+  return j["nodes"].empty() ? "" : j.dump();
+}
+
+bool App::pasteNodes(const std::string& text) {
+  nlohmann::json j;
+  try { j = nlohmann::json::parse(text); } catch (...) { return false; }
+  if (!j.is_object() || j.value("format", std::string()) != "4dcad-clipboard" || !j.contains("nodes")) return false;
+  std::vector<std::string> out;
+  for (auto& nj : j["nodes"]) {
+    Node n;
+    try { n = cloneFresh(nodeFromJson(nj.dump())); } catch (...) { continue; }
+    // links and anchors refer to this scene only when their target exists here
+    walk(n, [&](Node& m, Node*, int) {
+      if (m.anchor && !findNode(root, m.anchor->world)) m.anchor.reset();
+      if (!m.linkId.empty() && linkCount(m.linkId) == 0) m.linkId.clear();
+    });
+    out.push_back(n.id);
+    root.children.push_back(std::move(n));
+  }
+  if (out.empty()) return false;
+  selection = out;
+  commit();
+  return true;
+}
+
+void App::toggleIsolate() {
+  if (!isolate.empty()) isolate.clear();
+  else for (auto& id : selection) if (id != root.id) isolate.insert(id);
+  rebuild();
+}
+
+void App::addBookmark(const std::string& name) {
+  CameraBookmark b;
+  b.name = name.empty() ? "View " + std::to_string(bookmarks.size() + 1) : name;
+  b.cam = editCam.save();
+  if (geo && geoEdit.valid) { b.geo = true; b.geoPivot = geoEdit.pivot; b.geoFrame = geoEdit.frame; }
+  bookmarks.push_back(b);
+  commit();
+}
+
+void App::updateBookmark(size_t i) {
+  if (i >= bookmarks.size()) return;
+  std::string name = bookmarks[i].name;
+  bookmarks[i].cam = editCam.save();
+  bookmarks[i].geo = geo && geoEdit.valid;
+  if (bookmarks[i].geo) { bookmarks[i].geoPivot = geoEdit.pivot; bookmarks[i].geoFrame = geoEdit.frame; }
+  commit();
+}
+
+void App::gotoBookmark(size_t i) {
+  if (i >= bookmarks.size()) return;
+  const auto& b = bookmarks[i];
+  if (b.geo && !world.empty()) {
+    if (!geo) setGeo(true);
+    if (geo) { geoEdit.pivot = b.geoPivot; geoEdit.frame = b.geoFrame; geoEdit.valid = true; }
+  } else {
+    if (geo) setGeo(false);
+    editCam.load(b.cam);
+  }
+  lastChange_ = now;
 }
 
 void App::groupSelection(BoolOp op) {
@@ -416,7 +540,14 @@ bool App::project(const V4& p, const View& v, double& sx, double& sy) const {
 
 std::optional<RayHit> App::pick(double x, double y) {
   View v = currentView();
-  return castRay(*ev, geo, v.eye, screenRay(x, y, v), quality.geoMaxStep, v.frame);
+  auto hit = castRay(*ev, geo, v.eye, screenRay(x, y, v), quality.geoMaxStep, v.frame);
+  if (hit && hit->node && isLocked(hit->node->id)) hit->node = nullptr;  // locked: not selectable
+  return hit;
+}
+
+bool App::isLocked(const std::string& id) {
+  for (Node* n : pathTo(root, id)) if (n->locked) return true;
+  return false;
 }
 
 void App::focusSelection() {
@@ -690,7 +821,7 @@ static double segDist(double px, double py, double ax, double ay, double bx, dou
 Gizmo App::gizmo() {
   Gizmo g;
   Node* n = selected();
-  if (mode != Mode::Edit || tool == Tool::Select || !n || n->id == root.id || modal != Modal::None) return g;
+  if (mode != Mode::Edit || tool == Tool::Select || !n || n->id == root.id || modal != Modal::None || isLocked(n->id)) return g;
   View v = currentView();
   V4 c = nodeWorldPos(n->id);
   if (!project(c, v, g.cx, g.cy)) return g;
@@ -759,7 +890,7 @@ Gizmo App::gizmo() {
 void App::captureOrig() {
   orig_.clear();
   for (auto& id : selection)
-    if (Node* n = findNode(root, id); n && id != root.id) orig_.push_back({id, {n->xf, n->anchor}});
+    if (Node* n = findNode(root, id); n && id != root.id && !isLocked(id)) orig_.push_back({id, {n->xf, n->anchor}});
 }
 void App::restoreOrig() {
   for (auto& [id, o] : orig_)
@@ -881,6 +1012,8 @@ void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
   else if (P(Action::Scale)) startModal(Modal::Scale);
   else if (P(Action::Delete)) { if (!selection.empty()) deleteSelection(); }
   else if (P(Action::Duplicate)) duplicateSelection();
+  else if (P(Action::DuplicateLinked)) duplicateLinked();
+  else if (P(Action::Isolate)) toggleIsolate();
   else if (P(Action::Focus)) focusSelection();
   else if (P(Action::Deselect)) selection.clear();
   else if (P(Action::SelectAll)) { selection.clear(); for (auto& c : root.children) selection.push_back(c.id); }
@@ -1171,7 +1304,7 @@ void App::renderFrame() {
     if (k.substr(0, k.find('|')) != lastKey_.substr(0, lastKey_.find('|'))) lastChange_ = now;
     lastKey_ = k;
     fp.scale = scale;
-    renderer->render(mainRT, (int)vpW, (int)vpH, root, reg, world, highlightSet(), fp);
+    renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
   }
   if (fp.geo && editSet.showThumbnail) {
     thumbW = editSet.thumbSize;
@@ -1195,7 +1328,7 @@ void App::renderFrame() {
     tk << k << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
     if (tk.str() != lastThumbKey_) {
       lastThumbKey_ = tk.str();
-      renderer->render(thumbRT, thumbW, thumbH, root, reg, world, {}, tp);
+      renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
     }
   }
 }

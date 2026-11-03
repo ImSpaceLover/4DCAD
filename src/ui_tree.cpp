@@ -27,18 +27,74 @@ void UI::treePanel() {
   }
   ImGui::SameLine();
   if (ImGui::Button("Export object") && app.selected()) fileAction(5);
+  // search, collapse / expand all
+  ImGui::SetNextItemWidth(RIGHT_W - 120);
+  ImGui::InputTextWithHint("##filter", "Search...", treeFilter_, sizeof treeFilter_);
+  ImGui::SameLine();
+  if (ImGui::SmallButton("-##col")) treeOpenAll_ = 0;
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Collapse all");
+  ImGui::SameLine();
+  if (ImGui::SmallButton("+##exp")) treeOpenAll_ = 1;
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Expand all");
+  if (!app.isolate.empty()) {
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Show all")) app.toggleIsolate();
+  }
   ImGui::Separator();
   ImGui::BeginChild("tree");
   // copy needed: tree modifications are deferred until after drawing
   treeNode(app.root, 0);
+  treeOpenAll_ = -1;
   ImGui::EndChild();
   ImGui::End();
 }
 
+bool UI::treeMatches(const Node& n) {
+  if (!treeFilter_[0]) return true;
+  auto lower = [](std::string x) { for (auto& c : x) c = (char)std::tolower((unsigned char)c); return x; };
+  std::string f = lower(treeFilter_);
+  bool hit = false;
+  walkc(n, [&](const Node& m, const Node*, int) { if (!hit && lower(m.name).find(f) != std::string::npos) hit = true; });
+  return hit;
+}
+
+// eye (visibility) and padlock icons at the right end of a tree row; returns which was clicked
+static int rowIcons(bool hidden, bool locked, bool isolatedOut) {
+  float x = ImGui::GetWindowContentRegionMax().x - 40;
+  ImGui::SameLine(x);
+  ImVec2 p = ImGui::GetCursorScreenPos();
+  float h = ImGui::GetFrameHeight();
+  int clicked = 0;
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  ImGui::InvisibleButton("eye", {18, h});
+  if (ImGui::IsItemClicked()) clicked = 1;
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip(hidden ? "Hidden: click to show" : "Visible: click to hide");
+  ImU32 ce = hidden || isolatedOut ? IM_COL32(110, 110, 120, 255) : IM_COL32(220, 220, 230, 255);
+  ImVec2 c = {p.x + 9, p.y + h * 0.5f};
+  dl->PathEllipticalArcTo(c, {7, 4}, 0, 0, 2 * (float)PI);
+  dl->PathStroke(ce, ImDrawFlags_Closed, 1.3f);
+  if (!hidden) dl->AddCircleFilled(c, 2.2f, ce);
+  else dl->AddLine({c.x - 7, c.y + 4}, {c.x + 7, c.y - 4}, ce, 1.3f);
+  ImGui::SameLine(0, 2);
+  p = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("lock", {16, h});
+  if (ImGui::IsItemClicked()) clicked = 2;
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip(locked ? "Locked: cannot be clicked or moved in the viewport" : "Click to lock");
+  ImU32 cl = locked ? IM_COL32(240, 190, 80, 255) : IM_COL32(95, 95, 105, 255);
+  float bx = p.x + 3, by = p.y + h * 0.5f - 1;
+  dl->AddRectFilled({bx, by}, {bx + 10, by + 7}, cl, 1);
+  dl->PathArcTo({bx + 5, by}, 3.5f, (float)PI, 2 * (float)PI);
+  dl->PathStroke(cl, 0, 1.5f);
+  return clicked;
+}
+
 void UI::treeNode(Node& n, int depth) {
   bool isRoot = n.id == app.root.id;
+  if (!isRoot && !treeMatches(n)) return;
+  if (treeFilter_[0] && !n.isLeaf()) ImGui::SetNextItemOpen(true);
+  else if (treeOpenAll_ >= 0 && !isRoot) ImGui::SetNextItemOpen(treeOpenAll_ == 1);
   bool sel = std::find(app.selection.begin(), app.selection.end(), n.id) != app.selection.end();
-  ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
+  ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap;
   if (n.isLeaf() || n.children.empty()) fl |= ImGuiTreeNodeFlags_Leaf;
   if (sel) fl |= ImGuiTreeNodeFlags_Selected;
   std::string label;
@@ -47,10 +103,12 @@ void UI::treeNode(Node& n, int depth) {
   label += n.name;
   if (n.id == app.world) label += "  [world]";
   if (n.anchor) label += "  [on surface]";
+  if (!n.linkId.empty()) label += "  [linked]";
 
-  if (n.hidden) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+  bool dim = n.hidden || (!app.isolate.empty() && !isRoot && !app.isolate.count(n.id));
+  if (dim) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
   bool open = ImGui::TreeNodeEx(n.id.c_str(), fl, "%s", label.c_str());
-  if (n.hidden) ImGui::PopStyleColor();
+  if (dim) ImGui::PopStyleColor();
   std::string id = n.id;
   if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
     if (ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl) {
@@ -97,11 +155,24 @@ void UI::treeNode(Node& n, int depth) {
       if (Node* m = findNode(app.root, id)) { app.lib.saveObject(makeLibraryObject(*m, app.reg, m->name)); app.toast("Saved \"" + m->name + "\" to Custom"); }
     };
     if (!n.isLeaf() && ImGui::MenuItem("Ungroup", nullptr, false, !isRoot)) deferred = [this, id] { app.ungroup(id); };
+    if (ImGui::MenuItem("Duplicate linked", nullptr, false, !isRoot)) deferred = [this] { app.duplicateLinked(); };
+    if (!n.linkId.empty() && ImGui::MenuItem("Unlink")) deferred = [this, id] { app.unlink(id); };
+    if (ImGui::MenuItem(n.locked ? "Unlock" : "Lock", nullptr, false, !isRoot))
+      deferred = [this, id] { if (Node* m = findNode(app.root, id)) { m->locked = !m->locked; app.commit(); } };
+    if (ImGui::MenuItem(app.isolate.empty() ? "Isolate" : "Show all")) deferred = [this] { app.toggleIsolate(); };
+    if (ImGui::MenuItem("Copy", nullptr, false, !isRoot)) deferred = [this] { copy(); };
     if (ImGui::BeginMenu("Group as", !isRoot)) {
       for (int i = 0; i < 6; i++) if (ImGui::MenuItem(BOOL_OP_LABELS[i])) deferred = [this, i] { app.groupSelection((BoolOp)i); };
       ImGui::EndMenu();
     }
     ImGui::EndPopup();
+  }
+  if (!isRoot) {  // visibility / lock icons (after the row's click, drag and menu handling, which use the row item)
+    ImGui::PushID(id.c_str());
+    int ic = rowIcons(n.hidden, n.locked, false);
+    ImGui::PopID();
+    if (ic == 1) deferred = [this, id] { if (Node* m = findNode(app.root, id)) { m->hidden = !m->hidden; app.commit(); } };
+    if (ic == 2) deferred = [this, id] { if (Node* m = findNode(app.root, id)) { m->locked = !m->locked; app.commit(); } };
   }
   if (open) {
     if (!n.isLeaf()) for (size_t i = 0; i < n.children.size(); i++) treeNode(n.children[i], depth + 1);

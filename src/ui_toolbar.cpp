@@ -6,11 +6,12 @@ namespace fd {
 // ============================================================ menu & toolbar
 void UI::menuBar() {
   if (!ImGui::BeginMainMenuBar()) return;
+  auto K = [this](Action a) { return app.keys.text(a); };  // current binding, shown in the menus
   if (ImGui::BeginMenu("File")) {
-    if (ImGui::MenuItem("New", "Ctrl+N")) guarded([this] { app.newScene(); });
-    if (ImGui::MenuItem("Open...", "Ctrl+O")) guarded([this] { fileAction(1); });
-    if (ImGui::MenuItem("Save", "Ctrl+S")) saveScene();
-    if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S")) fileAction(2);
+    if (ImGui::MenuItem("New", K(Action::New).c_str())) guarded([this] { app.newScene(); });
+    if (ImGui::MenuItem("Open...", K(Action::Open).c_str())) guarded([this] { fileAction(1); });
+    if (ImGui::MenuItem("Save", K(Action::Save).c_str())) saveScene();
+    if (ImGui::MenuItem("Save as...", K(Action::SaveAs).c_str())) fileAction(2);
     if (ImGui::BeginMenu("Examples")) {
       for (auto& ex : EXAMPLES)
         if (ImGui::MenuItem(ex.name)) { auto mk = ex.make; guarded([this, mk] { app.loadScene(mk()); app.currentFile.clear(); }); }
@@ -25,11 +26,18 @@ void UI::menuBar() {
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Edit")) {
-    if (ImGui::MenuItem("Undo", "Ctrl+Z", false, app.canUndo())) app.undo();
-    if (ImGui::MenuItem("Redo", "Ctrl+Shift+Z", false, app.canRedo())) app.redo();
+    bool any = !app.selection.empty();
+    if (ImGui::MenuItem("Undo", K(Action::Undo).c_str(), false, app.canUndo())) app.undo();
+    if (ImGui::MenuItem("Redo", K(Action::Redo).c_str(), false, app.canRedo())) app.redo();
     ImGui::Separator();
-    if (ImGui::MenuItem("Duplicate", "Shift+D", false, !app.selection.empty())) app.duplicateSelection();
-    if (ImGui::MenuItem("Delete", "X / Del", false, !app.selection.empty())) app.deleteSelection();
+    if (ImGui::MenuItem("Copy", K(Action::Copy).c_str(), false, any)) copy();
+    if (ImGui::MenuItem("Paste", K(Action::Paste).c_str())) paste();
+    if (ImGui::MenuItem("Duplicate", K(Action::Duplicate).c_str(), false, any)) app.duplicateSelection();
+    if (ImGui::MenuItem("Duplicate linked", K(Action::DuplicateLinked).c_str(), false, any)) app.duplicateLinked();
+    if (ImGui::MenuItem("Delete", K(Action::Delete).c_str(), false, any)) app.deleteSelection();
+    if (ImGui::MenuItem(app.isolate.empty() ? "Isolate selection" : "Show all (end isolation)", K(Action::Isolate).c_str(), false,
+                        any || !app.isolate.empty()))
+      app.toggleIsolate();
     if (ImGui::BeginMenu("Group selection as", !app.selection.empty())) {
       for (int i = 0; i < 6; i++) if (ImGui::MenuItem(BOOL_OP_LABELS[i])) app.groupSelection((BoolOp)i);
       ImGui::EndMenu();
@@ -37,15 +45,15 @@ void UI::menuBar() {
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("View")) {
-    if (ImGui::MenuItem("Edit mode", "Tab", app.mode == Mode::Edit)) app.setMode(Mode::Edit);
-    if (ImGui::MenuItem("Explore mode", "Tab", app.mode == Mode::Explore)) app.setMode(Mode::Explore);
+    if (ImGui::MenuItem("Edit mode", K(Action::ToggleMode).c_str(), app.mode == Mode::Edit)) app.setMode(Mode::Edit);
+    if (ImGui::MenuItem("Explore mode", K(Action::ToggleMode).c_str(), app.mode == Mode::Explore)) app.setMode(Mode::Explore);
     ImGui::Separator();
-    if (ImGui::MenuItem("Full 4D", "V", !app.geo)) app.setGeo(false);
-    if (ImGui::MenuItem("Geodesic 3D", "V", app.geo)) app.setGeo(true);
+    if (ImGui::MenuItem("Full 4D", K(Action::ToggleView).c_str(), !app.geo)) app.setGeo(false);
+    if (ImGui::MenuItem("Geodesic 3D", K(Action::ToggleView).c_str(), app.geo)) app.setGeo(true);
     ImGui::Separator();
     ImGui::MenuItem("Outside thumbnail (Geodesic)", nullptr, &app.editSet.showThumbnail);
     ImGui::MenuItem("Show own body (Explore)", nullptr, &app.exploreSet.showOwnBody);
-    if (ImGui::MenuItem("Reset 4D orientation", "Shift+W")) app.editCam.reset4();
+    if (ImGui::MenuItem("Reset 4D orientation", K(Action::Reset4D).c_str())) app.editCam.reset4();
     if (ImGui::BeginMenu("Slider axis", !app.geo)) {
       for (int k = 0; k < 4; k++) {
         char lb[24];
@@ -54,7 +62,35 @@ void UI::menuBar() {
       }
       ImGui::EndMenu();
     }
-    if (ImGui::MenuItem("Front / Right / Top / Along W", "1 3 7 9")) app.standardView(0);
+    if (ImGui::BeginMenu("Standard view")) {
+      if (ImGui::MenuItem("Front", K(Action::ViewFront).c_str())) app.standardView(0);
+      if (ImGui::MenuItem("Right", K(Action::ViewRight).c_str())) app.standardView(1);
+      if (ImGui::MenuItem("Top", K(Action::ViewTop).c_str())) app.standardView(2);
+      if (ImGui::MenuItem("Along the slider axis", K(Action::ViewAlongW).c_str())) app.standardView(3);
+      ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Camera bookmarks")) {
+      if (ImGui::MenuItem("Save current view")) app.addBookmark();
+      if (!app.bookmarks.empty()) ImGui::Separator();
+      int del = -1;
+      for (size_t i = 0; i < app.bookmarks.size(); i++) {
+        ImGui::PushID((int)i);
+        std::string label = app.bookmarks[i].name + (app.bookmarks[i].geo ? "  (Geodesic)" : "");
+        if (ImGui::BeginMenu(label.c_str())) {
+          if (ImGui::MenuItem("Go to")) app.gotoBookmark(i);
+          if (ImGui::MenuItem("Update to the current view")) app.updateBookmark(i);
+          char nb[64];
+          std::snprintf(nb, sizeof nb, "%s", app.bookmarks[i].name.c_str());
+          ImGui::SetNextItemWidth(160);
+          if (ImGui::InputText("Name", nb, sizeof nb, ImGuiInputTextFlags_EnterReturnsTrue)) { app.bookmarks[i].name = nb; app.commit(); }
+          if (ImGui::MenuItem("Delete")) del = (int)i;
+          ImGui::EndMenu();
+        }
+        ImGui::PopID();
+      }
+      if (del >= 0) { app.bookmarks.erase(app.bookmarks.begin() + del); app.commit(); }
+      ImGui::EndMenu();
+    }
     ImGui::Separator();
     ImGui::MenuItem("Settings...", nullptr, &showQuality_);
     ImGui::EndMenu();

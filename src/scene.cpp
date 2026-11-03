@@ -378,6 +378,8 @@ static json nodeJ(const Node& n) {
   for (auto& m : n.mods) mods.push_back(modJ(m));
   j["modifiers"] = mods;
   if (n.hidden) j["hidden"] = true;
+  if (n.locked) j["locked"] = true;
+  if (!n.linkId.empty()) j["link"] = n.linkId;
   if (n.anchor) j["anchor"] = {{"world", n.anchor->world}, {"basis", m4j(n.anchor->basis)}, {"reach", n.anchor->reach}};
   if (n.isLeaf()) {
     j["prim"] = n.prim;
@@ -428,6 +430,8 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
   // before v3, mirror/repeat were listed outermost-first: reverse to innermost-first
   if (ctx.version < 3) std::reverse(n.mods.begin(), n.mods.end());
   n.hidden = j.value("hidden", false);
+  n.locked = j.value("locked", false);
+  n.linkId = j.value("link", std::string());
   if (j.contains("anchor") && j["anchor"].is_object()) {
     Anchor a;
     a.world = j["anchor"].value("world", std::string());
@@ -476,11 +480,140 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
   return n;
 }
 
-std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam) {
+static json camJ(const CameraState& c) {
+  return {{"target", v4j(c.target)}, {"distance", c.distance}, {"yaw", c.yaw}, {"pitch", c.pitch}, {"rot4", m4j(c.rot4)}, {"slider", c.slider}};
+}
+static CameraState jCam(const json& c) {
+  CameraState cs;
+  cs.target = jv4(c.value("target", json::array()));
+  cs.distance = c.value("distance", 8.0);
+  cs.yaw = c.value("yaw", 0.6);
+  cs.pitch = c.value("pitch", -0.35);
+  cs.rot4 = orthonormalize(jm4(c.value("rot4", json::array())));
+  cs.slider = std::clamp(c.value("slider", 3), 0, 3);
+  return cs;
+}
+static json marksJ(const std::vector<CameraBookmark>& b) {
+  json a = json::array();
+  for (auto& m : b) {
+    json o = {{"name", m.name}, {"camera", camJ(m.cam)}};
+    if (m.geo) o["geo"] = {{"pivot", v4j(m.geoPivot)}, {"frame", m4j(m.geoFrame)}};
+    a.push_back(o);
+  }
+  return a;
+}
+static std::vector<CameraBookmark> jMarks(const json& a) {
+  std::vector<CameraBookmark> out;
+  if (!a.is_array()) return out;
+  for (auto& o : a) {
+    if (!o.is_object()) continue;
+    CameraBookmark m;
+    m.name = o.value("name", std::string("View"));
+    if (o.contains("camera") && o["camera"].is_object()) m.cam = jCam(o["camera"]);
+    if (o.contains("geo") && o["geo"].is_object()) {
+      m.geo = true;
+      m.geoPivot = jv4(o["geo"].value("pivot", json::array()));
+      m.geoFrame = orthonormalize(jm4(o["geo"].value("frame", json::array())));
+    }
+    out.push_back(m);
+  }
+  return out;
+}
+std::string bookmarksToJson(const std::vector<CameraBookmark>& b) { return marksJ(b).dump(); }
+std::vector<CameraBookmark> bookmarksFromJson(const std::string& text) {
+  try { return jMarks(json::parse(text)); } catch (...) { return {}; }
+}
+
+std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam,
+                        const std::vector<CameraBookmark>* bookmarks) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   j["world"] = world.empty() ? json(nullptr) : json(world);
-  if (cam) j["camera"] = {{"target", v4j(cam->target)}, {"distance", cam->distance}, {"yaw", cam->yaw}, {"pitch", cam->pitch}, {"rot4", m4j(cam->rot4)}, {"slider", cam->slider}};
+  if (cam) j["camera"] = camJ(*cam);
+  if (bookmarks && !bookmarks->empty()) j["bookmarks"] = marksJ(*bookmarks);
   return j.dump(2);
+}
+
+// ============================================================ linked duplicates
+static void stripForDefinition(json& j, bool top) {
+  j.erase("id");
+  j.erase("link");
+  if (top) { j.erase("xf"); j.erase("name"); j.erase("hidden"); j.erase("locked"); j.erase("anchor"); }
+  if (j.contains("children")) for (auto& c : j["children"]) stripForDefinition(c, false);
+}
+std::string linkDefinition(const Node& n) {
+  json j = nodeJ(n);
+  stripForDefinition(j, true);
+  return j.dump();
+}
+
+static void copyDef(Node& d, const Node& s, bool top) {
+  if (!top) { d.xf = s.xf; d.name = s.name; d.hidden = s.hidden; d.locked = s.locked; d.anchor = s.anchor; }
+  d.kind = s.kind;
+  d.mods = s.mods;
+  d.prim = s.prim; d.color = s.color; d.thickness = s.thickness; d.round = s.round; d.shell = s.shell;
+  d.mat = s.mat; d.code = s.code; d.codeBound = s.codeBound;
+  d.op = s.op; d.k = s.k;
+  bool same = d.children.size() == s.children.size();
+  for (size_t i = 0; same && i < s.children.size(); i++) same = d.children[i].kind == s.children[i].kind;
+  if (same) for (size_t i = 0; i < s.children.size(); i++) copyDef(d.children[i], s.children[i], false);
+  else {  // structure changed: fresh copies (new ids, but nested links are kept)
+    d.children.clear();
+    for (auto& c : s.children) d.children.push_back(cloneFresh(c));
+  }
+}
+void copyDefinition(Node& dst, const Node& src) { copyDef(dst, src, true); }
+
+static std::map<std::string, std::vector<Node*>> linkGroups(Node& root) {
+  std::map<std::string, std::vector<Node*>> g;
+  walk(root, [&](Node& n, Node*, int) { if (!n.linkId.empty()) g[n.linkId].push_back(&n); });
+  return g;
+}
+
+void recordLinks(Node& root, std::map<std::string, std::string>& defs) {
+  defs.clear();
+  // inconsistent files (edited by hand): the first member defines the shared part
+  for (int pass = 0; pass < 8; pass++) {
+    bool changed = false;
+    for (auto& [id, members] : linkGroups(root)) {
+      std::string d0 = linkDefinition(*members[0]);
+      for (size_t i = 1; i < members.size() && !changed; i++)
+        if (!isAncestor(root, members[0]->id, members[i]->id) && !isAncestor(root, members[i]->id, members[0]->id) &&
+            linkDefinition(*members[i]) != d0) { copyDefinition(*members[i], *members[0]); changed = true; }
+      if (changed) break;
+    }
+    if (!changed) break;
+  }
+  for (auto& [id, members] : linkGroups(root)) defs[id] = linkDefinition(*members[0]);
+}
+
+bool syncLinks(Node& root, std::map<std::string, std::string>& defs) {
+  bool changed = false;
+  // a definition change can resize a parent's children (and move nodes), so re-scan after each copy
+  for (int pass = 0; pass < 8; pass++) {
+    bool again = false;
+    for (auto& [id, members] : linkGroups(root)) {
+      // a member inside another member of the same link would make the definition recursive: unlink it
+      bool nested = false;
+      for (Node* a : members)
+        for (Node* b : members)
+          if (a != b && isAncestor(root, a->id, b->id)) { b->linkId.clear(); nested = true; }
+      if (nested) { changed = true; again = true; break; }
+      if (members.size() < 2) { defs[id] = linkDefinition(*members[0]); continue; }
+      auto it = defs.find(id);
+      Node* src = nullptr;
+      std::string srcDef;
+      for (Node* m : members) {
+        std::string d = linkDefinition(*m);
+        if (it == defs.end() || d != it->second) { src = m; srcDef = d; break; }
+      }
+      if (!src) continue;
+      for (Node* m : members) if (m != src && linkDefinition(*m) != srcDef) { copyDefinition(*m, *src); changed = true; again = true; }
+      defs[id] = srcDef;
+      if (again) break;  // pointers may be stale now
+    }
+    if (!again) break;
+  }
+  return changed;
 }
 
 SceneFile sceneFromJson(const std::string& text) {
@@ -505,6 +638,7 @@ SceneFile sceneFromJson(const std::string& text) {
     cs.slider = std::clamp(c.value("slider", 3), 0, 3);
     f.camera = cs;
   }
+  if (j.contains("bookmarks")) f.bookmarks = jMarks(j["bookmarks"]);
   return f;
 }
 

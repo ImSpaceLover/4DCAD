@@ -45,7 +45,12 @@ class UI {
   void qualityWindow();
   void sdfWindow();
   void unsavedPrompt();
-  void recoveryPrompt();  // after a crash: recover or discard the autosaved changes
+  void recoveryPrompt();
+  void copy();   // selection -> system clipboard
+  void paste();  // system clipboard -> scene
+  char treeFilter_[128] = "";
+  int treeOpenAll_ = -1;  // 0 collapse all, 1 expand all (for one frame)
+  bool treeMatches(const Node& n);  // after a crash: recover or discard the autosaved changes
   void guarded(std::function<void()> action);  // runs action, asking about unsaved changes first
   void saveScene();
   bool showSdf_ = false, openUnsaved_ = false;

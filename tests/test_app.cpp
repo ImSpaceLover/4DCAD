@@ -455,6 +455,104 @@ int main() {
     app.currentFile.clear();
   }
 
+  // --- scene management: linked duplicates, copy / paste, lock, isolate, camera bookmarks ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string a = app.selection[0];
+    findNode(app.root, a)->xf.pos = {0, 1, 0, 0};
+    app.commit();
+    app.duplicateLinked();
+    app.cancelModal();
+    std::string b = app.selection[0];
+    CHECK(b != a && !findNode(app.root, a)->linkId.empty() && findNode(app.root, a)->linkId == findNode(app.root, b)->linkId, "linked copy");
+    findNode(app.root, b)->xf.pos = {3, 1, 0, 0};
+    findNode(app.root, a)->color = {0.1, 0.9, 0.1};
+    findNode(app.root, a)->mods[0].length = 5;
+    app.commit();
+    Node* nb = findNode(app.root, b);
+    CHECK(nb->color[1] == 0.9 && nb->mods[0].length == 5, "edit reaches the linked copy");
+    CHECK(nb->xf.pos[0] == 3 && findNode(app.root, a)->xf.pos[0] == 0, "each copy keeps its own transform");
+    // linked groups: an edit inside one group reaches the other, ids stay stable
+    app.placeItem("builtin-sphere", std::nullopt);
+    std::string sp = app.selection[0];
+    app.selection = {a, sp};
+    app.groupSelection(BoolOp::Union);
+    std::string g1 = app.selection[0];
+    app.duplicateLinked();
+    app.cancelModal();
+    std::string g2 = app.selection[0];
+    std::string innerId = findNode(app.root, g2)->children[1].id;
+    findNode(app.root, g1)->children[1].color = {1, 0, 1};
+    findNode(app.root, g1)->children[1].xf.pos[3] = 0.7;
+    app.commit();
+    Node* inner = findNode(app.root, g2)->children.size() > 1 ? &findNode(app.root, g2)->children[1] : nullptr;
+    CHECK(inner && inner->id == innerId && inner->color[0] == 1 && inner->xf.pos[3] == 0.7, "edit inside a linked group reaches its copy");
+    app.undo();
+    CHECK(findNode(app.root, g2)->children[1].color[0] != 1 && findNode(app.root, g1)->children[1].color[0] != 1, "undo restores both");
+    app.unlink(g2);
+    findNode(app.root, g1)->op = BoolOp::Intersection;
+    app.commit();
+    CHECK(findNode(app.root, g2)->op == BoolOp::Union, "unlinked copy is independent");
+
+    // copy / paste keeps the world position (the source sits in a moved, rotated group)
+    findNode(app.root, g1)->xf.pos = {2, 0, 1, 0};
+    findNode(app.root, g1)->xf.rot = planeRotation(0, 2, 0.6);
+    app.commit();
+    V4 wsp = app.nodeWorldPos(findNode(app.root, g1)->children[1].id);
+    app.selection = {findNode(app.root, g1)->children[1].id};
+    std::string clip = app.copySelection();
+    size_t before = app.root.children.size();
+    CHECK(app.pasteNodes(clip) && app.root.children.size() == before + 1, "paste adds to the root");
+    std::string pasted = app.selection[0];
+    CHECK(pasted != findNode(app.root, g1)->children[1].id && length(app.nodeWorldPos(pasted) - wsp) < 1e-9, "pasted at the same place, new id");
+    CHECK(!app.pasteNodes("hello"), "non-4DCAD clipboard rejected");
+
+    // lock: not pickable, no gizmo
+    app.editCam.target = app.nodeWorldPos(b);
+    app.editCam.reset4();
+    app.rebuild();
+    View v = app.currentView();
+    double sx, sy;
+    app.project(app.nodeWorldPos(b), v, sx, sy);
+    auto h = app.pick(sx, sy);
+    CHECK(h && h->node && h->node->id == b, "unlocked: pickable");
+    findNode(app.root, b)->locked = true;
+    app.commit();
+    h = app.pick(sx, sy);
+    CHECK(h && !h->node, "locked: not pickable");
+    app.selection = {b};
+    app.tool = Tool::Move;
+    CHECK(!app.gizmo().visible, "locked: no gizmo");
+    findNode(app.root, b)->locked = false;
+    app.commit();
+
+    // isolate: only the isolated object is drawn / picked (view only, not saved)
+    std::string savedBefore = app.serialize();
+    app.selection = {pasted};
+    app.toggleIsolate();
+    h = app.pick(sx, sy);
+    CHECK(!h || !h->node || h->node->id != b, "isolated: others not pickable");
+    CHECK(app.serialize() == savedBefore && !findNode(app.root, b)->hidden, "isolation is not saved");
+    app.toggleIsolate();
+    h = app.pick(sx, sy);
+    CHECK(h && h->node && h->node->id == b, "show all again");
+
+    // camera bookmarks: saved in the scene, undoable
+    app.editCam.target = {1, 2, 3, 4};
+    app.editCam.yaw = 0.3;
+    app.addBookmark("Spot");
+    app.editCam.target = {0, 0, 0, 0};
+    app.editCam.yaw = 1.5;
+    app.gotoBookmark(0);
+    CHECK(length(app.editCam.target - V4{1, 2, 3, 4}) < 1e-12 && app.editCam.yaw == 0.3, "bookmark restores the camera");
+    SceneFile f = sceneFromJson(app.serialize());
+    CHECK(f.bookmarks.size() == 1 && f.bookmarks[0].name == "Spot", "bookmark saved in the scene");
+    app.undo();
+    CHECK(app.bookmarks.empty(), "adding a bookmark is undoable");
+  }
+
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---
   app.loadScene(planetScene());
   app.setGeo(true);

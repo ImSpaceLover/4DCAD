@@ -146,6 +146,10 @@ void UI::overlays(ImDrawList* dl) {
   lines.push_back(buf);
   std::snprintf(buf, sizeof buf, "eye (%.2f, %.2f, %.2f, %.2f)", v.eye[0], v.eye[1], v.eye[2], v.eye[3]);
   lines.push_back(buf);
+  if (!app.isolate.empty()) {
+    std::snprintf(buf, sizeof buf, "Isolated: %d object(s) (%s: show all)", (int)app.isolate.size(), app.keys.text(Action::Isolate).c_str());
+    lines.push_back(buf);
+  }
   if (app.mode == Mode::Explore) {
     if (!app.mouseCaptured) lines.push_back("Click the viewport to capture the mouse (Esc releases)");
     else if (!app.geo) lines.push_back("WASD move | Space/Shift up/down | R/F along the slider axis | Q/E roll | Z/X, C/V turn into it | Backspace reset");
