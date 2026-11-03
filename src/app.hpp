@@ -42,6 +42,7 @@ struct EditSettings {
   double flySpeed = 2, lookSpeed = 1;
   bool showThumbnail = true;
   int thumbSize = 300;
+  double autosaveSeconds = 60;  // recovery copy of unsaved changes (0 = off)
   // transform tools
   bool globalAxes = false;  // gizmo / G / R axes: false = the object's local axes, true = world axes
   bool snap = false;        // snapping (Ctrl while transforming inverts it)
@@ -127,6 +128,16 @@ class App {
   std::string lastFile;  // reopened on startup
   void loadSettings();
   void saveSettings();
+  // --- autosave / crash recovery ---
+  /** Writes the recovery copy if there are unsaved changes and the interval has passed (force: now). */
+  void autosaveTick(bool force = false);
+  /** Deletes the recovery copy (after saving, or when quitting normally). */
+  void clearRecovery();
+  /** A recovery copy left by a crash: the file it belonged to and when it was written. */
+  struct RecoveryInfo { std::string file, time; };
+  std::optional<RecoveryInfo> findRecovery();
+  bool recover(std::string& err);
+  std::optional<RecoveryInfo> pendingRecovery;  // found at startup: the UI asks what to do
 
   // --- selection & tree ---
   Node* selected();
@@ -202,7 +213,8 @@ class App {
 
  private:
   std::vector<std::string> history_, future_;
-  std::string committed_, saved_;
+  std::string committed_, saved_, autosaved_;
+  double lastAutosave_ = 0;
   std::vector<std::string> selectionAtPress_;
   int version_ = 0;
   std::string lastKey_, lastThumbKey_;

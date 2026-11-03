@@ -20,6 +20,7 @@ void UI::frame(double dt) {
   if (showSdf_) sdfWindow();
   pathPrompt();
   unsavedPrompt();
+  recoveryPrompt();
 
   // toast
   if (app.now < app.toastUntil && !app.toastMsg.empty()) {
@@ -131,6 +132,26 @@ void UI::saveScene() {
 }
 
 void UI::requestQuit() { guarded([this] { exitNow = true; }); }
+
+void UI::recoveryPrompt() {
+  if (app.pendingRecovery && !ImGui::IsPopupOpen("Recover unsaved work?")) ImGui::OpenPopup("Recover unsaved work?");
+  if (ImGui::BeginPopupModal("Recover unsaved work?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    auto& r = *app.pendingRecovery;
+    ImGui::TextUnformatted("4DCAD did not close normally last time.");
+    ImGui::Text("Unsaved changes%s%s were autosaved%s%s.", r.file.empty() ? "" : " to ", r.file.empty() ? "" : r.file.c_str(),
+                r.time.empty() ? "" : " at ", r.time.c_str());
+    if (ImGui::Button("Recover")) {
+      std::string err;
+      if (!app.recover(err)) app.toast(err, true);
+      else app.toast("Recovered: save to keep the changes");
+      app.pendingRecovery.reset();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Discard")) { app.clearRecovery(); app.pendingRecovery.reset(); ImGui::CloseCurrentPopup(); }
+    ImGui::EndPopup();
+  }
+}
 
 void UI::unsavedPrompt() {
   if (openUnsaved_) { ImGui::OpenPopup("Unsaved changes"); openUnsaved_ = false; }

@@ -153,6 +153,7 @@ int main(int argc, char** argv) {
     ImGui::NewFrame();
     ui->frame(dt);
     app.renderFrame();
+    app.autosaveTick();
     ImGui::Render();
     int fw, fh;
     glfwGetFramebufferSize(win, &fw, &fh);
@@ -179,6 +180,7 @@ int main(int argc, char** argv) {
     glfwSwapBuffers(win);
   }
   app.saveSettings();
+  if (screenshot.empty()) app.clearRecovery();  // quitting normally (unsaved changes were already asked about)
   g_ui = nullptr;
   delete ui;
   app.mainRT.destroy();

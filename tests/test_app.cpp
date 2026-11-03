@@ -432,6 +432,29 @@ int main() {
     app.keys.resetDefaults();
   }
 
+  // --- autosave / crash recovery ---
+  {
+    app.loadScene(playgroundScene());
+    app.currentFile = "/tmp/fd-recovery-test.4dscene.json";
+    app.clearRecovery();
+    app.now = 1000;
+    app.autosaveTick();
+    CHECK(!app.findRecovery(), "nothing unsaved: no recovery file");
+    findNode(app.root, app.root.children[1].id)->xf.pos[0] += 2;
+    app.commit();
+    app.autosaveTick();
+    auto info = app.findRecovery();
+    CHECK(info && info->file == app.currentFile && !info->time.empty(), "unsaved changes autosaved");
+    App other;  // "next start after a crash"
+    std::string err;
+    CHECK(other.recover(err), "recover: %s", err.c_str());
+    CHECK(nodeToJson(other.root) == nodeToJson(app.root) && other.dirty() && other.currentFile == app.currentFile, "recovered scene is the unsaved one");
+    app.undo();
+    app.autosaveTick();
+    CHECK(!app.findRecovery(), "undone back to the saved state: recovery file removed");
+    app.currentFile.clear();
+  }
+
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---
   app.loadScene(planetScene());
   app.setGeo(true);

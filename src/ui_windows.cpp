@@ -20,6 +20,8 @@ void UI::qualityWindow() {
     if (ImGui::BeginTabItem("Edit mode")) {
       auto& e = app.editSet;
       F("Field of view", e.fov, 30, 110, "%.0f deg");
+      F("Autosave every", e.autosaveSeconds, 0, 600, e.autosaveSeconds <= 0 ? "off" : "%.0f s",
+        "Unsaved changes are copied to a recovery file; after a crash you are asked whether to recover them");
       ImGui::SeparatorText("Full 4D");
       F("Orbit speed", e.orbitSpeed, 0.1f, 4);
       F("Pan speed", e.panSpeed, 0.1f, 4);

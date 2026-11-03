@@ -176,5 +176,6 @@ tests/                        core and app-level unit tests (ctest)
   * Custom primitives are embedded in the file.
   * Files from the earlier browser version (6 rotation angles) still load.
 * **Objects** `.4dobj.json` and the **library** `.json` (folders of objects). Old `.4dprim.json` primitives and v1 libraries are converted to point + modifier objects on import.
-* Your library and an autosave of the current scene live in `%APPDATA%\4DCAD`
+* **Autosave and recovery:** while there are unsaved changes, a recovery copy is written every 60 seconds (Settings > Edit mode; 0 turns it off). Saving or quitting normally removes it. If 4DCAD crashes or is killed, the next start asks whether to **recover** the changes (they come back as unsaved, and Save writes them to the original file) or **discard** them.
+* Your library, settings and the recovery copy live in `%APPDATA%\4DCAD`
   (Windows) or `~/.config/4dcad` (Linux).

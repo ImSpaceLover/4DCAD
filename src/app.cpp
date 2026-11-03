@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <sstream>
 
@@ -30,6 +31,62 @@ void App::init() {
   // reopen the last saved / opened scene file (changes are never written without asking)
   std::string err;
   if (lastFile.empty() || !loadSceneFile(lastFile, err)) { loadScene(playgroundScene()); currentFile.clear(); }
+  pendingRecovery = findRecovery();  // left behind by a crash: ask the user
+}
+
+// ============================================================ autosave / recovery
+static std::string recoveryPath() { return (std::filesystem::path(dataDir()) / "recovery.4dscene.json").string(); }
+static std::string recoveryInfoPath() { return (std::filesystem::path(dataDir()) / "recovery.json").string(); }
+
+void App::autosaveTick(bool force) {
+  if (!dirty()) {  // nothing unsaved (saved, undone back, or another scene loaded): no recovery copy
+    if (!autosaved_.empty()) clearRecovery();
+    return;
+  }
+  if (committed_ == autosaved_) return;
+  if (!force && (editSet.autosaveSeconds <= 0 || now - lastAutosave_ < editSet.autosaveSeconds)) return;
+  lastAutosave_ = now;
+  if (!writeFile(recoveryPath(), serialize())) return;
+  std::time_t t = std::time(nullptr);
+  char when[64];
+  std::strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+  nlohmann::json j = {{"file", currentFile}, {"time", when}};
+  writeFile(recoveryInfoPath(), j.dump(2));
+  autosaved_ = committed_;
+}
+
+void App::clearRecovery() {
+  std::error_code ec;
+  std::filesystem::remove(recoveryPath(), ec);
+  std::filesystem::remove(recoveryInfoPath(), ec);
+  autosaved_.clear();
+}
+
+std::optional<App::RecoveryInfo> App::findRecovery() {
+  std::string text;
+  if (!std::filesystem::exists(recoveryPath())) return std::nullopt;
+  RecoveryInfo info;
+  if (readFile(recoveryInfoPath(), text)) {
+    try {
+      auto j = nlohmann::json::parse(text);
+      info.file = j.value("file", std::string());
+      info.time = j.value("time", std::string());
+    } catch (...) {}
+  }
+  return info;
+}
+
+bool App::recover(std::string& err) {
+  auto info = findRecovery();
+  std::string text;
+  if (!info || !readFile(recoveryPath(), text)) { err = "No recovery file"; return false; }
+  try {
+    loadScene(sceneFromJson(text));
+  } catch (const std::exception& e) { err = e.what(); return false; }
+  currentFile = info->file;  // saving writes back to the original file
+  saved_.clear();            // recovered changes are unsaved
+  autosaved_ = committed_;
+  return true;
 }
 
 void App::toast(const std::string& msg, bool error) {
@@ -91,6 +148,7 @@ bool App::saveSceneFile(const std::string& path, std::string& err) {
   currentFile = path;
   lastFile = path;
   saved_ = committed_;
+  clearRecovery();
   saveSettings();
   return true;
 }
@@ -1155,7 +1213,7 @@ void App::saveSettings() {
   const auto& e = editSet;
   j["edit"] = {{"fov", e.fov}, {"orbitSpeed", e.orbitSpeed}, {"panSpeed", e.panSpeed}, {"zoomSpeed", e.zoomSpeed}, {"rot4Speed", e.rot4Speed},
                {"showWSlider", e.showWSlider}, {"flySpeed", e.flySpeed}, {"lookSpeed", e.lookSpeed}, {"showThumbnail", e.showThumbnail},
-               {"thumbSize", e.thumbSize}, {"globalAxes", e.globalAxes}, {"snap", e.snap}, {"snapMove", e.snapMove},
+               {"thumbSize", e.thumbSize}, {"autosaveSeconds", e.autosaveSeconds}, {"globalAxes", e.globalAxes}, {"snap", e.snap}, {"snapMove", e.snapMove},
                {"snapAngle", e.snapAngle}, {"snapScale", e.snapScale}};
   const auto& x = exploreSet;
   j["explore"] = {{"fov", x.fov}, {"lookSpeed", x.lookSpeed}, {"showOwnBody", x.showOwnBody}, {"bodyRadius", x.bodyRadius},
@@ -1186,7 +1244,7 @@ void App::loadSettings() {
       get(r, "fov", e.fov); get(r, "orbitSpeed", e.orbitSpeed); get(r, "panSpeed", e.panSpeed); get(r, "zoomSpeed", e.zoomSpeed);
       get(r, "rot4Speed", e.rot4Speed); get(r, "showWSlider", e.showWSlider); get(r, "flySpeed", e.flySpeed); get(r, "lookSpeed", e.lookSpeed);
       get(r, "showThumbnail", e.showThumbnail); get(r, "thumbSize", e.thumbSize);
-      get(r, "globalAxes", e.globalAxes); get(r, "snap", e.snap); get(r, "snapMove", e.snapMove);
+      get(r, "autosaveSeconds", e.autosaveSeconds); get(r, "globalAxes", e.globalAxes); get(r, "snap", e.snap); get(r, "snapMove", e.snapMove);
       get(r, "snapAngle", e.snapAngle); get(r, "snapScale", e.snapScale);
     }
     if (j.contains("explore")) {

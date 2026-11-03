@@ -45,6 +45,7 @@ class UI {
   void qualityWindow();
   void sdfWindow();
   void unsavedPrompt();
+  void recoveryPrompt();  // after a crash: recover or discard the autosaved changes
   void guarded(std::function<void()> action);  // runs action, asking about unsaved changes first
   void saveScene();
   bool showSdf_ = false, openUnsaved_ = false;
