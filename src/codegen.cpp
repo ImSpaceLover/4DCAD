@@ -41,11 +41,12 @@ vec2 opRadial(vec2 v, float r, float n, float s, float st) {
 float sS(float a, float b, float k) { if (b >= INF * 0.5 || a >= INF * 0.5) return a; float h = clamp(0.5 - 0.5 * (a + b) / k, 0.0, 1.0); return mix(a, -b, h) + k * h * (1.0 - h); }
 )";
 
-// Material = mat2x4: column 0 (rgb, selection highlight), column 1 (emissive, 0, 0, 0).
+// Material = mat3x4: column 0 (rgb, selection highlight), column 1 (emissive, roughness, specular,
+// transparency), column 2 (metallic, index of refraction, 0, 0).
 static const char* SCENE_HELPERS = R"(
 bool g_exact = false;      // disable bounding-sphere shortcuts (shadow / AO samples need true distances)
 bool g_noEmissive = false; // shadow / AO rays ignore emissive objects
-#define MAT mat2x4
+#define MAT mat3x4
 float opU(float a, inout MAT ma, float b, MAT mb) { if (b < a) { ma = mb; return b; } return a; }
 float opI(float a, inout MAT ma, float b, MAT mb) { if (b > a) { ma = mb; return b; } return a; }
 float opS(float a, inout MAT ma, float b, MAT mb) { if (-b > a) { ma = mb; return -b; } return a; }
@@ -71,6 +72,42 @@ float texNoise(vec4 p) {
   return clamp(0.5 + 0.2 * n, 0.0, 1.0);
 }
 float texRings(vec4 p) { return step(0.5, fract(length(p))); }
+// 4D value noise: hashed lattice values, smoothly interpolated over the 16 corners of a cell
+float h4(vec4 c) { return fract(sin(dot(c, vec4(127.1, 311.7, 74.7, 269.5))) * 43758.5453); }
+vec4 corner(int k) { return vec4(float(k & 1), float((k >> 1) & 1), float((k >> 2) & 1), float((k >> 3) & 1)); }
+float vnoise(vec4 p) {
+  vec4 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float r = 0.0;
+  for (int k = 0; k < 16; k++) {
+    vec4 o = corner(k), w = mix(1.0 - f, f, o);
+    r += h4(i + o) * w.x * w.y * w.z * w.w;
+  }
+  return r;
+}
+float fbm(vec4 p) { return 0.5 * vnoise(p) + 0.25 * vnoise(p * 2.03 + 1.7) + 0.125 * vnoise(p * 4.01 + 3.1); }
+float texDots(vec4 p) { return step(length(fract(p) - 0.5), 0.32); }
+float texWaves(vec4 p) { return 0.5 + 0.5 * sin(6.2832 * (p.x + 0.35 * sin(2.5 * p.y + p.w) + 0.25 * p.z)); }
+float texMarble(vec4 p) { return 0.5 + 0.5 * sin(3.0 * p.x + 6.0 * fbm(p)); }
+float texWood(vec4 p) { return smoothstep(0.35, 0.65, fract(length(p.xz) * 3.0 + 1.5 * fbm(p * 0.8))); }
+float texCells(vec4 p) {  // edges of 4D Voronoi cells (feature points of the 16 nearest lattice cells)
+  vec4 base = floor(p) + step(0.5, fract(p)) - 1.0;
+  float d1 = 9.0, d2 = 9.0;
+  for (int k = 0; k < 16; k++) {
+    vec4 c = base + corner(k);
+    float d = length(p - c - vec4(h4(c), h4(c + 11.3), h4(c + 23.7), h4(c + 37.1)));
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+  }
+  return 1.0 - smoothstep(0.03, 0.08, d2 - d1);
+}
+float texBricks(vec4 p) {
+  vec4 q = p * vec4(1.0, 2.0, 1.0, 1.0);
+  float shift = 0.5 * mod(floor(q.y), 2.0);  // every other row offset by half a brick
+  q.x += shift; q.z += shift;
+  vec4 e = 0.5 - abs(fract(q) - 0.5);
+  return 1.0 - step(0.06, min(min(e.x, e.y), e.z));  // mortar
+}
+float texGradient(vec4 p) { return clamp(0.5 + 0.5 * p.y, 0.0, 1.0); }
 )";
 
 const char* sdfHelpersGLSL() { return SDF_HELPERS; }
@@ -96,6 +133,13 @@ static const char* texFn(int t) {
     case TEX_GRID: return "texGrid";
     case TEX_NOISE: return "texNoise";
     case TEX_RINGS: return "texRings";
+    case TEX_DOTS: return "texDots";
+    case TEX_WAVES: return "texWaves";
+    case TEX_MARBLE: return "texMarble";
+    case TEX_WOOD: return "texWood";
+    case TEX_CELLS: return "texCells";
+    case TEX_BRICKS: return "texBricks";
+    case TEX_GRADIENT: return "texGradient";
     default: return nullptr;
   }
 }
@@ -164,9 +208,9 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
   EvalCtx main = geo ? EvalCtx::Geo : EvalCtx::Full;
 
   std::ostringstream o;
-  o << "uniform mat4 u_rot[" << N << "];\nuniform vec4 u_pos[" << N << "];\nuniform vec4 u_par[" << N
-    << "];\nuniform vec4 u_col[" << N << "];\nuniform vec4 u_bc[" << N << "];\nuniform float u_br[" << N << "];\n"
-    << "uniform vec4 u_mat[" << N << "];\nuniform vec4 u_col2[" << N << "];\n" << SDF_HELPERS << SCENE_HELPERS;
+  // per-node data comes from the node buffer (see packNodes): ndat(node, slot)
+  (void)N;
+  o << SDF_HELPERS << SCENE_HELPERS;
 
   // primitives
   std::map<std::string, std::string> primFn;
@@ -199,6 +243,11 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
   std::unordered_set<std::string> emitted;
   auto fnName = [&](const Node& n, EvalCtx ctx) { return "n" + std::to_string(index[n.id]) + (ctx == EvalCtx::World ? "_w" : "_m"); };
 
+  // node data slots: 0-3 inverse rotation, 4 position, 5 (scale, k | reach, thickness, skip),
+  // 6 colour (+ highlight | group reach), 7 bounding centre, 8 bounding radius, 9 (emissive, tex scale,
+  // tex strength), 10 texture colour, 11 (roughness, specular, transparency)
+  auto D = [](int i, int k) { return "ndat(" + std::to_string(i) + ", " + std::to_string(k) + ")"; };
+  auto ROT = [&](int i) { return "mat4(" + D(i, 0) + ", " + D(i, 1) + ", " + D(i, 2) + ", " + D(i, 3) + ")"; };
   std::function<void(Node&, EvalCtx)> emitNode = [&](Node& n, EvalCtx ctx) {
     std::string name = fnName(n, ctx);
     if (emitted.count(name)) return;
@@ -215,17 +264,18 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       o << L.str();
       return;
     }
-    if (n.isLeaf() && n.mat.emissive > 0) L << "  if (g_noEmissive && u_mat[" << i << "].x > 0.0) { m = MAT(0.0); return INF; }\n";
+    if (n.isLeaf() && n.mat.emissive > 0) L << "  if (g_noEmissive && " << D(i, 9) << ".x > 0.0) { m = MAT(0.0); return INF; }\n";
     // bounding-sphere early out (threshold covers the parent's smooth blend radius)
-    if (n.id != root.id) L << "  float bd = length(p - u_bc[" << i << "]) - u_br[" << i << "];\n  if (bd > u_par[" << i << "].w && !g_exact) { m = MAT(0.0); return bd; }\n";
-    L << "  float s = u_par[" << i << "].x;\n  vec4 q = (u_rot[" << i << "] * (p - u_pos[" << i << "])) / s;\n  vec4 q0 = q;\n";
+    if (n.id != root.id) L << "  vec4 par = " << D(i, 5) << ";\n  float bd = length(p - " << D(i, 7) << ") - " << D(i, 8) << ".x;\n  if (bd > par.w && !g_exact) { m = MAT(0.0); return bd; }\n";
+    else L << "  vec4 par = " << D(i, 5) << ";\n";
+    L << "  float s = par.x;\n  vec4 q = (" << ROT(i) << " * (p - " << D(i, 4) << ")) / s;\n  vec4 q0 = q;\n";
     bool anchored = role == Role::Tangent || role == Role::Hug;
     if (anchored) L << "  float nd = q.w;\n";
     if (role == Role::Tangent) L << "  q.w = 0.0;\n";
     if (role == Role::Hug) L << "  q.w = g_world" << wslot(n.anchor->world) << " / (sAcc * s);\n";
     auto ax = modifierAxes(n, reg);
     L << modifierCoordsGLSL(n, ax, "q", "");
-    std::string reachExpr = "u_col[" + std::to_string(i) + "].w";  // groups: reach stored in colour.w (unused)
+    std::string reachExpr = D(i, 6) + ".w";  // groups: reach stored in colour.w (unused)
     if (n.isLeaf()) {
       if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
@@ -234,16 +284,23 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       double shell = n.shell.value_or(0.0), round = n.round.value_or(0.0);
       if (shell > 0) L << "  d = abs(d) - " << glslFloat(shell) << ";\n";
       if (round != 0) L << "  d -= " << glslFloat(round) << ";\n";
-      for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * u_par[" << i << "].z);\n";
-      L << "  vec3 col = u_col[" << i << "].rgb;\n";
-      if (const char* tf = texFn(n.mat.texture))
-        L << "  col = mix(col, u_col2[" << i << "].rgb, " << tf << "(q0 * u_mat[" << i << "].y) * u_mat[" << i << "].z);\n";
-      L << "  m = MAT(vec4(col, u_col[" << i << "].w), vec4(u_mat[" << i << "].x, 0.0, 0.0, 0.0));\n";
-      if (anchored) L << "  return max(d * s, -nd * s - u_par[" << i << "].y);\n}\n";
+      for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
+      L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
+      const char* tf = texFn(n.mat.texture);
+      if (tf) {
+        // textures are 4D patterns: along the axes a thin (< 4D) object does not use it sits on a
+        // cell boundary (coordinate 0), which would make grids solid and checkers flicker, so those
+        // coordinates are put in the middle of a cell
+        L << "  vec4 tq = q0 * m9.y;\n";
+        for (int a = nodeDim(n, reg); a < 4; a++) L << "  tq." << C[a] << " = 0.5;\n";
+        L << "  if (u_textures == 1) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(tq) * m9.z);\n";  // textures can be off (fast mode)
+      }
+      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
+      if (anchored) L << "  return max(d * s, -nd * s - par.y);\n}\n";
       else L << "  return d * s;\n}\n";
     } else {
       static const char* opf[6] = {"opU", "opI", "opS", "opSU", "opSI", "opSS"};
-      L << "  float k = max(u_par[" << i << "].y, 1e-4);\n  MAT mb;\n";
+      L << "  float k = max(par.y, 1e-4);\n  MAT mb;\n";
       L << "  float d = " << fnName(n.children[0], ctx) << "(q, g, sAcc * s, m);\n";
       for (size_t c = 1; c < n.children.size(); c++)
         L << "  { float b = " << fnName(n.children[c], ctx) << "(q, g, sAcc * s, mb); d = " << opf[(int)n.op] << "(d, m, b, mb"
@@ -263,7 +320,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     o << "float worldSDF" << k << "m(vec4 g, out MAT m) {\n  vec4 p = g; float s = 1.0;\n";
     for (size_t a = 0; a + 1 < path.size(); a++) {
       int i = index[path[a]->id];
-      o << "  p = (u_rot[" << i << "] * (p - u_pos[" << i << "])) / u_par[" << i << "].x; s *= u_par[" << i << "].x;\n";
+      o << "  p = (" << ROT(i) << " * (p - " << D(i, 4) << ")) / " << D(i, 5) << ".x; s *= " << D(i, 5) << ".x;\n";
       o << "  {\n" << modifierCoordsGLSL(*path[a], modifierAxes(*path[a], reg), "p", "w") << "  }\n";
     }
     o << "  return " << fnName(target, EvalCtx::World) << "(p, g, s, m) * s;\n}\n";
@@ -286,11 +343,10 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
   return cs;
 }
 
-PackedUniforms packUniforms(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight) {
+std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight) {
+  const int S = 12 * 4;  // floats per node (12 vec4 slots, see emitNode)
   size_t N = cs.nodeIds.size();
-  PackedUniforms u;
-  u.rot.assign(N * 16, 0); u.pos.assign(N * 4, 0); u.par.assign(N * 4, 0); u.col.assign(N * 4, 0); u.bc.assign(N * 4, 0); u.br.assign(N, 1e9f);
-  u.mat.assign(N * 4, 0); u.col2.assign(N * 4, 0);
+  std::vector<float> d(std::max<size_t>(N, 1) * S, 0.f);
   auto bounds = computeBounds(root, reg);
   std::unordered_map<std::string, Node*> byId;
   std::unordered_map<std::string, Node*> parentOf;
@@ -299,32 +355,40 @@ PackedUniforms packUniforms(Node& root, const PrimitiveRegistry& reg, const Comp
     auto it = byId.find(cs.nodeIds[i]);
     if (it == byId.end()) continue;
     Node& n = *it->second;
+    float* v = &d[i * S];
+    auto slot = [&](int k) { return v + k * 4; };
     M4 inv = transpose(nodeRotation(n));
-    for (int k = 0; k < 16; k++) u.rot[i * 16 + k] = (float)inv[k];
-    for (int k = 0; k < 4; k++) u.pos[i * 4 + k] = (float)n.xf.pos[k];
+    for (int k = 0; k < 16; k++) v[k] = (float)inv[k];  // slots 0-3: columns
+    for (int k = 0; k < 4; k++) slot(4)[k] = (float)n.xf.pos[k];
     Node* parent = parentOf[n.id];
     double skip = 0.5 + (parent && isSmooth(parent->op) ? std::max(parent->k, 0.0) : 0.0);
     double reach = n.anchor ? n.anchor->reach : 1e4;
-    // par = (scale, k | leaf: anchor reach, thickness, skip distance)
-    u.par[i * 4 + 0] = (float)n.xf.scale;
-    u.par[i * 4 + 1] = (float)(n.isLeaf() ? reach : n.k);
-    u.par[i * 4 + 2] = (float)(n.isLeaf() ? n.thickness : 0);
-    u.par[i * 4 + 3] = (float)skip;
+    // slot 5 = (scale, k | leaf: anchor reach, thickness, skip distance)
+    slot(5)[0] = (float)n.xf.scale;
+    slot(5)[1] = (float)(n.isLeaf() ? reach : n.k);
+    slot(5)[2] = (float)(n.isLeaf() ? n.thickness : 0);
+    slot(5)[3] = (float)skip;
     if (n.isLeaf()) {
-      for (int k = 0; k < 3; k++) u.col[i * 4 + k] = (float)n.color[k];
-      u.col[i * 4 + 3] = highlight.count(n.id) ? 1.f : 0.f;
-      u.mat[i * 4 + 0] = (float)n.mat.emissive;
-      u.mat[i * 4 + 1] = (float)n.mat.texScale;
-      u.mat[i * 4 + 2] = (float)n.mat.texStrength;
-      for (int k = 0; k < 3; k++) u.col2[i * 4 + k] = (float)n.mat.color2[k];
-    } else u.col[i * 4 + 3] = (float)reach;  // groups: colour unused, store reach
+      for (int k = 0; k < 3; k++) slot(6)[k] = (float)n.color[k];
+      slot(6)[3] = highlight.count(n.id) ? 1.f : 0.f;
+      slot(9)[0] = (float)n.mat.emissive;
+      slot(9)[1] = (float)n.mat.texScale;
+      slot(9)[2] = (float)n.mat.texStrength;
+      for (int k = 0; k < 3; k++) slot(10)[k] = (float)n.mat.color2[k];
+      slot(11)[0] = (float)n.mat.roughness;
+      slot(11)[1] = (float)n.mat.specular;
+      slot(11)[2] = (float)n.mat.transparency;
+      slot(11)[3] = (float)n.mat.metallic;
+      slot(8)[1] = (float)n.mat.ior;
+    } else slot(6)[3] = (float)reach;  // groups: colour unused, store reach
     auto b = bounds.find(n.id);
+    slot(8)[0] = 1e9f;
     if (b != bounds.end()) {
-      for (int k = 0; k < 4; k++) u.bc[i * 4 + k] = (float)b->second.c[k];
-      u.br[i] = std::isfinite(b->second.r) ? (float)b->second.r : 1e9f;
+      for (int k = 0; k < 4; k++) slot(7)[k] = (float)b->second.c[k];
+      slot(8)[0] = std::isfinite(b->second.r) ? (float)b->second.r : 1e9f;
     }
   }
-  return u;
+  return d;
 }
 
 std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo) {

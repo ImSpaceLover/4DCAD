@@ -55,14 +55,21 @@ struct Anchor {
 
 // Surface material of a leaf. Textures are procedural 4D solid textures evaluated in
 // the object's local coordinates, so they move and rotate with the object.
-enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, TEX_RINGS, TEX_COUNT };
-inline const char* TEXTURE_NAMES[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings"};
+enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, TEX_RINGS,
+                   TEX_DOTS, TEX_WAVES, TEX_MARBLE, TEX_WOOD, TEX_CELLS, TEX_BRICKS, TEX_GRADIENT, TEX_COUNT };
+inline const char* TEXTURE_NAMES[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings",
+                                               "Dots", "Waves", "Marble", "Wood", "Cells", "Bricks", "Gradient"};
 struct Material {
   double emissive = 0;   // 0..1: always lit, casts no shadow, does not light others
   int texture = TEX_NONE;
   double texScale = 1;   // pattern cells per unit
   double texStrength = 0.7;
   std::array<double, 3> color2{0.12, 0.12, 0.14};  // second texture colour
+  double roughness = 0.75;   // 0 = sharp highlights, 1 = matte
+  double specular = 0.35;    // highlight strength
+  double transparency = 0;   // 0 = opaque, 1 = invisible (see-through surfaces)
+  double ior = 1.45;         // index of refraction of transparent materials (1 = no bending)
+  double metallic = 0;       // 0 = plain, 1 = mirror (reflections tinted by the colour)
 };
 
 /** Default code of a custom SDF leaf (GLSL). */
@@ -80,6 +87,8 @@ struct Node {
   Transform xf;
   std::vector<Modifier> mods;
   bool hidden = false;
+  bool locked = false;   // cannot be selected / moved in the viewport
+  std::string linkId;    // linked duplicates share one: editing one edits all (except their own transform)
   std::optional<Anchor> anchor;
   // leaf
   std::string prim;
@@ -102,6 +111,30 @@ struct CameraState {
   V4 target{0, 0.5, 0, 0};
   double distance = 8, yaw = 0.6, pitch = -0.35;
   M4 rot4 = identity();
+  int slider = 3;  // world axis on the slice slider (the other three are shown)
+};
+
+/** What a frame draws and how hard it works. Edit mode builds one from the main settings; the
+ *  fast profile is used in Explore (and, if chosen, while moving in Edit mode). */
+struct RenderProfile {
+  float resolution = 0.5f;  // x the window resolution
+  int maxSteps = 100;       // march steps per ray
+  int bounces = 0;          // reflections / refractions followed per pixel (mirrors, glass)
+  bool textures = false;    // procedural textures
+  bool specular = true;     // highlights
+  bool pointLights = true;  // point lights (incl. emissive objects)
+  bool shadows = true;      // sun shadows
+  bool pointShadows = false;
+  bool ao = false;          // ambient occlusion
+  int aoSamples = 3;        // 1..5
+  int shadowSteps = 24;     // max steps of a shadow ray
+  enum Preset { Fast, Balanced, Full };
+  static RenderProfile preset(Preset p) {
+    RenderProfile r;  // Fast
+    if (p == Balanced) { r.resolution = 0.75f; r.maxSteps = 128; r.bounces = 1; r.textures = true; r.ao = true; r.shadowSteps = 40; }
+    if (p == Full) { r.resolution = 1.0f; r.maxSteps = 160; r.bounces = 3; r.textures = true; r.pointShadows = true; r.ao = true; r.aoSamples = 5; r.shadowSteps = 64; }
+    return r;
+  }
 };
 
 /** Ray-marching / rendering settings. */
@@ -123,6 +156,14 @@ struct QualitySettings {
   float lightYaw = 2.18f, lightPitch = 0.93f, lightW = 0.25f;  // light direction
   std::array<float, 3> skyTop{0.32f, 0.38f, 0.5f}, skyBottom{0.16f, 0.17f, 0.2f};
   bool grid = true;               // ground grid in Edit mode
+  float sunIntensity = 1.0f;      // directional light
+  bool pointShadows = true;       // point lights cast shadows (each one costs a shadow ray)
+  bool emissiveLights = true;     // emissive objects light their surroundings (as point lights)
+  int transparentLayers = 3;      // reflections / refractions followed per pixel (0 = mirrors and glass off)
+  bool relaxedMarching = true;    // over-relaxed sphere tracing (fewer steps)
+  // fast mode: used in Explore (keep it smooth) and optionally while moving in Edit mode
+  RenderProfile fast = RenderProfile::preset(RenderProfile::Fast);
+  bool fastWhileMovingInEdit = false;
   float geoMaxStep = 0.25f;
   int geoProjectIters = 1;
 };
@@ -202,7 +243,29 @@ std::vector<std::pair<int, std::string>> modifierProblems(const Node& n, const P
 std::vector<Modifier> stepsToModifiers(const std::vector<Step>& steps);
 Node nodeFromPrimitive(const PrimitiveDef& p, const std::string& name);
 
+/** A point light (a 4D position; light falls off to 0 at `range`). */
+struct PointLight {
+  std::string name = "Light";
+  V4 pos{0, 3, 0, 0};
+  std::array<double, 3> color{1, 0.95, 0.85};
+  double intensity = 1.5;
+  double range = 10;
+  bool shadows = true;
+  bool enabled = true;
+};
+
+/** A saved camera position (Full 4D camera, plus the Geodesic camera if it was used). */
+struct CameraBookmark {
+  std::string name;
+  CameraState cam;
+  bool geo = false;
+  V4 geoPivot{0, 0, 0, 0};
+  M4 geoFrame = identity();
+};
+
 struct SceneFile {
+  std::vector<CameraBookmark> bookmarks;
+  std::vector<PointLight> lights;
   Node root;
   std::vector<PrimitiveDef> primitives;
   std::string world;  // empty = none
@@ -224,7 +287,24 @@ struct LibraryFolder {
 std::vector<LibraryFolder> builtinFolders();
 
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
-std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam);
+std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
+                        const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr);
+std::string lightsToJson(const std::vector<PointLight>& l);
+std::vector<PointLight> lightsFromJson(const std::string& text);
+std::string bookmarksToJson(const std::vector<CameraBookmark>& b);
+std::vector<CameraBookmark> bookmarksFromJson(const std::string& text);
+
+// ---- linked duplicates ----
+/** The shared part of a linked node (shape, material, modifiers, children), without ids,
+ *  the node's own transform, name, visibility, lock or anchor. Equal strings = same definition. */
+std::string linkDefinition(const Node& n);
+/** Copies src's definition onto dst, keeping dst's ids where the structure matches. */
+void copyDefinition(Node& dst, const Node& src);
+/** Makes every linked group consistent: for each linkId, the member whose definition changed
+ *  since `defs` (last known definitions) is copied to the others. Returns true if anything changed. */
+bool syncLinks(Node& root, std::map<std::string, std::string>& defs);
+/** Records the current definitions (after loading / undo). */
+void recordLinks(Node& root, std::map<std::string, std::string>& defs);
 SceneFile sceneFromJson(const std::string& text);
 std::string nodeToJson(const Node& n);  // compact snapshot (undo)
 Node nodeFromJson(const std::string& text);

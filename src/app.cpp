@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <sstream>
 
@@ -24,12 +25,68 @@ static std::array<double, 3> hsl(double h, double s, double l) {
 
 App::App() {}
 
-void App::init() {
-  renderer = std::make_unique<Renderer>();
+void App::init(std::unique_ptr<Renderer> r) {
+  renderer = std::move(r);
   loadSettings();
   // reopen the last saved / opened scene file (changes are never written without asking)
   std::string err;
   if (lastFile.empty() || !loadSceneFile(lastFile, err)) { loadScene(playgroundScene()); currentFile.clear(); }
+  pendingRecovery = findRecovery();  // left behind by a crash: ask the user
+}
+
+// ============================================================ autosave / recovery
+static std::string recoveryPath() { return (std::filesystem::path(dataDir()) / "recovery.4dscene.json").string(); }
+static std::string recoveryInfoPath() { return (std::filesystem::path(dataDir()) / "recovery.json").string(); }
+
+void App::autosaveTick(bool force) {
+  if (!dirty()) {  // nothing unsaved (saved, undone back, or another scene loaded): no recovery copy
+    if (!autosaved_.empty()) clearRecovery();
+    return;
+  }
+  if (committed_ == autosaved_) return;
+  if (!force && (editSet.autosaveSeconds <= 0 || now - lastAutosave_ < editSet.autosaveSeconds)) return;
+  lastAutosave_ = now;
+  if (!writeFile(recoveryPath(), serialize())) return;
+  std::time_t t = std::time(nullptr);
+  char when[64];
+  std::strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+  nlohmann::json j = {{"file", currentFile}, {"time", when}};
+  writeFile(recoveryInfoPath(), j.dump(2));
+  autosaved_ = committed_;
+}
+
+void App::clearRecovery() {
+  std::error_code ec;
+  std::filesystem::remove(recoveryPath(), ec);
+  std::filesystem::remove(recoveryInfoPath(), ec);
+  autosaved_.clear();
+}
+
+std::optional<App::RecoveryInfo> App::findRecovery() {
+  std::string text;
+  if (!std::filesystem::exists(recoveryPath())) return std::nullopt;
+  RecoveryInfo info;
+  if (readFile(recoveryInfoPath(), text)) {
+    try {
+      auto j = nlohmann::json::parse(text);
+      info.file = j.value("file", std::string());
+      info.time = j.value("time", std::string());
+    } catch (...) {}
+  }
+  return info;
+}
+
+bool App::recover(std::string& err) {
+  auto info = findRecovery();
+  std::string text;
+  if (!info || !readFile(recoveryPath(), text)) { err = "No recovery file"; return false; }
+  try {
+    loadScene(sceneFromJson(text));
+  } catch (const std::exception& e) { err = e.what(); return false; }
+  currentFile = info->file;  // saving writes back to the original file
+  saved_.clear();            // recovered changes are unsaved
+  autosaved_ = committed_;
+  return true;
 }
 
 void App::toast(const std::string& msg, bool error) {
@@ -39,16 +96,24 @@ void App::toast(const std::string& msg, bool error) {
 }
 
 // ============================================================ scene lifecycle
-std::string App::snapshot() { return world + "\n" + nodeToJson(root); }
+// undo snapshot: world id, bookmarks, scene tree (one line each)
+std::string App::snapshot() { return world + "\n" + bookmarksToJson(bookmarks) + "\n" + lightsToJson(lights) + "\n" + nodeToJson(root); }
 void App::restore(const std::string& s) {
-  auto nl = s.find('\n');
+  auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1), nl3 = s.find('\n', nl2 + 1);
   world = s.substr(0, nl);
-  root = nodeFromJson(s.substr(nl + 1));
+  bookmarks = bookmarksFromJson(s.substr(nl + 1, nl2 - nl - 1));
+  lights = lightsFromJson(s.substr(nl2 + 1, nl3 - nl2 - 1));
+  root = nodeFromJson(s.substr(nl3 + 1));
+  recordLinks(root, linkDefs_);
 }
 
 void App::loadScene(SceneFile f) {
   root = std::move(f.root);
   world = (!f.world.empty() && findNode(root, f.world)) ? f.world : "";
+  bookmarks = std::move(f.bookmarks);
+  lights = std::move(f.lights);
+  recordLinks(root, linkDefs_);
+  isolate.clear();
   selection.clear();
   if (f.camera) editCam.load(*f.camera);
   mode = Mode::Edit;
@@ -83,7 +148,7 @@ bool App::loadSceneFile(const std::string& path, std::string& err) {
 
 std::string App::serialize() {
   CameraState cs = editCam.save();
-  return sceneToJson(root, reg, world, &cs);
+  return sceneToJson(root, reg, world, &cs, &bookmarks, &lights);
 }
 
 bool App::saveSceneFile(const std::string& path, std::string& err) {
@@ -91,6 +156,7 @@ bool App::saveSceneFile(const std::string& path, std::string& err) {
   currentFile = path;
   lastFile = path;
   saved_ = committed_;
+  clearRecovery();
   saveSettings();
   return true;
 }
@@ -104,7 +170,21 @@ void App::rebuild() {
   version_++;
   lastChange_ = now;
   if (!world.empty() && !findNode(root, world)) world.clear();
-  ev = std::make_unique<SceneEvaluator>(root, reg, world);
+  syncLinks(root, linkDefs_);  // an edit of one linked duplicate reaches the others
+  // Isolate (view only): a copy of the tree with everything else hidden; picking and drawing use it
+  for (auto it = isolate.begin(); it != isolate.end();) it = findNode(root, *it) ? std::next(it) : isolate.erase(it);
+  if (!isolate.empty()) {
+    viewRoot_ = root;
+    std::unordered_set<std::string> keep;
+    for (auto& id : isolate) {
+      for (Node* n : pathTo(root, id)) keep.insert(n->id);           // ancestors (their transforms)
+      if (Node* n = findNode(root, id)) walk(*n, [&](Node& m, Node*, int) { keep.insert(m.id); });
+    }
+    if (!world.empty()) for (Node* n : pathTo(root, world)) keep.insert(n->id);
+    if (Node* w = world.empty() ? nullptr : findNode(root, world)) walk(*w, [&](Node& m, Node*, int) { keep.insert(m.id); });
+    walk(viewRoot_, [&](Node& m, Node*, int) { if (!keep.count(m.id)) m.hidden = true; });
+  }
+  ev = std::make_unique<SceneEvaluator>(isolate.empty() ? root : viewRoot_, reg, world);
 }
 
 void App::commit() {
@@ -164,6 +244,7 @@ void App::duplicateSelection() {
     if (!p || !n) continue;
     Node c = cloneFresh(*n);
     c.name += " copy";
+    c.linkId.clear();  // a plain copy is independent (Duplicate linked keeps the link)
     size_t i = 0;
     while (i < p->children.size() && p->children[i].id != id) i++;
     out.push_back(c.id);
@@ -172,6 +253,109 @@ void App::duplicateSelection() {
   selection = out;
   commit();
   if (!out.empty()) startModal(Modal::Grab);
+}
+
+void App::duplicateLinked() {
+  std::vector<std::string> out;
+  for (auto& id : selection) {
+    Node* p = findParent(root, id);
+    Node* n = findNode(root, id);
+    if (!p || !n) continue;
+    if (n->linkId.empty()) n->linkId = newId("l");
+    Node c = cloneFresh(*n);  // keeps the link id
+    c.name += " (linked)";
+    size_t i = 0;
+    while (i < p->children.size() && p->children[i].id != id) i++;
+    out.push_back(c.id);
+    p->children.insert(p->children.begin() + i + 1, std::move(c));
+  }
+  selection = out;
+  commit();
+  if (!out.empty()) startModal(Modal::Grab);
+}
+
+void App::unlink(const std::string& id) {
+  if (Node* n = findNode(root, id)) { n->linkId.clear(); commit(); }
+}
+
+int App::linkCount(const std::string& linkId) {
+  int c = 0;
+  if (!linkId.empty()) walk(root, [&](Node& n, Node*, int) { if (n.linkId == linkId) c++; });
+  return c;
+}
+
+std::string App::copySelection() {
+  nlohmann::json j = {{"format", "4dcad-clipboard"}, {"nodes", nlohmann::json::array()}};
+  for (auto& id : selection) {
+    Node* n = findNode(root, id);
+    if (!n || id == root.id) continue;
+    bool covered = false;
+    for (auto& o : selection) if (o != id && isAncestor(root, o, id)) covered = true;
+    if (covered) continue;  // copied with its parent
+    Node c = *n;
+    if (auto w = worldXf(root, id)) c.xf = *w;  // pasted at the scene root: same place in the world
+    j["nodes"].push_back(nlohmann::json::parse(nodeToJson(c)));
+  }
+  return j["nodes"].empty() ? "" : j.dump();
+}
+
+bool App::pasteNodes(const std::string& text) {
+  nlohmann::json j;
+  try { j = nlohmann::json::parse(text); } catch (...) { return false; }
+  if (!j.is_object() || j.value("format", std::string()) != "4dcad-clipboard" || !j.contains("nodes")) return false;
+  std::vector<std::string> out;
+  for (auto& nj : j["nodes"]) {
+    Node n;
+    try { n = cloneFresh(nodeFromJson(nj.dump())); } catch (...) { continue; }
+    // links and anchors refer to this scene only when their target exists here
+    walk(n, [&](Node& m, Node*, int) {
+      if (m.anchor && !findNode(root, m.anchor->world)) m.anchor.reset();
+      if (!m.linkId.empty() && linkCount(m.linkId) == 0) m.linkId.clear();
+    });
+    out.push_back(n.id);
+    root.children.push_back(std::move(n));
+  }
+  if (out.empty()) return false;
+  selection = out;
+  commit();
+  return true;
+}
+
+void App::toggleIsolate() {
+  if (!isolate.empty()) isolate.clear();
+  else for (auto& id : selection) if (id != root.id) isolate.insert(id);
+  rebuild();
+}
+
+void App::addBookmark(const std::string& name) {
+  CameraBookmark b;
+  b.name = name.empty() ? "View " + std::to_string(bookmarks.size() + 1) : name;
+  b.cam = editCam.save();
+  if (geo && geoEdit.valid) { b.geo = true; b.geoPivot = geoEdit.pivot; b.geoFrame = geoEdit.frame; }
+  bookmarks.push_back(b);
+  commit();
+}
+
+void App::updateBookmark(size_t i) {
+  if (i >= bookmarks.size()) return;
+  std::string name = bookmarks[i].name;
+  bookmarks[i].cam = editCam.save();
+  bookmarks[i].geo = geo && geoEdit.valid;
+  if (bookmarks[i].geo) { bookmarks[i].geoPivot = geoEdit.pivot; bookmarks[i].geoFrame = geoEdit.frame; }
+  commit();
+}
+
+void App::gotoBookmark(size_t i) {
+  if (i >= bookmarks.size()) return;
+  const auto& b = bookmarks[i];
+  if (b.geo && !world.empty()) {
+    if (!geo) setGeo(true);
+    if (geo) { geoEdit.pivot = b.geoPivot; geoEdit.frame = b.geoFrame; geoEdit.valid = true; }
+  } else {
+    if (geo) setGeo(false);
+    editCam.load(b.cam);
+  }
+  lastChange_ = now;
 }
 
 void App::groupSelection(BoolOp op) {
@@ -358,7 +542,14 @@ bool App::project(const V4& p, const View& v, double& sx, double& sy) const {
 
 std::optional<RayHit> App::pick(double x, double y) {
   View v = currentView();
-  return castRay(*ev, geo, v.eye, screenRay(x, y, v), quality.geoMaxStep, v.frame);
+  auto hit = castRay(*ev, geo, v.eye, screenRay(x, y, v), quality.geoMaxStep, v.frame);
+  if (hit && hit->node && isLocked(hit->node->id)) hit->node = nullptr;  // locked: not selectable
+  return hit;
+}
+
+bool App::isLocked(const std::string& id) {
+  for (Node* n : pathTo(root, id)) if (n->locked) return true;
+  return false;
 }
 
 void App::focusSelection() {
@@ -503,8 +694,15 @@ std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
   // along one may change several world coordinates (e.g. X and W) but stays inside the slice.
   Node* n = findNode(root, id);
   M4 F = nodeWorldFrame(id);
-  // Global: world axes (on a world surface: the surface's tangent frame at the object)
-  if (editSet.globalAxes) F = (n && n->anchor) ? n->anchor->basis : identity();
+  if (editSet.globalAxes) {
+    if (n && n->anchor) F = n->anchor->basis;  // on a world surface: the surface's directions at the object
+    else {
+      // the shown world axes, exactly: an arrow changes a single coordinate (it may leave the slice)
+      std::array<V4, 3> r;
+      for (int k = 0; k < 3; k++) r[k] = unit(globalAxisLabel(k));
+      return r;
+    }
+  }
   V4 out = (geo && n && n->anchor) ? col(n->anchor->basis, 3) : col(v.frame, 3);
   out = normalize(out);
   V4 a[3];
@@ -527,6 +725,30 @@ std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
     done.push_back(d);
   }
   return r;
+}
+
+bool App::globalExact(const std::string& id) {
+  Node* n = findNode(root, id);
+  return editSet.globalAxes && n && !n->anchor;
+}
+
+int App::globalAxisLabel(int k) const {
+  if (geo) return k;
+  M4 p = editCam.axes();
+  V4 c = col(p, k);
+  for (int i = 0; i < 4; i++) if (std::abs(c[i]) > 0.5) return i;
+  return k;
+}
+
+V4 App::keyAxis(const std::string& id, const View& v, int k) {
+  if (globalExact(id)) return unit(k);
+  return k < 3 ? gizmoAxes(id, v)[k] : V4{0, 0, 0, 0};
+}
+
+void App::setSliderAxis(int s) {
+  if (s < 0 || s > 3) return;
+  editCam.setSlider(s);
+  lastChange_ = now;
 }
 
 static double snapTo(double x, double step) { return step > 0 ? std::round(x / step) * step : x; }
@@ -601,7 +823,7 @@ static double segDist(double px, double py, double ax, double ay, double bx, dou
 Gizmo App::gizmo() {
   Gizmo g;
   Node* n = selected();
-  if (mode != Mode::Edit || tool == Tool::Select || !n || n->id == root.id || modal != Modal::None) return g;
+  if (mode != Mode::Edit || tool == Tool::Select || !n || n->id == root.id || modal != Modal::None || isLocked(n->id)) return g;
   View v = currentView();
   V4 c = nodeWorldPos(n->id);
   if (!project(c, v, g.cx, g.cy)) return g;
@@ -615,6 +837,9 @@ Gizmo App::gizmo() {
     ax.dir = dirs[a];
     if (!project(c + ax.dir * g.worldLen, v, ax.ex, ax.ey)) { ax.ex = g.cx; ax.ey = g.cy; }
     ax.visible = true;  // always 3 arrows (an arrow pointing at the camera is just short)
+    bool exact = globalExact(n->id);
+    ax.axis = exact ? globalAxisLabel(a) : a;
+    ax.faded = exact && !geo && std::abs(dot(ax.dir, col(v.frame, 3))) > 0.05;
   }
   if (tool == Tool::Rotate) {
     double r = g.worldLen * 0.85;
@@ -624,6 +849,8 @@ Gizmo App::gizmo() {
       ring.a = pl[0]; ring.b = pl[1];
       ring.u = dirs[pl[0]];
       ring.v = dirs[pl[1]];
+      ring.la = g.axes[pl[0]].axis;
+      ring.lb = g.axes[pl[1]].axis;
       bool ok = true;
       for (int k = 0; k <= 64 && ok; k++) {
         double t = k / 64.0 * 2 * PI, sx, sy;
@@ -665,7 +892,7 @@ Gizmo App::gizmo() {
 void App::captureOrig() {
   orig_.clear();
   for (auto& id : selection)
-    if (Node* n = findNode(root, id); n && id != root.id) orig_.push_back({id, {n->xf, n->anchor}});
+    if (Node* n = findNode(root, id); n && id != root.id && !isLocked(id)) orig_.push_back({id, {n->xf, n->anchor}});
 }
 void App::restoreOrig() {
   for (auto& [id, o] : orig_)
@@ -708,14 +935,14 @@ void App::applyModal() {
   for (auto& [id, o] : orig_) ids.push_back(id);
   if (modal == Modal::Grab) {
     std::vector<V4> dirs{right, up};
-    if (modalAxes.size() == 1) dirs = {modalAxes[0] < 3 ? gizmoAxes(primaryOf(ids), v)[modalAxes[0]] : V4{0, 0, 0, 0}};
+    if (modalAxes.size() == 1) dirs = {keyAxis(primaryOf(ids), v, modalAxes[0])};
     for (auto& [id, o] : orig_) {
       V4 c = nodeWorldPos(id);
       double depth = std::max(0.5, std::abs(dot(c - v.eye, fwd)));
       double k = 2 * depth * tanHalf() / vpH;
       V4 delta = right * (dx * k) - up * (dy * k);
       if (modalAxes.size() == 1) {
-        V4 axis = modalAxes[0] < 3 ? gizmoAxes(id, v)[modalAxes[0]] : V4{0, 0, 0, 0};
+        V4 axis = keyAxis(id, v, modalAxes[0]);
         double sx0, sy0, sx1, sy1;
         if (length(axis) > 0.5 && project(c, v, sx0, sy0) && project(c + axis, v, sx1, sy1)) {
           double ax = sx1 - sx0, ay = sy1 - sy0, l2 = ax * ax + ay * ay;
@@ -734,9 +961,7 @@ void App::applyModal() {
         int a, b;
         if (modalAxes.size() >= 2) { a = modalAxes[0]; b = modalAxes[1]; }
         else { int x = modalAxes[0]; a = x == 0 ? 1 : 0; b = x == 2 ? 1 : x == 3 ? 1 : 2; if (x == 1) { a = 2; b = 0; } }
-        auto gax = gizmoAxes(id, v);
-        if (a > 2 || b > 2) continue;
-        V4 u = gax[a], w = gax[b];
+        V4 u = keyAxis(id, v, a), w = keyAxis(id, v, b);
         w = reject(w, u);
         if (length(u) < 0.5 || length(w) < 0.2) continue;
         q = rotationInPlane(u, normalize(w), ang);
@@ -754,48 +979,51 @@ void App::applyModal() {
 }
 
 // ============================================================ input
-void App::handleKey(int key, bool shift, bool ctrl) {
-  if (ctrl && key == GLFW_KEY_Z) { shift ? redo() : undo(); return; }
-  if (ctrl && key == GLFW_KEY_Y) { redo(); return; }
-  if (ctrl && key == GLFW_KEY_G) { groupSelection(BoolOp::Union); return; }
-  if (key == GLFW_KEY_TAB) { setMode(mode == Mode::Edit ? Mode::Explore : Mode::Edit); return; }
+void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
+  auto P = [&](Action a) { return keys.pressed(a, key, ctrl, shift, alt); };
+  if (P(Action::Undo)) { undo(); return; }
+  if (P(Action::Redo)) { redo(); return; }
+  if (P(Action::Group)) { groupSelection(BoolOp::Union); return; }
+  if (P(Action::ToggleMode)) { setMode(mode == Mode::Edit ? Mode::Explore : Mode::Edit); return; }
   if (mode == Mode::Explore) {
-    if (key == GLFW_KEY_ESCAPE) { if (mouseCaptured) wantRelease = true; else setMode(Mode::Edit); }
-    if (key == GLFW_KEY_R && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
+    if (P(Action::ReleaseMouse)) { if (mouseCaptured) wantRelease = true; else setMode(Mode::Edit); }
+    if (P(Action::Reset4D) && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
+    if (P(Action::DebugRay)) { debugRay = !debugRay; debugFrozen = false; lastChange_ = now; }
+    if (P(Action::DebugRayFreeze) && debugRay) debugFrozen = !debugFrozen;  // the status line shows it
     return;
   }
-  if (drag_ == Drag::Fly) return;  // WASD are flying keys while RMB is held
+  if (drag_ == Drag::Fly) return;  // movement keys while RMB is held
   if (modal != Modal::None) {
-    int ax = key == GLFW_KEY_X ? 0 : key == GLFW_KEY_Y ? 1 : key == GLFW_KEY_Z ? 2 : key == GLFW_KEY_W ? 3 : -1;
+    int ax = P(Action::AxisX) ? 0 : P(Action::AxisY) ? 1 : P(Action::AxisZ) ? 2 : P(Action::AxisW) ? 3 : -1;
     if (ax >= 0) {
       if (modal == Modal::Rotate) modalAxes = (modalAxes.size() >= 2 || (modalAxes.size() == 1 && modalAxes[0] == ax)) ? std::vector<int>{ax} : (modalAxes.push_back(ax), modalAxes);
       else modalAxes = (modalAxes.size() == 1 && modalAxes[0] == ax) ? std::vector<int>{} : std::vector<int>{ax};
       applyModal();
-    } else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) confirmModal();
-    else if (key == GLFW_KEY_ESCAPE) cancelModal();
+    } else if (P(Action::Confirm)) confirmModal();
+    else if (P(Action::Cancel)) cancelModal();
     return;
   }
-  if (ctrl) return;
-  switch (key) {
-    case GLFW_KEY_V: setGeo(!geo); break;
-    case GLFW_KEY_Q: tool = Tool::Select; break;
-    case GLFW_KEY_W: if (shift) editCam.reset4(); else tool = Tool::Move; break;
-    case GLFW_KEY_E: tool = Tool::Rotate; break;
-    case GLFW_KEY_L: editSet.globalAxes = !editSet.globalAxes; toast(editSet.globalAxes ? "Transform axes: global" : "Transform axes: local"); break;
-    case GLFW_KEY_G: startModal(Modal::Grab); break;
-    case GLFW_KEY_R: startModal(Modal::Rotate); break;
-    case GLFW_KEY_S: startModal(Modal::Scale); break;
-    case GLFW_KEY_X: case GLFW_KEY_DELETE: if (!selection.empty()) deleteSelection(); break;
-    case GLFW_KEY_D: if (shift) duplicateSelection(); break;
-    case GLFW_KEY_F: case GLFW_KEY_PERIOD: case GLFW_KEY_KP_DECIMAL: focusSelection(); break;
-    case GLFW_KEY_ESCAPE: selection.clear(); break;
-    case GLFW_KEY_A: { selection.clear(); for (auto& c : root.children) selection.push_back(c.id); break; }
-    case GLFW_KEY_1: case GLFW_KEY_KP_1: standardView(0); break;
-    case GLFW_KEY_3: case GLFW_KEY_KP_3: standardView(1); break;
-    case GLFW_KEY_7: case GLFW_KEY_KP_7: standardView(2); break;
-    case GLFW_KEY_9: case GLFW_KEY_KP_9: standardView(3); break;
-    default: break;
-  }
+  if (P(Action::ToggleView)) setGeo(!geo);
+  else if (P(Action::ToolSelect)) tool = Tool::Select;
+  else if (P(Action::ToolMove)) tool = Tool::Move;
+  else if (P(Action::ToolRotate)) tool = Tool::Rotate;
+  else if (P(Action::ToggleGlobal)) editSet.globalAxes = !editSet.globalAxes;
+  else if (P(Action::ToggleSnap)) editSet.snap = !editSet.snap;
+  else if (P(Action::Grab)) startModal(Modal::Grab);
+  else if (P(Action::Rotate)) startModal(Modal::Rotate);
+  else if (P(Action::Scale)) startModal(Modal::Scale);
+  else if (P(Action::Delete)) { if (!selection.empty()) deleteSelection(); }
+  else if (P(Action::Duplicate)) duplicateSelection();
+  else if (P(Action::DuplicateLinked)) duplicateLinked();
+  else if (P(Action::Isolate)) toggleIsolate();
+  else if (P(Action::Focus)) focusSelection();
+  else if (P(Action::Deselect)) selection.clear();
+  else if (P(Action::SelectAll)) { selection.clear(); for (auto& c : root.children) selection.push_back(c.id); }
+  else if (P(Action::ViewFront)) standardView(0);
+  else if (P(Action::ViewRight)) standardView(1);
+  else if (P(Action::ViewTop)) standardView(2);
+  else if (P(Action::ViewAlongW)) standardView(3);
+  else if (P(Action::Reset4D)) editCam.reset4();
 }
 
 void App::flyGeoEdit(const InputState& in, double dt) {
@@ -803,11 +1031,11 @@ void App::flyGeoEdit(const InputState& in, double dt) {
   auto f = field();
   if (in.dx != 0 || in.dy != 0) geoEdit.look(in.dx * editSet.lookSpeed, in.dy * editSet.lookSpeed);
   if (!in.keyDown) return;
-  auto K = [&](int k) { return in.keyDown(k) ? 1.0 : 0.0; };
+  auto K = [&](Action a) { return keys.held(a, in.keyDown) ? 1.0 : 0.0; };
   double sp = editSet.flySpeed * dt;
-  double mr = K(GLFW_KEY_D) - K(GLFW_KEY_A), mf = K(GLFW_KEY_W) - K(GLFW_KEY_S);
-  double mu = K(GLFW_KEY_SPACE) - std::max(K(GLFW_KEY_LEFT_SHIFT), K(GLFW_KEY_RIGHT_SHIFT));
-  double roll = K(GLFW_KEY_E) - K(GLFW_KEY_Q);
+  double mr = K(Action::MoveRight) - K(Action::MoveLeft), mf = K(Action::MoveForward) - K(Action::MoveBack);
+  double mu = K(Action::MoveUp) - K(Action::MoveDown);
+  double roll = K(Action::RollRight) - K(Action::RollLeft);
   if (roll != 0) geoEdit.roll(roll * 1.2 * dt);
   if (mr != 0 || mf != 0 || mu != 0) geoEdit.move(f, {mr * sp, mu * sp, mf * sp}, quality.geoMaxStep * 0.5, nullptr);
 }
@@ -975,11 +1203,11 @@ void App::updateExplore(const InputState& in, double dt) {
     sp = clampd(sp * std::exp(in.wheel * 0.1), 0.2, 30);
   }
   if (!in.keysEnabled || !in.keyDown) return;
-  auto K = [&](int k) { return in.keyDown(k) ? 1.0 : 0.0; };
+  auto K = [&](Action a) { return keys.held(a, in.keyDown) ? 1.0 : 0.0; };
   double rot = 1.2 * dt * X.turn4Speed;
-  double mr = K(GLFW_KEY_D) - K(GLFW_KEY_A), mf = K(GLFW_KEY_W) - K(GLFW_KEY_S);
-  double mu = K(GLFW_KEY_SPACE) - std::max(K(GLFW_KEY_LEFT_SHIFT), K(GLFW_KEY_RIGHT_SHIFT));
-  double ma = K(GLFW_KEY_E) - K(GLFW_KEY_Q);
+  double mr = K(Action::MoveRight) - K(Action::MoveLeft), mf = K(Action::MoveForward) - K(Action::MoveBack);
+  double mu = K(Action::MoveUp) - K(Action::MoveDown);
+  double ma = K(Action::RollRight) - K(Action::RollLeft);
   double r = X.bodyRadius;
   if (geo && geoEdit.valid) {
     double sp = X.geoMoveSpeed * dt;
@@ -990,16 +1218,53 @@ void App::updateExplore(const InputState& in, double dt) {
                    X.geoCollide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalGeo(to).d < r; }) : nullptr);
   } else {
     double sp = X.moveSpeed * dt;
-    double zx = K(GLFW_KEY_Z) - K(GLFW_KEY_X), cv = K(GLFW_KEY_C) - K(GLFW_KEY_V);
+    double zx = K(Action::TurnWPlus) - K(Action::TurnWMinus), cv = K(Action::SideWPlus) - K(Action::SideWMinus);
+    double mw = K(Action::MoveAnaPlus) - K(Action::MoveAnaMinus);  // along the slider (4th) axis
     if (zx != 0) editCam.rotate4AroundEye(2, 3, zx * rot);
     if (cv != 0) editCam.rotate4AroundEye(0, 3, cv * rot);
-    if (mr != 0 || mf != 0 || mu != 0 || ma != 0)
-      editCam.move({mr * sp, mu * sp, mf * sp, ma * sp},
+    if (ma != 0) editCam.rotate4AroundEye(0, 1, ma * 1.2 * dt);  // Q/E roll, as in the Geodesic view
+    if (mr != 0 || mf != 0 || mu != 0 || mw != 0)
+      editCam.move({mr * sp, mu * sp, mf * sp, mw * sp},
                    X.collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalFull(to).d < r; }) : nullptr);
   }
 }
 
 // ============================================================ rendering
+std::vector<LightParam> App::frameLights() {
+  std::vector<LightParam> out;
+  for (auto& l : lights) {
+    if (!l.enabled || out.size() >= (size_t)MAX_LIGHTS) continue;
+    LightParam p;
+    p.pos = l.pos;
+    for (int i = 0; i < 3; i++) p.color[i] = (float)(l.color[i] * l.intensity);
+    p.range = (float)l.range;
+    p.shadows = l.shadows;
+    out.push_back(p);
+  }
+  if (quality.emissiveLights) {
+    // emissive objects light their surroundings: a point light at the object's centre,
+    // reaching a few times its size (brightest first, up to the light limit)
+    auto bounds = computeBounds(isolate.empty() ? root : viewRoot_, reg);
+    std::vector<std::pair<double, LightParam>> em;
+    walk(isolate.empty() ? root : viewRoot_, [&](Node& n, Node*, int) {
+      if (!n.isLeaf() || n.mat.emissive <= 0.05) return;
+      for (Node* a : pathTo(isolate.empty() ? root : viewRoot_, n.id)) if (a->hidden) return;
+      auto b = bounds.find(n.id);
+      double r = b != bounds.end() && std::isfinite(b->second.r) ? b->second.r : 1.0;
+      LightParam p;
+      p.pos = nodeWorldPos(n.id);  // the object's origin (shapes are built around it)
+      double k = n.mat.emissive * 1.2;
+      for (int i = 0; i < 3; i++) p.color[i] = (float)(n.color[i] * k);
+      p.range = (float)std::max(1.5, r * 6);
+      p.shadows = true;  // fine although the light sits inside the object: shadow rays ignore emissive objects
+      em.push_back({n.mat.emissive * (n.color[0] + n.color[1] + n.color[2]), p});
+    });
+    std::sort(em.begin(), em.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    for (auto& [w, p] : em) if (out.size() < (size_t)MAX_LIGHTS) out.push_back(p);
+  }
+  return out;
+}
+
 View App::thumbnailView() {
   View cur = currentView();
   auto bounds = computeBounds(root, reg);
@@ -1028,8 +1293,23 @@ void App::renderFrame() {
   View v = currentView();
   bool interacting = drag_ != Drag::None && drag_ != Drag::Click;
   bool moving = (now - lastChange_) < 0.25 || interacting || modal != Modal::None || mode == Mode::Explore;
-  float scale = quality.resolutionScale * (moving ? quality.motionScale : 1.0f);
   const QualitySettings& q = quality;
+  // the fast profile in Explore (and, if chosen, while moving in Edit mode); else the main settings
+  bool fast = mode == Mode::Explore || (moving && q.fastWhileMovingInEdit);
+  RenderProfile prof;
+  if (fast) prof = q.fast;
+  else {
+    prof.resolution = quality.resolutionScale * (moving ? quality.motionScale : 1.0f);
+    prof.maxSteps = q.maxSteps;
+    prof.bounces = q.transparentLayers;
+    prof.textures = prof.specular = prof.pointLights = true;
+    prof.shadows = q.shadows;
+    prof.pointShadows = q.pointShadows;
+    prof.ao = q.ao;
+    prof.aoSamples = 5;
+    prof.shadowSteps = 64;
+  }
+  float scale = std::clamp(prof.resolution, 0.1f, 2.0f);
   std::ostringstream key;
   key.precision(9);
   for (double x : v.eye) key << x << ',';
@@ -1048,6 +1328,25 @@ void App::renderFrame() {
   fp.quality = &quality;
   fp.light = light();
   fp.skyCol = worldColor();
+  fp.lights = frameLights();
+  fp.prof = prof;
+  for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows; }
+  key << prof.maxSteps << prof.bounces << prof.textures << prof.specular << prof.pointLights << prof.shadows << prof.pointShadows << prof.ao
+      << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching;
+  // debug ray: re-traced from the view every frame unless frozen
+  if (debugRay && ev) {
+    if (!debugFrozen) debugTrace = traceRay(*ev, fp.geo, v.eye, col(v.frame, 2), quality);
+    fp.debugPts = debugTrace.pts;
+    {  // the start sits in (or next to) the eye: skip it, or it would cover the screen
+      size_t k = 0;
+      while (k + 2 < fp.debugPts.size() && length(fp.debugPts[k] - debugTrace.pts[0]) < 0.35) k++;
+      fp.debugPts.erase(fp.debugPts.begin(), fp.debugPts.begin() + k);
+    }
+    fp.debugReason = (int)debugTrace.reason;
+    for (auto& p : fp.debugPts) for (double x : p) key << (float)x << ',';
+  }
+  if (!fp.geo) fp.axes = editCam.axes();
+  key << editCam.slider << ',';
   for (float x : fp.skyCol) key << x << ',';
   // the player's body in Explore: casts a shadow and can be seen when light wraps around a closed world
   float r = (float)exploreSet.bodyRadius;
@@ -1062,7 +1361,7 @@ void App::renderFrame() {
     if (k.substr(0, k.find('|')) != lastKey_.substr(0, lastKey_.find('|'))) lastChange_ = now;
     lastKey_ = k;
     fp.scale = scale;
-    renderer->render(mainRT, (int)vpW, (int)vpH, root, reg, world, highlightSet(), fp);
+    renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
   }
   if (fp.geo && editSet.showThumbnail) {
     thumbW = editSet.thumbSize;
@@ -1086,7 +1385,7 @@ void App::renderFrame() {
     tk << k << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
     if (tk.str() != lastThumbKey_) {
       lastThumbKey_ = tk.str();
-      renderer->render(thumbRT, thumbW, thumbH, root, reg, world, {}, tp);
+      renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
     }
   }
 }
@@ -1100,17 +1399,40 @@ void App::saveSettings() {
                  {"maxDistGeo", q.maxDistGeo}, {"eps", q.eps}, {"stepScale", q.stepScale}, {"shadows", q.shadows}, {"shadowK", q.shadowK},
                  {"shadowMax", q.shadowMax}, {"ao", q.ao}, {"aoStrength", q.aoStrength}, {"fog", q.fog}, {"ambient", q.ambient},
                  {"lightYaw", q.lightYaw}, {"lightPitch", q.lightPitch}, {"lightW", q.lightW}, {"skyTop", q.skyTop}, {"skyBottom", q.skyBottom},
-                 {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}};
+                 {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}, {"sunIntensity", q.sunIntensity},
+                 {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
+                 {"relaxedMarching", q.relaxedMarching}, {"fastWhileMovingInEdit", q.fastWhileMovingInEdit},
+                 {"backend", BACKEND_NAMES[(int)backendPref]}};
+  const RenderProfile& f = q.fast;
+  j["render"]["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
+                         {"specular", f.specular}, {"pointLights", f.pointLights}, {"shadows", f.shadows}, {"pointShadows", f.pointShadows},
+                         {"ao", f.ao}, {"aoSamples", f.aoSamples}, {"shadowSteps", f.shadowSteps}};
   const auto& e = editSet;
   j["edit"] = {{"fov", e.fov}, {"orbitSpeed", e.orbitSpeed}, {"panSpeed", e.panSpeed}, {"zoomSpeed", e.zoomSpeed}, {"rot4Speed", e.rot4Speed},
                {"showWSlider", e.showWSlider}, {"flySpeed", e.flySpeed}, {"lookSpeed", e.lookSpeed}, {"showThumbnail", e.showThumbnail},
-               {"thumbSize", e.thumbSize}, {"globalAxes", e.globalAxes}, {"snap", e.snap}, {"snapMove", e.snapMove},
+               {"thumbSize", e.thumbSize}, {"autosaveSeconds", e.autosaveSeconds}, {"globalAxes", e.globalAxes}, {"snap", e.snap}, {"snapMove", e.snapMove},
                {"snapAngle", e.snapAngle}, {"snapScale", e.snapScale}};
   const auto& x = exploreSet;
   j["explore"] = {{"fov", x.fov}, {"lookSpeed", x.lookSpeed}, {"showOwnBody", x.showOwnBody}, {"bodyRadius", x.bodyRadius},
                   {"moveSpeed", x.moveSpeed}, {"turn4Speed", x.turn4Speed}, {"collide", x.collide}, {"geoMoveSpeed", x.geoMoveSpeed},
                   {"geoCollide", x.geoCollide}};
+  keys.toJson(j["keys"]);
   writeFile((std::filesystem::path(dataDir()) / "settings.json").string(), j.dump(2));
+}
+
+static Backend backendFromSettings(const std::string& settingsText) {
+  try {
+    auto j = nlohmann::json::parse(settingsText);
+    std::string b = j.value("render", nlohmann::json::object()).value("backend", std::string("Auto"));
+    for (int i = 0; i < 3; i++) if (b == BACKEND_NAMES[i]) return (Backend)i;
+  } catch (...) {}
+  return Backend::Auto;
+}
+
+Backend App::savedBackend() {
+  std::string text;
+  if (!readFile((std::filesystem::path(dataDir()) / "settings.json").string(), text)) return Backend::Auto;
+  return backendFromSettings(text);
 }
 
 void App::loadSettings() {
@@ -1128,13 +1450,29 @@ void App::loadSettings() {
       get(r, "aoStrength", q.aoStrength); get(r, "fog", q.fog); get(r, "ambient", q.ambient); get(r, "lightYaw", q.lightYaw);
       get(r, "lightPitch", q.lightPitch); get(r, "lightW", q.lightW); get(r, "skyTop", q.skyTop); get(r, "skyBottom", q.skyBottom);
       get(r, "grid", q.grid); get(r, "geoMaxStep", q.geoMaxStep); get(r, "geoProjectIters", q.geoProjectIters);
+      get(r, "sunIntensity", q.sunIntensity); get(r, "pointShadows", q.pointShadows); get(r, "emissiveLights", q.emissiveLights);
+      get(r, "transparentLayers", q.transparentLayers); get(r, "relaxedMarching", q.relaxedMarching);
+      get(r, "fastWhileMovingInEdit", q.fastWhileMovingInEdit);
+      auto& f = q.fast;
+      if (r.contains("fast") && r["fast"].is_object()) {
+        auto& o = r["fast"];
+        get(o, "resolution", f.resolution); get(o, "maxSteps", f.maxSteps); get(o, "bounces", f.bounces); get(o, "textures", f.textures);
+        get(o, "specular", f.specular); get(o, "pointLights", f.pointLights); get(o, "shadows", f.shadows); get(o, "pointShadows", f.pointShadows);
+        get(o, "ao", f.ao); get(o, "aoSamples", f.aoSamples); get(o, "shadowSteps", f.shadowSteps);
+      } else {  // settings from before the fast profile: the old Explore switches
+        bool simple = r.value("exploreSimple", true);
+        f.textures = !simple;
+        f.bounces = simple ? 0 : 1;
+        get(r, "exploreShadows", f.shadows); get(r, "exploreAO", f.ao); get(r, "explorePointShadows", f.pointShadows);
+      }
+      backendPref = backendFromSettings(text);
     }
     if (j.contains("edit")) {
       auto& r = j["edit"]; auto& e = editSet;
       get(r, "fov", e.fov); get(r, "orbitSpeed", e.orbitSpeed); get(r, "panSpeed", e.panSpeed); get(r, "zoomSpeed", e.zoomSpeed);
       get(r, "rot4Speed", e.rot4Speed); get(r, "showWSlider", e.showWSlider); get(r, "flySpeed", e.flySpeed); get(r, "lookSpeed", e.lookSpeed);
       get(r, "showThumbnail", e.showThumbnail); get(r, "thumbSize", e.thumbSize);
-      get(r, "globalAxes", e.globalAxes); get(r, "snap", e.snap); get(r, "snapMove", e.snapMove);
+      get(r, "autosaveSeconds", e.autosaveSeconds); get(r, "globalAxes", e.globalAxes); get(r, "snap", e.snap); get(r, "snapMove", e.snapMove);
       get(r, "snapAngle", e.snapAngle); get(r, "snapScale", e.snapScale);
     }
     if (j.contains("explore")) {
@@ -1143,6 +1481,7 @@ void App::loadSettings() {
       get(r, "moveSpeed", x.moveSpeed); get(r, "turn4Speed", x.turn4Speed); get(r, "collide", x.collide); get(r, "geoMoveSpeed", x.geoMoveSpeed);
       get(r, "geoCollide", x.geoCollide);
     }
+    if (j.contains("keys")) keys.fromJson(j["keys"]);
   } catch (...) { /* bad settings file: keep defaults */ }
 }
 

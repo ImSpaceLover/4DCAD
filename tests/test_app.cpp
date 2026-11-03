@@ -3,7 +3,10 @@
 #include <cstdlib>
 
 #include "app.hpp"
+#include "renderer.hpp"
 #include "examples.hpp"
+
+#include <nlohmann/json.hpp>
 
 using namespace fd;
 static int failures = 0, checks = 0;
@@ -340,6 +343,258 @@ int main() {
     app.editSet.globalAxes = false;
   }
 
+  // --- slider axis swap; Global gizmo moves along exactly one world coordinate ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.setSliderAxis(1);  // Y on the slider: X, W, Z shown
+    M4 F = app.editCam.frame();
+    app.editCam.yaw = 0; app.editCam.pitch = 0;
+    F = app.editCam.frame();
+    CHECK(length(col(F, 0) - unit(0)) < 1e-12 && length(col(F, 1) - unit(3)) < 1e-12 && length(col(F, 2) - unit(2)) < 1e-12,
+          "Y on the slider: right X, up W, forward Z");
+    CHECK(std::abs(std::abs(dot(col(F, 3), unit(1))) - 1) < 1e-12, "slider direction = Y");
+    app.setSliceW(2.5);
+    CHECK(std::abs(app.editCam.target[1] - 2.5) < 1e-12 && std::abs(app.sliceW() - 2.5) < 1e-12, "slider value = the Y coordinate");
+    app.editSet.globalAxes = true;
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string cb = app.selection[0];
+    findNode(app.root, cb)->xf.pos = app.editCam.target;
+    app.rebuild();
+    app.tool = Tool::Move;
+    Gizmo gz = app.gizmo();
+    CHECK(gz.axes[0].axis == 0 && gz.axes[1].axis == 3 && gz.axes[2].axis == 2, "global arrows labelled X, W, Z");
+    // view turned into the 4th dimension: arrows still move along one world coordinate only
+    app.setSliderAxis(3);
+    app.editCam.rotate4(0, 3, 0.5);
+    app.rebuild();
+    gz = app.gizmo();
+    CHECK(gz.visible && length(gz.axes[0].dir - unit(0)) < 1e-12, "global X arrow = world X exactly");
+    CHECK(gz.axes[0].faded && !gz.axes[1].faded, "X arrow leaves the turned slice: faded");
+    V4 p0 = findNode(app.root, cb)->xf.pos;
+    double mx = (gz.cx + gz.axes[0].ex) / 2, my = (gz.cy + gz.axes[0].ey) / 2;
+    app.handleInput(frameInput(mx, my, 0, 0, false, false, false), 0.016);
+    app.handleInput(frameInput(mx, my, 0, 0, true, true, false), 0.016);
+    for (int i = 1; i <= 10; i++) app.handleInput(frameInput(mx + 8 * i, my, 8, 0, true, false, false), 0.016);
+    app.handleInput(frameInput(mx + 80, my, 0, 0, false, false, true), 0.016);
+    V4 d = findNode(app.root, cb)->xf.pos - p0;
+    CHECK(std::abs(d[0]) > 0.05 && std::abs(d[1]) + std::abs(d[2]) + std::abs(d[3]) < 1e-12, "moved along X only (%.3f %.3f %.3f %.3f)", d[0], d[1], d[2], d[3]);
+    // G then W in Global: along world W only
+    p0 = findNode(app.root, cb)->xf.pos;
+    app.selection = {cb};
+    app.startModal(Modal::Grab);
+    app.handleKey(87, false, false);  // W
+    app.handleInput(frameInput(mx + 40, my - 30, 40, -30, false, false, false), 0.016);
+    app.confirmModal();
+    d = findNode(app.root, cb)->xf.pos - p0;
+    CHECK(std::abs(d[3]) > 1e-3 && std::abs(d[0]) + std::abs(d[1]) + std::abs(d[2]) < 1e-12, "G W: only W changes (%.3f)", d[3]);
+    app.editSet.globalAxes = false;
+    app.editCam.reset4();
+  }
+
+  // --- Full 4D Explore: Q/E roll, R/F move along the slider axis ---
+  {
+    app.setMode(Mode::Explore);
+    View v0 = app.currentView();
+    InputState in = frameInput(500, 350, 0, 0, false, false, false);
+    in.keyDown = [](int k) { return k == 69; /* E */ };
+    for (int i = 0; i < 10; i++) app.handleInput(in, 0.05);
+    View v1 = app.currentView();
+    CHECK(length(v1.eye - v0.eye) < 1e-9, "roll does not move");
+    CHECK(std::abs(dot(col(v1.frame, 1), col(v0.frame, 0))) > 0.3, "E rolls (up tilts toward right)");
+    CHECK(length(col(v1.frame, 2) - col(v0.frame, 2)) < 1e-9 && length(col(v1.frame, 3) - col(v0.frame, 3)) < 1e-9, "roll keeps forward and 4th axis");
+    in.keyDown = [](int k) { return k == 82; /* R */ };
+    for (int i = 0; i < 10; i++) app.handleInput(in, 0.05);
+    View v2 = app.currentView();
+    V4 d = v2.eye - v1.eye;
+    CHECK(length(d) > 0.5 && std::abs(dot(d, col(v1.frame, 3))) > 0.999 * length(d), "R moves along the 4th axis");
+    app.setMode(Mode::Edit);
+  }
+
+  // --- key bindings: defaults have no conflicts, rebinding works, settings round trip ---
+  {
+    KeyBindings kb;
+    for (int i = 0; i < (int)Action::Count; i++) {
+      auto cf = kb.conflicts((Action)i);
+      CHECK(cf.empty(), "default binding conflict: %s vs %s", actionInfo((Action)i).label, cf.empty() ? "" : actionInfo(cf[0]).label);
+    }
+    app.tool = Tool::Select;
+    app.keys.at(Action::ToolMove) = {KeyCombo{77 /* M */}, KeyCombo{}};
+    app.handleKey(87 /* W */, false, false);
+    CHECK(app.tool == Tool::Select, "old key unbound");
+    app.handleKey(77, false, false);
+    CHECK(app.tool == Tool::Move, "new key works");
+    nlohmann::json j;
+    app.keys.toJson(j);
+    KeyBindings k2;
+    k2.fromJson(j);
+    CHECK(k2.at(Action::ToolMove)[0].key == 77 && !k2.at(Action::ToolMove)[1].bound(), "bindings round trip");
+    CHECK(kb.conflicts(Action::ToolMove).empty() && (kb.at(Action::ToolSelect)[0] = KeyCombo{87}, !kb.conflicts(Action::ToolSelect).empty()), "conflict detected");
+    app.keys.resetDefaults();
+  }
+
+  // --- autosave / crash recovery ---
+  {
+    app.loadScene(playgroundScene());
+    app.currentFile = "/tmp/fd-recovery-test.4dscene.json";
+    app.clearRecovery();
+    app.now = 1000;
+    app.autosaveTick();
+    CHECK(!app.findRecovery(), "nothing unsaved: no recovery file");
+    findNode(app.root, app.root.children[1].id)->xf.pos[0] += 2;
+    app.commit();
+    app.autosaveTick();
+    auto info = app.findRecovery();
+    CHECK(info && info->file == app.currentFile && !info->time.empty(), "unsaved changes autosaved");
+    App other;  // "next start after a crash"
+    std::string err;
+    CHECK(other.recover(err), "recover: %s", err.c_str());
+    CHECK(nodeToJson(other.root) == nodeToJson(app.root) && other.dirty() && other.currentFile == app.currentFile, "recovered scene is the unsaved one");
+    app.undo();
+    app.autosaveTick();
+    CHECK(!app.findRecovery(), "undone back to the saved state: recovery file removed");
+    app.currentFile.clear();
+  }
+
+  // --- scene management: linked duplicates, copy / paste, lock, isolate, camera bookmarks ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string a = app.selection[0];
+    findNode(app.root, a)->xf.pos = {0, 1, 0, 0};
+    app.commit();
+    app.duplicateLinked();
+    app.cancelModal();
+    std::string b = app.selection[0];
+    CHECK(b != a && !findNode(app.root, a)->linkId.empty() && findNode(app.root, a)->linkId == findNode(app.root, b)->linkId, "linked copy");
+    findNode(app.root, b)->xf.pos = {3, 1, 0, 0};
+    findNode(app.root, a)->color = {0.1, 0.9, 0.1};
+    findNode(app.root, a)->mods[0].length = 5;
+    app.commit();
+    Node* nb = findNode(app.root, b);
+    CHECK(nb->color[1] == 0.9 && nb->mods[0].length == 5, "edit reaches the linked copy");
+    CHECK(nb->xf.pos[0] == 3 && findNode(app.root, a)->xf.pos[0] == 0, "each copy keeps its own transform");
+    // linked groups: an edit inside one group reaches the other, ids stay stable
+    app.placeItem("builtin-sphere", std::nullopt);
+    std::string sp = app.selection[0];
+    app.selection = {a, sp};
+    app.groupSelection(BoolOp::Union);
+    std::string g1 = app.selection[0];
+    app.duplicateLinked();
+    app.cancelModal();
+    std::string g2 = app.selection[0];
+    std::string innerId = findNode(app.root, g2)->children[1].id;
+    findNode(app.root, g1)->children[1].color = {1, 0, 1};
+    findNode(app.root, g1)->children[1].xf.pos[3] = 0.7;
+    app.commit();
+    Node* inner = findNode(app.root, g2)->children.size() > 1 ? &findNode(app.root, g2)->children[1] : nullptr;
+    CHECK(inner && inner->id == innerId && inner->color[0] == 1 && inner->xf.pos[3] == 0.7, "edit inside a linked group reaches its copy");
+    app.undo();
+    CHECK(findNode(app.root, g2)->children[1].color[0] != 1 && findNode(app.root, g1)->children[1].color[0] != 1, "undo restores both");
+    app.unlink(g2);
+    findNode(app.root, g1)->op = BoolOp::Intersection;
+    app.commit();
+    CHECK(findNode(app.root, g2)->op == BoolOp::Union, "unlinked copy is independent");
+
+    // copy / paste keeps the world position (the source sits in a moved, rotated group)
+    findNode(app.root, g1)->xf.pos = {2, 0, 1, 0};
+    findNode(app.root, g1)->xf.rot = planeRotation(0, 2, 0.6);
+    app.commit();
+    V4 wsp = app.nodeWorldPos(findNode(app.root, g1)->children[1].id);
+    app.selection = {findNode(app.root, g1)->children[1].id};
+    std::string clip = app.copySelection();
+    size_t before = app.root.children.size();
+    CHECK(app.pasteNodes(clip) && app.root.children.size() == before + 1, "paste adds to the root");
+    std::string pasted = app.selection[0];
+    CHECK(pasted != findNode(app.root, g1)->children[1].id && length(app.nodeWorldPos(pasted) - wsp) < 1e-9, "pasted at the same place, new id");
+    CHECK(!app.pasteNodes("hello"), "non-4DCAD clipboard rejected");
+
+    // lock: not pickable, no gizmo
+    app.editCam.target = app.nodeWorldPos(b);
+    app.editCam.reset4();
+    app.rebuild();
+    View v = app.currentView();
+    double sx, sy;
+    app.project(app.nodeWorldPos(b), v, sx, sy);
+    auto h = app.pick(sx, sy);
+    CHECK(h && h->node && h->node->id == b, "unlocked: pickable");
+    findNode(app.root, b)->locked = true;
+    app.commit();
+    h = app.pick(sx, sy);
+    CHECK(h && !h->node, "locked: not pickable");
+    app.selection = {b};
+    app.tool = Tool::Move;
+    CHECK(!app.gizmo().visible, "locked: no gizmo");
+    findNode(app.root, b)->locked = false;
+    app.commit();
+
+    // isolate: only the isolated object is drawn / picked (view only, not saved)
+    std::string savedBefore = app.serialize();
+    app.selection = {pasted};
+    app.toggleIsolate();
+    h = app.pick(sx, sy);
+    CHECK(!h || !h->node || h->node->id != b, "isolated: others not pickable");
+    CHECK(app.serialize() == savedBefore && !findNode(app.root, b)->hidden, "isolation is not saved");
+    app.toggleIsolate();
+    h = app.pick(sx, sy);
+    CHECK(h && h->node && h->node->id == b, "show all again");
+
+    // camera bookmarks: saved in the scene, undoable
+    app.editCam.target = {1, 2, 3, 4};
+    app.editCam.yaw = 0.3;
+    app.addBookmark("Spot");
+    app.editCam.target = {0, 0, 0, 0};
+    app.editCam.yaw = 1.5;
+    app.gotoBookmark(0);
+    CHECK(length(app.editCam.target - V4{1, 2, 3, 4}) < 1e-12 && app.editCam.yaw == 0.3, "bookmark restores the camera");
+    SceneFile f = sceneFromJson(app.serialize());
+    CHECK(f.bookmarks.size() == 1 && f.bookmarks[0].name == "Spot", "bookmark saved in the scene");
+    app.undo();
+    CHECK(app.bookmarks.empty(), "adding a bookmark is undoable");
+  }
+
+  // --- emissive objects light the scene (shadowed: shadow rays ignore emissive objects, so no self-shadow) ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.lights.clear();
+    app.placeItem("builtin-sphere", std::nullopt);
+    Node* e = findNode(app.root, app.selection[0]);
+    e->xf.pos = {2, 1, 0, 0};
+    e->mat.emissive = 1;
+    e->color = {1, 0.5, 0.2};
+    app.commit();
+    auto ls = app.frameLights();
+    CHECK(ls.size() == 1 && length(ls[0].pos - V4{2, 1, 0, 0}) < 1e-9 && ls[0].shadows && ls[0].color[0] > ls[0].color[2], "emissive object -> shadowed light");
+    e = findNode(app.root, app.selection[0]);
+    e->hidden = true;
+    app.commit();
+    CHECK(app.frameLights().empty(), "hidden emissive object gives no light");
+    app.quality.emissiveLights = false;
+    findNode(app.root, app.selection[0])->hidden = false;
+    app.commit();
+    CHECK(app.frameLights().empty(), "emissive lights can be turned off");
+    app.quality.emissiveLights = true;
+  }
+
+  // --- render profiles: what the shader is told to do ---
+  {
+    FrameParams fp;
+    fp.quality = &app.quality;
+    fp.lights.resize(2);
+    fp.prof = RenderProfile::preset(RenderProfile::Fast);
+    FrameUniforms u = frameUniforms(fp, 100, 80);
+    CHECK(u.k[1] == 0 && u.j[3] == 0 && u.i[2] == 0 && u.j[2] == 2 && u.k[0] == 0, "fast: no bounces / textures / AO, lights unshadowed");
+    fp.prof = RenderProfile::preset(RenderProfile::Full);
+    u = frameUniforms(fp, 100, 80);
+    CHECK(u.k[1] == 3 && u.j[3] == 1 && u.i[2] == 1 && u.k[3] == 5 && u.l[0] == 64 && u.k[0] == 3, "full: bounces, textures, AO, light shadows");
+    fp.prof.pointLights = false;
+    fp.prof.specular = false;
+    u = frameUniforms(fp, 100, 80);
+    CHECK(u.j[2] == 0 && u.l[1] == 0, "point lights / highlights off");
+  }
+
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---
   app.loadScene(planetScene());
   app.setGeo(true);
@@ -367,6 +622,24 @@ int main() {
   {
     auto sc = app.worldColor();
     CHECK(std::abs(sc[0] - 0.35f) < 1e-4 && std::abs(sc[2] - 0.75f) < 1e-4, "geodesic sky = world surface colour");
+  }
+  // debug ray: geodesic on the planet stays on the surface and stops at the distance limit or a hit
+  {
+    QualitySettings q = app.quality;
+    View gv = app.currentView();
+    RayTrace r = traceRay(*app.ev, true, gv.eye, col(gv.frame, 2), q);
+    CHECK(r.pts.size() > 5 && r.steps == (int)r.pts.size() - 1, "trace recorded %d steps", r.steps);
+    double off = 0;
+    for (auto& p : r.pts) off = std::max(off, std::abs(length(p) - 3));
+    CHECK(off < 1e-2, "geodesic ray stays on the surface (%.4f)", off);
+    CHECK(r.reason == RayTrace::Hit || r.reason == RayTrace::MaxDistance || r.reason == RayTrace::MaxSteps, "stop reason %s", rayReasonText(r.reason));
+    if (r.reason == RayTrace::MaxDistance) CHECK(r.t > q.maxDistGeo, "max distance reached");
+    // Full 4D: straight down onto the ground is a hit
+    RayTrace d = traceRay(*app.ev, false, V4{0, 5, 0, 7}, V4{0, -1, 0, 0}, q);
+    CHECK(d.reason == RayTrace::Hit || d.reason == RayTrace::Escaped || d.reason == RayTrace::MaxDistance, "full trace ends");
+    double maxDev = 0;
+    for (auto& p : d.pts) maxDev = std::max(maxDev, std::abs(p[0]) + std::abs(p[2]) + std::abs(p[3] - 7));
+    CHECK(maxDev < 1e-12, "Full 4D ray is straight");
   }
   View tv = app.thumbnailView();
   V4 cam = app.currentView().eye;

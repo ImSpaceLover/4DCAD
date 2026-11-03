@@ -10,6 +10,7 @@
 
 #include "camera.hpp"
 #include "evaluator.hpp"
+#include "keybinds.hpp"
 #include "library.hpp"
 #include "renderer.hpp"
 #include "surface.hpp"
@@ -41,6 +42,7 @@ struct EditSettings {
   double flySpeed = 2, lookSpeed = 1;
   bool showThumbnail = true;
   int thumbSize = 300;
+  double autosaveSeconds = 60;  // recovery copy of unsaved changes (0 = off)
   // transform tools
   bool globalAxes = false;  // gizmo / G / R axes: false = the object's local axes, true = world axes
   bool snap = false;        // snapping (Ctrl while transforming inverts it)
@@ -66,9 +68,9 @@ struct ExploreSettings {
 struct Gizmo {
   bool visible = false;
   double cx = 0, cy = 0;           // centre (window pixels)
-  struct Axis { bool visible = false; int axis = 0; V4 dir{}; double ex = 0, ey = 0; };
+  struct Axis { bool visible = false; int axis = 0; V4 dir{}; double ex = 0, ey = 0; bool faded = false; };  // axis: label (X..W); faded: leaves the slice
   Axis axes[3];                    // the object's local X, Y, Z, straightened into the visible slice
-  struct Ring { int a = 0, b = 0; V4 u{}, v{}; std::vector<std::pair<double, double>> pts; double orient = 1; };
+  struct Ring { int a = 0, b = 0; V4 u{}, v{}; std::vector<std::pair<double, double>> pts; double orient = 1; int la = 0, lb = 0; };  // la/lb: axis labels
   std::vector<Ring> rings;         // rotation planes between visible axes
   double worldLen = 1;             // world length of an arrow
   int hot = -1;                    // hovered handle: 0..2 arrows, 4 centre, 10+ rings
@@ -106,10 +108,12 @@ class App {
   RenderTarget mainRT, thumbRT;
   int thumbW = 300, thumbH = 225;
   std::unique_ptr<Renderer> renderer;
+  Backend backendPref = Backend::Auto;  // graphics API for the next start (settings)
+  bool showLights = false;              // Lights window
   double fps = 0, now = 0;
 
   // --- lifecycle ---
-  void init();
+  void init(std::unique_ptr<Renderer> r);
   void loadScene(SceneFile f);
   bool loadSceneFile(const std::string& path, std::string& err);
   bool saveSceneFile(const std::string& path, std::string& err);
@@ -126,12 +130,44 @@ class App {
   std::string lastFile;  // reopened on startup
   void loadSettings();
   void saveSettings();
+  /** The graphics API chosen in the settings (read before the window is created). */
+  static Backend savedBackend();
+  // --- autosave / crash recovery ---
+  /** Writes the recovery copy if there are unsaved changes and the interval has passed (force: now). */
+  void autosaveTick(bool force = false);
+  /** Deletes the recovery copy (after saving, or when quitting normally). */
+  void clearRecovery();
+  /** A recovery copy left by a crash: the file it belonged to and when it was written. */
+  struct RecoveryInfo { std::string file, time; };
+  std::optional<RecoveryInfo> findRecovery();
+  bool recover(std::string& err);
+  std::optional<RecoveryInfo> pendingRecovery;  // found at startup: the UI asks what to do
 
   // --- selection & tree ---
   Node* selected();
   std::unordered_set<std::string> highlightSet();
   void deleteSelection();
   void duplicateSelection();
+  /** Linked duplicates: the copies share their definition (editing one edits all). */
+  void duplicateLinked();
+  void unlink(const std::string& id);
+  int linkCount(const std::string& linkId);
+  /** Clipboard text (JSON) of the selected objects, with their world transforms. */
+  std::string copySelection();
+  /** Adds objects from clipboard text to the scene root (new ids); false if it is not 4DCAD data. */
+  bool pasteNodes(const std::string& text);
+  bool isLocked(const std::string& id);  // the node or an ancestor is locked
+  // Isolate (view only, not saved): only these objects (and the world) are drawn and pickable
+  std::unordered_set<std::string> isolate;
+  void toggleIsolate();
+  // camera bookmarks (saved in the scene)
+  std::vector<CameraBookmark> bookmarks;
+  std::vector<PointLight> lights;  // scene point lights (saved in the scene)
+  /** The point lights for a frame: enabled scene lights, then emissive objects (if enabled). */
+  std::vector<LightParam> frameLights();
+  void addBookmark(const std::string& name = "");
+  void gotoBookmark(size_t i);
+  void updateBookmark(size_t i);
   void groupSelection(BoolOp op);
   void ungroup(const std::string& id);
   /** Moves a group's origin to its first object, without moving anything. */
@@ -155,6 +191,10 @@ class App {
   std::optional<RayHit> pick(double x, double y);
   void focusSelection();
   void standardView(int which);
+  /** Full 4D: put world axis s (0..3 = X..W) on the slice slider; the other three are shown. */
+  void setSliderAxis(int s);
+  /** World axis (0..3) shown as gizmo slot k (0..2) in Global mode. */
+  int globalAxisLabel(int k) const;
 
   // --- placement (library objects) ---
   bool canPlace(const std::string& objectId, std::string* reason);
@@ -180,7 +220,11 @@ class App {
 
   // --- per frame ---
   void handleInput(const InputState& in, double dt);
-  void handleKey(int key, bool shift, bool ctrl);
+  void handleKey(int key, bool shift, bool ctrl, bool alt = false);
+  KeyBindings keys;      // rebindable shortcuts (saved with the settings)
+  bool debugRay = false; // Explore: show the debug ray
+  bool debugFrozen = false;  // keep the current debug ray instead of re-tracing it from the view
+  RayTrace debugTrace;       // the debug ray (traced from the eye along the view direction)
   void renderFrame();
   View thumbnailView();
   double sliceW() { return editCam.sliceW(); }
@@ -193,7 +237,10 @@ class App {
 
  private:
   std::vector<std::string> history_, future_;
-  std::string committed_, saved_;
+  std::string committed_, saved_, autosaved_;
+  std::map<std::string, std::string> linkDefs_;  // last known definition of each linked group
+  Node viewRoot_;                                 // the tree as drawn while isolating
+  double lastAutosave_ = 0;
   std::vector<std::string> selectionAtPress_;
   int version_ = 0;
   std::string lastKey_, lastThumbKey_;
@@ -227,6 +274,9 @@ class App {
   M4 parentWorldRotation(const std::string& id, double* scaleAcc);
   /** The object's local X, Y, Z straightened into the visible slice (orthonormal, world space). */
   std::array<V4, 3> gizmoAxes(const std::string& id, const View& v);
+  /** Direction for the G / R axis key k (0..3 = X..W): Global = that world axis exactly, Local = gizmo axis. */
+  V4 keyAxis(const std::string& id, const View& v, int k);
+  bool globalExact(const std::string& id);
   SurfaceField field() { return worldField(*ev); }
   void updateExplore(const InputState& in, double dt);
   void flyGeoEdit(const InputState& in, double dt);

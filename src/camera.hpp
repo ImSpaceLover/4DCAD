@@ -25,13 +25,22 @@ class FullCamera {
   M4 rot4 = identity();
   V4 pivot{0, 0.5, 0, 0};  // centre of rotation for orbiting (MMB click sets it)
   bool pivotSet = false;
+  int slider = 3;  // world axis on the slice slider; it swaps places with W in the camera's axes
 
-  void load(const CameraState& s) { target = s.target; distance = s.distance; yaw = s.yaw; pitch = s.pitch; rot4 = s.rot4; pivotSet = false; }
+  void load(const CameraState& s) { target = s.target; distance = s.distance; yaw = s.yaw; pitch = s.pitch; rot4 = s.rot4; slider = s.slider; pivotSet = false; }
   V4 orbitCenter() const { return pivotSet ? pivot : target; }
   void setPivot(const V4& p) { pivot = p; pivotSet = true; }
-  CameraState save() const { return {target, distance, yaw, pitch, rot4}; }
+  CameraState save() const { return {target, distance, yaw, pitch, rot4, slider}; }
   M4 e3() const { return mul(planeRotation(2, 0, yaw), planeRotation(2, 1, pitch)); }
-  M4 frame() const { return mul(rot4, e3()); }
+  /** Which world axes act as the camera's X, Y, Z, W: identity with `slider` swapped with W. */
+  M4 axes() const { return axesFor(slider); }
+  // (a 90 degree rotation in the slider/W plane, not a swap: a swap would mirror the image)
+  static M4 axesFor(int s) { M4 p = identity(); if (s != 3) { setCol(p, s, unit(3)); setCol(p, 3, unit(s) * -1.0); } return p; }
+  /** +1, or -1 when the camera's 4th axis points along -slider (see axesFor). */
+  double sliderSign() const { return slider == 3 ? 1.0 : -1.0; }
+  M4 frame() const { return mul(axes(), mul(rot4, e3())); }
+  /** Puts another world axis on the slider: the other three are shown, the 4D orientation is reset. */
+  void setSlider(int s) { slider = s; rot4 = identity(); pivotSet = false; }
   View view() const { M4 f = frame(); return {target - col(f, 2) * distance, f}; }
   /** Set orientation + eye from an arbitrary orthonormal frame. */
   void setFromView(const View& v, double dist);
@@ -44,8 +53,8 @@ class FullCamera {
   void rotate4(int a, int b, double angle);
   void reset4() { rot4 = identity(); }
   /** Position of the visible slice along the camera's ana axis. */
-  double sliceW() const { return dot(target, col(frame(), 3)); }
-  void setSliceW(double w) { V4 ana = col(frame(), 3); V4 d = ana * (w - sliceW()); target = target + d; pivot = pivot + d; }
+  double sliceW() const { return dot(target, col(frame(), 3)) * sliderSign(); }
+  void setSliceW(double w) { V4 ana = col(frame(), 3) * sliderSign(); V4 d = ana * (w - sliceW()); target = target + d; pivot = pivot + d; }
 
   // Explore (first person)
   void look(double dx, double dy);
