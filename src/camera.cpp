@@ -5,7 +5,7 @@ namespace fd {
 void FullCamera::setFromView(const View& v, double dist) {
   yaw = 0;
   pitch = 0;
-  rot4 = orthonormalize(v.frame);  // e3() == identity
+  rot4 = orthonormalize(mul(transpose(axes()), v.frame));  // e3() == identity
   distance = dist;
   target = v.eye + col(rot4, 2) * dist;
 }

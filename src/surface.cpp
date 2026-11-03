@@ -37,6 +37,44 @@ std::optional<RayHit> castRay(const SceneEvaluator& ev, bool geo, const V4& eye,
   return std::nullopt;
 }
 
+RayTrace traceRay(const SceneEvaluator& ev, bool geo, const V4& eye, const V4& dir, const QualitySettings& q) {
+  RayTrace r;
+  double maxDist = geo ? q.maxDistGeo : q.maxDistFull;
+  V4 p = eye, d4 = normalize(dir);
+  SurfaceField wf;
+  if (geo) wf = worldField(ev);
+  r.pts.push_back(p);
+  for (;;) {
+    Sample s = ev.eval(p, geo);
+    if (s.d < q.eps * (1 + r.t * 0.02)) { r.reason = RayTrace::Hit; r.node = s.node; break; }
+    if (r.t > maxDist) { r.reason = RayTrace::MaxDistance; break; }
+    if (r.steps >= q.maxSteps) { r.reason = RayTrace::MaxSteps; break; }
+    if (!geo && s.d >= INF * 0.5) { r.reason = RayTrace::Escaped; break; }
+    double h = s.d * q.stepScale;
+    if (geo) {
+      h = std::min(h, (double)q.geoMaxStep);
+      p = projectToSurface(wf, p + d4 * h, std::max(1, q.geoProjectIters));
+      d4 = normalize(reject(d4, normalize(wf.grad(p))));
+    } else {
+      h = std::min(h, maxDist + 1 - r.t);  // empty space: stop the line at the distance limit
+      p = p + d4 * h;
+    }
+    r.t += h;
+    r.steps++;
+    r.pts.push_back(p);
+  }
+  return r;
+}
+
+const char* rayReasonText(RayTrace::Reason r) {
+  switch (r) {
+    case RayTrace::Hit: return "hit an object";
+    case RayTrace::MaxDistance: return "max ray distance";
+    case RayTrace::MaxSteps: return "max march steps";
+    default: return "left the scene";
+  }
+}
+
 double curvatureRadius(const SurfaceField& f, const V4& p, const M4& frame) {
   V4 n0 = normalize(f.grad(p));
   const double e = 0.05;
