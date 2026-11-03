@@ -16,8 +16,10 @@ fields (SDFs) and drawn by ray marching on the GPU. It has two rendering methods
 
 ## Running
 
-**Windows:** run `release/4DCAD.exe`. No installation is needed. It uses
-your graphics driver's OpenGL 3.3+, so keep the driver up to date.
+**Windows:** run `release/4DCAD.exe`. No installation is needed. It draws with
+**Vulkan** when the graphics driver supports it (better on AMD cards) and otherwise with
+**OpenGL 3.3+**; Settings > Rendering > Graphics API (or `--vulkan` / `--gl`) chooses. Keep the
+driver up to date.
 
 **CI builds:** every push is built and tested by GitHub Actions (`.github/workflows/build.yml`).
 The latest Windows exe can be downloaded from the run's **4DCAD-windows** artifact
