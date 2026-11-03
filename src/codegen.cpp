@@ -243,8 +243,15 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       if (round != 0) L << "  d -= " << glslFloat(round) << ";\n";
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
-      if (const char* tf = texFn(n.mat.texture))
-        L << "  if (u_simple == 0) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(q0 * m9.y) * m9.z);\n";  // textures: off in simple mode
+      const char* tf = texFn(n.mat.texture);
+      if (tf) {
+        // textures are 4D patterns: along the axes a thin (< 4D) object does not use it sits on a
+        // cell boundary (coordinate 0), which would make grids solid and checkers flicker, so those
+        // coordinates are put in the middle of a cell
+        L << "  vec4 tq = q0 * m9.y;\n";
+        for (int a = nodeDim(n, reg); a < 4; a++) L << "  tq." << C[a] << " = 0.5;\n";
+        L << "  if (u_simple == 0) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(tq) * m9.z);\n";  // textures: off in simple mode
+      }
       L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
       if (anchored) L << "  return max(d * s, -nd * s - par.y);\n}\n";
       else L << "  return d * s;\n}\n";
