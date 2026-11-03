@@ -162,8 +162,10 @@ std::unordered_map<std::string, Bound> computeBounds(const Node& root, const Pri
 
 SceneEvaluator::SceneEvaluator(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorld) : root_(root), reg_(reg) {
   this->activeWorld = (!activeWorld.empty() && findNode(root, activeWorld)) ? activeWorld : "";
+  auto bounds = computeBounds(root, reg);
   walk(root, [&](Node& n, Node*, int) {
     Prep p;
+    if (auto b = bounds.find(n.id); b != bounds.end()) p.radius = b->second.r;
     p.inv = transpose(nodeRotation(n));
     if (n.isLeaf()) p.prim = reg.get(n.prim);
     p.dim = nodeDim(n, reg);
@@ -254,7 +256,11 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
   }
   if (r.d >= INF * 0.5) return r;
   r.d *= s;
-  if (role == Role::Tangent || role == Role::Hug) r.d = std::max(r.d, -nd * s - n.anchor->reach);
+  if (role == Role::Tangent || role == Role::Hug) {
+    // keep an attached object to its own sheet of the world surface (two-sided, within its size)
+    double cut = attachCut(n.anchor->reach, prep_.at(n.id).radius);
+    r.d = std::max(r.d, std::abs(nd) * s - cut);
+  }
   return r;
 }
 

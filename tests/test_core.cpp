@@ -323,6 +323,38 @@ int main() {
     CHECK(cb.nodeIds.size() == 301 && packNodes(big, reg, cb, {}).size() == 301 * 48, "300 objects");
   }
 
+  // an object attached to a world surface stays on its own sheet (double wormhole: not in the other room)
+  {
+    std::string text;
+    CHECK(readFile(std::string(FD_SOURCE_DIR) + "/examples/double_wormhole.4dscene.json", text), "read example");
+    SceneFile f = sceneFromJson(text);
+    PrimitiveRegistry r2;
+    for (auto& p : f.primitives) r2.set(p);
+    const Node* cyl = nullptr;
+    walkc(f.root, [&](const Node& n, const Node*, int) { if (n.anchor && !cyl) cyl = &n; });
+    CHECK(cyl != nullptr, "attached object in the example");
+    SceneEvaluator ev(f.root, r2, f.world);
+    V4 a = cyl->xf.pos, nrm = col(cyl->anchor->basis, 3);
+    CHECK(ev.evalGeo(a).node == cyl && ev.evalGeo(a).d < 0, "the object is at its anchor");
+    // walk along the normal to the next sheet of the world surface (either side)
+    int found = 0;
+    for (double sgn : {1.0, -1.0}) {
+      double prev = ev.worldDist(a + nrm * (sgn * 0.3));
+      for (double t = 0.35; t < 40; t += 0.05) {
+        V4 p = a + nrm * (sgn * t);
+        double w = ev.worldDist(p);
+        if ((w > 0) != (prev > 0)) {
+          found++;
+          Sample s = ev.evalGeo(p);
+          CHECK(!(s.node == cyl && s.d < 0), "object also on the other sheet at %.2f along the normal", sgn * t);
+          break;
+        }
+        prev = w;
+      }
+    }
+    CHECK(found > 0, "another sheet along the normal");
+  }
+
   // frame conversions: compose / relative round trip
   {
     Transform P; P.pos = {1, -2, 0.5, 3}; P.rot = mul(planeRotation(0, 3, 0.7), planeRotation(1, 2, -0.4)); P.scale = 2;

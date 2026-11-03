@@ -275,7 +275,6 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     if (role == Role::Hug) L << "  q.w = g_world" << wslot(n.anchor->world) << " / (sAcc * s);\n";
     auto ax = modifierAxes(n, reg);
     L << modifierCoordsGLSL(n, ax, "q", "");
-    std::string reachExpr = D(i, 6) + ".w";  // groups: reach stored in colour.w (unused)
     if (n.isLeaf()) {
       if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
@@ -296,7 +295,10 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
         L << "  if (u_textures == 1) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(tq) * m9.z);\n";  // textures can be off (fast mode)
       }
       L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
-      if (anchored) L << "  return max(d * s, -nd * s - par.y);\n}\n";
+      // attached to a surface: the shape is extruded along the surface normal, so keep it to its
+      // own sheet (two-sided, within its size): other sheets of the world (e.g. the other room of a
+      // double wormhole) must not show it
+      if (anchored) L << "  return max(d * s, abs(nd) * s - " << D(i, 8) << ".z);\n}\n";  // .z: attachCut
       else L << "  return d * s;\n}\n";
     } else {
       static const char* opf[6] = {"opU", "opI", "opS", "opSU", "opSI", "opSS"};
@@ -307,7 +309,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
           << (isSmooth(n.op) ? ", k" : "") << "); }\n";
       std::string ex = extrudeGLSL(n, ax, "");
       if (!ex.empty()) L << "  if (d < INF * 0.5) {\n" << ex << "  }\n";
-      if (anchored) L << "  return d >= INF * 0.5 ? d : max(d * s, -nd * s - " << reachExpr << ");\n}\n";
+      if (anchored) L << "  return d >= INF * 0.5 ? d : max(d * s, abs(nd) * s - " << D(i, 8) << ".z);\n}\n";
       else L << "  return d >= INF * 0.5 ? d : d * s;\n}\n";
     }
     o << L.str();
@@ -387,6 +389,8 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       for (int k = 0; k < 4; k++) slot(7)[k] = (float)b->second.c[k];
       slot(8)[0] = std::isfinite(b->second.r) ? (float)b->second.r : 1e9f;
     }
+    // attached objects: how far from the tangent space they may reach (see attachCut)
+    slot(8)[2] = (float)attachCut(reach, b != bounds.end() ? b->second.r : INFINITY);
   }
   return d;
 }

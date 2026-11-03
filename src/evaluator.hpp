@@ -43,6 +43,14 @@ struct Bound { V4 c{0, 0, 0, 0}; double r = INFINITY; };
 /** Conservative bounding hyperspheres of every node, in the parent's frame. */
 std::unordered_map<std::string, Bound> computeBounds(const Node& root, const PrimitiveRegistry& reg);
 double leafLocalRadius(const Node& n, const PrimitiveDef* def);
+/** How far (along the surface normal) an attached object may reach from its anchor's tangent space:
+ *  how much its own sheet of the world bends away within the object's size (radius), plus a
+ *  small margin. Anything further is another sheet of the world and must not show the object. */
+inline double attachCut(double reach, double radius) {
+  if (!std::isfinite(radius)) return reach;
+  double bend = radius < reach ? reach - std::sqrt(reach * reach - radius * radius) : reach;
+  return bend + 0.05;
+}
 
 class SceneEvaluator {
  public:
@@ -59,7 +67,7 @@ class SceneEvaluator {
   std::string activeWorld;
 
  private:
-  struct Prep { M4 inv; const PrimitiveDef* prim = nullptr; int dim = 4; std::vector<ModAxis> axes; };
+  struct Prep { M4 inv; const PrimitiveDef* prim = nullptr; int dim = 4; std::vector<ModAxis> axes; double radius = INFINITY; };
   Node& root_;
   const PrimitiveRegistry& reg_;
   std::unordered_map<std::string, Prep> prep_;
