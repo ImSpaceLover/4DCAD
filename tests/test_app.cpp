@@ -554,6 +554,30 @@ int main() {
     CHECK(app.bookmarks.empty(), "adding a bookmark is undoable");
   }
 
+  // --- emissive objects light the scene (shadowed: shadow rays ignore emissive objects, so no self-shadow) ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.lights.clear();
+    app.placeItem("builtin-sphere", std::nullopt);
+    Node* e = findNode(app.root, app.selection[0]);
+    e->xf.pos = {2, 1, 0, 0};
+    e->mat.emissive = 1;
+    e->color = {1, 0.5, 0.2};
+    app.commit();
+    auto ls = app.frameLights();
+    CHECK(ls.size() == 1 && length(ls[0].pos - V4{2, 1, 0, 0}) < 1e-9 && ls[0].shadows && ls[0].color[0] > ls[0].color[2], "emissive object -> shadowed light");
+    e = findNode(app.root, app.selection[0]);
+    e->hidden = true;
+    app.commit();
+    CHECK(app.frameLights().empty(), "hidden emissive object gives no light");
+    app.quality.emissiveLights = false;
+    findNode(app.root, app.selection[0])->hidden = false;
+    app.commit();
+    CHECK(app.frameLights().empty(), "emissive lights can be turned off");
+    app.quality.emissiveLights = true;
+  }
+
   // --- render profiles: what the shader is told to do ---
   {
     FrameParams fp;
