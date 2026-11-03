@@ -1293,8 +1293,23 @@ void App::renderFrame() {
   View v = currentView();
   bool interacting = drag_ != Drag::None && drag_ != Drag::Click;
   bool moving = (now - lastChange_) < 0.25 || interacting || modal != Modal::None || mode == Mode::Explore;
-  float scale = quality.resolutionScale * (moving ? quality.motionScale : 1.0f);
   const QualitySettings& q = quality;
+  // the fast profile in Explore (and, if chosen, while moving in Edit mode); else the main settings
+  bool fast = mode == Mode::Explore || (moving && q.fastWhileMovingInEdit);
+  RenderProfile prof;
+  if (fast) prof = q.fast;
+  else {
+    prof.resolution = quality.resolutionScale * (moving ? quality.motionScale : 1.0f);
+    prof.maxSteps = q.maxSteps;
+    prof.bounces = q.transparentLayers;
+    prof.textures = prof.specular = prof.pointLights = true;
+    prof.shadows = q.shadows;
+    prof.pointShadows = q.pointShadows;
+    prof.ao = q.ao;
+    prof.aoSamples = 5;
+    prof.shadowSteps = 64;
+  }
+  float scale = std::clamp(prof.resolution, 0.1f, 2.0f);
   std::ostringstream key;
   key.precision(9);
   for (double x : v.eye) key << x << ',';
@@ -1314,14 +1329,10 @@ void App::renderFrame() {
   fp.light = light();
   fp.skyCol = worldColor();
   fp.lights = frameLights();
-  if (mode == Mode::Explore) {  // keep exploring fast: the cheaper settings chosen for it
-    fp.simple = q.exploreSimple;
-    fp.shadows = q.exploreShadows;
-    fp.ao = q.exploreAO;
-    fp.pointShadows = q.explorePointShadows && q.pointShadows;
-  } else fp.pointShadows = q.pointShadows;
+  fp.prof = prof;
   for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows; }
-  key << fp.simple << fp.shadows << fp.ao << fp.pointShadows << q.sunIntensity << q.transparentLayers << q.relaxedMarching;
+  key << prof.maxSteps << prof.bounces << prof.textures << prof.specular << prof.pointLights << prof.shadows << prof.pointShadows << prof.ao
+      << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching;
   // debug ray: re-traced from the view every frame unless frozen
   if (debugRay && ev) {
     if (!debugFrozen) debugTrace = traceRay(*ev, fp.geo, v.eye, col(v.frame, 2), quality);
@@ -1390,8 +1401,12 @@ void App::saveSettings() {
                  {"lightYaw", q.lightYaw}, {"lightPitch", q.lightPitch}, {"lightW", q.lightW}, {"skyTop", q.skyTop}, {"skyBottom", q.skyBottom},
                  {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}, {"sunIntensity", q.sunIntensity},
                  {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
-                 {"relaxedMarching", q.relaxedMarching}, {"exploreSimple", q.exploreSimple}, {"exploreShadows", q.exploreShadows},
-                 {"exploreAO", q.exploreAO}, {"explorePointShadows", q.explorePointShadows}, {"backend", BACKEND_NAMES[(int)backendPref]}};
+                 {"relaxedMarching", q.relaxedMarching}, {"fastWhileMovingInEdit", q.fastWhileMovingInEdit},
+                 {"backend", BACKEND_NAMES[(int)backendPref]}};
+  const RenderProfile& f = q.fast;
+  j["render"]["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
+                         {"specular", f.specular}, {"pointLights", f.pointLights}, {"shadows", f.shadows}, {"pointShadows", f.pointShadows},
+                         {"ao", f.ao}, {"aoSamples", f.aoSamples}, {"shadowSteps", f.shadowSteps}};
   const auto& e = editSet;
   j["edit"] = {{"fov", e.fov}, {"orbitSpeed", e.orbitSpeed}, {"panSpeed", e.panSpeed}, {"zoomSpeed", e.zoomSpeed}, {"rot4Speed", e.rot4Speed},
                {"showWSlider", e.showWSlider}, {"flySpeed", e.flySpeed}, {"lookSpeed", e.lookSpeed}, {"showThumbnail", e.showThumbnail},
@@ -1436,8 +1451,20 @@ void App::loadSettings() {
       get(r, "lightPitch", q.lightPitch); get(r, "lightW", q.lightW); get(r, "skyTop", q.skyTop); get(r, "skyBottom", q.skyBottom);
       get(r, "grid", q.grid); get(r, "geoMaxStep", q.geoMaxStep); get(r, "geoProjectIters", q.geoProjectIters);
       get(r, "sunIntensity", q.sunIntensity); get(r, "pointShadows", q.pointShadows); get(r, "emissiveLights", q.emissiveLights);
-      get(r, "transparentLayers", q.transparentLayers); get(r, "relaxedMarching", q.relaxedMarching); get(r, "exploreSimple", q.exploreSimple);
-      get(r, "exploreShadows", q.exploreShadows); get(r, "exploreAO", q.exploreAO); get(r, "explorePointShadows", q.explorePointShadows);
+      get(r, "transparentLayers", q.transparentLayers); get(r, "relaxedMarching", q.relaxedMarching);
+      get(r, "fastWhileMovingInEdit", q.fastWhileMovingInEdit);
+      auto& f = q.fast;
+      if (r.contains("fast") && r["fast"].is_object()) {
+        auto& o = r["fast"];
+        get(o, "resolution", f.resolution); get(o, "maxSteps", f.maxSteps); get(o, "bounces", f.bounces); get(o, "textures", f.textures);
+        get(o, "specular", f.specular); get(o, "pointLights", f.pointLights); get(o, "shadows", f.shadows); get(o, "pointShadows", f.pointShadows);
+        get(o, "ao", f.ao); get(o, "aoSamples", f.aoSamples); get(o, "shadowSteps", f.shadowSteps);
+      } else {  // settings from before the fast profile: the old Explore switches
+        bool simple = r.value("exploreSimple", true);
+        f.textures = !simple;
+        f.bounces = simple ? 0 : 1;
+        get(r, "exploreShadows", f.shadows); get(r, "exploreAO", f.ao); get(r, "explorePointShadows", f.pointShadows);
+      }
       backendPref = backendFromSettings(text);
     }
     if (j.contains("edit")) {

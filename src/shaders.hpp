@@ -33,8 +33,9 @@ inline const char* FRAME_BLOCK = R"(
   vec4 f_c;          // aoStrength, fog, ambient, geoMaxStep
   vec4 f_d;          // markerSkip, sun intensity, 0, 0
   ivec4 f_i;         // maxSteps, shadows, ao, grid
-  ivec4 f_j;         // geoIters, debug points, point lights, simple materials
-  ivec4 f_k;         // point light shadow mask, transparent layers, over-relaxation, 0
+  ivec4 f_j;         // geoIters, debug points, point lights, textures on
+  ivec4 f_k;         // point light shadow mask, bounces, over-relaxation, AO samples
+  ivec4 f_l;         // shadow ray steps, specular on, 0, 0
   vec4 u_lpos[8];    // point lights: 4D position
   vec4 u_lcol[8];    // rgb * intensity, range
   vec4 u_dbg[48];    // debug ray polyline (Explore)
@@ -61,7 +62,10 @@ inline const char* FRAME_DEFINES = R"(
 #define u_geoIters f_j.x
 #define u_dbgN f_j.y
 #define u_nLights f_j.z
-#define u_simple f_j.w
+#define u_textures f_j.w
+#define u_aoSamples f_k.w
+#define u_shadowSteps f_l.x
+#define u_specular f_l.y
 #define u_lightShadowMask f_k.x
 #define u_maxLayers f_k.y
 #define u_relax f_k.z
@@ -317,17 +321,17 @@ void main() {
     } else if (phase == AO) {
       float hh = 0.03 + 0.12 * float(k + 1);
       occ += (hh - d) * aow; aow *= 0.7; k++;
-      if (k == (u_simple == 1 ? 3 : 5)) startLights = true;
+      if (k >= u_aoSamples) startLights = true;
     } else {  // SHADOW toward light li
       sh = min(sh, u_shadowK * d / st);
       sSteps++;
-      if (sh < 0.02 || st > shMax || sSteps > 64) {
+      if (sh < 0.02 || st > shMax || sSteps > u_shadowSteps) {
         // this light is done: add its contribution
         float shv = clamp(sh, 0.0, 1.0);
         diffAcc += lc * dif * shv;
         vec4 H = normalize(Ll - dir);
         float rough = clamp(hm[1].y, 0.02, 1.0);
-        specAcc += lc * pow(max(dot(n, H), 0.0), mix(160.0, 6.0, rough)) * hm[1].z * shv;
+        specAcc += lc * pow(max(dot(n, H), 0.0), mix(160.0, 6.0, rough)) * hm[1].z * shv * float(u_specular);
         startLights = true;
       } else {
 #ifdef VIEW_GEO
@@ -357,7 +361,7 @@ void main() {
         diffAcc += lc * dif;  // unshadowed light
         vec4 H = normalize(Ll - dir);
         float rough = clamp(hm[1].y, 0.02, 1.0);
-        specAcc += lc * pow(max(dot(n, H), 0.0), mix(160.0, 6.0, rough)) * hm[1].z;
+        specAcc += lc * pow(max(dot(n, H), 0.0), mix(160.0, 6.0, rough)) * hm[1].z * float(u_specular);
       }
       if (li > u_nLights) {
         // all lights done: shade this surface
@@ -376,8 +380,10 @@ void main() {
         c = mix(c, vec3(1.0, 0.6, 0.15), hm[0].a * (0.25 + 0.5 * fre));  // selection highlight
         float f = t / u_maxDist;
         c = mix(c, sky(dir, rayWorldCol), clamp(u_fog * f * f * 1.5, 0.0, 1.0));
-        float transp = u_simple == 1 ? 0.0 : clamp(hm[1].w, 0.0, 1.0);
-        float metal = u_simple == 1 ? 0.0 : clamp(hm[2].x, 0.0, 1.0);
+        // no bounces left (or bounces off): mirrors and glass are drawn as plain surfaces, not dark
+        bool canBounce = layers < u_maxLayers;
+        float transp = canBounce ? clamp(hm[1].w, 0.0, 1.0) : 0.0;
+        float metal = canBounce ? clamp(hm[2].x, 0.0, 1.0) : 0.0;
         float wSurf = (1.0 - transp) * (1.0 - metal);  // the surface's own colour
         accum += thr * wSurf * c;
         float cont = 1.0 - wSurf;                      // what continues as a reflected / refracted ray

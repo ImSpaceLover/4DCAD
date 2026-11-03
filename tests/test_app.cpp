@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "app.hpp"
+#include "renderer.hpp"
 #include "examples.hpp"
 
 #include <nlohmann/json.hpp>
@@ -551,6 +552,23 @@ int main() {
     CHECK(f.bookmarks.size() == 1 && f.bookmarks[0].name == "Spot", "bookmark saved in the scene");
     app.undo();
     CHECK(app.bookmarks.empty(), "adding a bookmark is undoable");
+  }
+
+  // --- render profiles: what the shader is told to do ---
+  {
+    FrameParams fp;
+    fp.quality = &app.quality;
+    fp.lights.resize(2);
+    fp.prof = RenderProfile::preset(RenderProfile::Fast);
+    FrameUniforms u = frameUniforms(fp, 100, 80);
+    CHECK(u.k[1] == 0 && u.j[3] == 0 && u.i[2] == 0 && u.j[2] == 2 && u.k[0] == 0, "fast: no bounces / textures / AO, lights unshadowed");
+    fp.prof = RenderProfile::preset(RenderProfile::Full);
+    u = frameUniforms(fp, 100, 80);
+    CHECK(u.k[1] == 3 && u.j[3] == 1 && u.i[2] == 1 && u.k[3] == 5 && u.l[0] == 64 && u.k[0] == 3, "full: bounces, textures, AO, light shadows");
+    fp.prof.pointLights = false;
+    fp.prof.specular = false;
+    u = frameUniforms(fp, 100, 80);
+    CHECK(u.j[2] == 0 && u.l[1] == 0, "point lights / highlights off");
   }
 
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---

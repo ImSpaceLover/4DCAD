@@ -293,7 +293,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
         // coordinates are put in the middle of a cell
         L << "  vec4 tq = q0 * m9.y;\n";
         for (int a = nodeDim(n, reg); a < 4; a++) L << "  tq." << C[a] << " = 0.5;\n";
-        L << "  if (u_simple == 0) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(tq) * m9.z);\n";  // textures: off in simple mode
+        L << "  if (u_textures == 1) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(tq) * m9.z);\n";  // textures can be off (fast mode)
       }
       L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
       if (anchored) L << "  return max(d * s, -nd * s - par.y);\n}\n";

@@ -51,8 +51,7 @@ struct FrameParams {
   std::vector<V4> debugPts;  // debug ray polyline (drawn as a glowing tube, end marker coloured by reason)
   int debugReason = 0;
   std::vector<LightParam> lights;  // point lights (at most MAX_LIGHTS are used)
-  // fast mode (Explore): simplified materials and the shadows / AO chosen for it
-  bool simple = false, shadows = true, ao = true, pointShadows = true;
+  RenderProfile prof;  // what to draw and how hard to work (main settings or the fast profile)
 };
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */
@@ -61,7 +60,7 @@ struct FrameUniforms {
   float eye[4], light[4], marker[4], markerCol[4], markerFwd[4];
   float skyTop[4], skyBottom[4], skyCol[4], dbgEndCol[4];
   float a[4], b[4], c[4], d[4];
-  int32_t i[4], j[4], k[4];
+  int32_t i[4], j[4], k[4], l[4];
   float lpos[MAX_LIGHTS][4], lcol[MAX_LIGHTS][4];
   float dbg[MAX_DEBUG_PTS][4];
 };

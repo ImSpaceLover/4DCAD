@@ -114,6 +114,29 @@ struct CameraState {
   int slider = 3;  // world axis on the slice slider (the other three are shown)
 };
 
+/** What a frame draws and how hard it works. Edit mode builds one from the main settings; the
+ *  fast profile is used in Explore (and, if chosen, while moving in Edit mode). */
+struct RenderProfile {
+  float resolution = 0.5f;  // x the window resolution
+  int maxSteps = 100;       // march steps per ray
+  int bounces = 0;          // reflections / refractions followed per pixel (mirrors, glass)
+  bool textures = false;    // procedural textures
+  bool specular = true;     // highlights
+  bool pointLights = true;  // point lights (incl. emissive objects)
+  bool shadows = true;      // sun shadows
+  bool pointShadows = false;
+  bool ao = false;          // ambient occlusion
+  int aoSamples = 3;        // 1..5
+  int shadowSteps = 24;     // max steps of a shadow ray
+  enum Preset { Fast, Balanced, Full };
+  static RenderProfile preset(Preset p) {
+    RenderProfile r;  // Fast
+    if (p == Balanced) { r.resolution = 0.75f; r.maxSteps = 128; r.bounces = 1; r.textures = true; r.ao = true; r.shadowSteps = 40; }
+    if (p == Full) { r.resolution = 1.0f; r.maxSteps = 160; r.bounces = 3; r.textures = true; r.pointShadows = true; r.ao = true; r.aoSamples = 5; r.shadowSteps = 64; }
+    return r;
+  }
+};
+
 /** Ray-marching / rendering settings. */
 struct QualitySettings {
   float resolutionScale = 1.0f;   // when idle
@@ -138,11 +161,9 @@ struct QualitySettings {
   bool emissiveLights = true;     // emissive objects light their surroundings (as point lights)
   int transparentLayers = 3;      // reflections / refractions followed per pixel (0 = mirrors and glass off)
   bool relaxedMarching = true;    // over-relaxed sphere tracing (fewer steps)
-  // Explore mode (moving: keep it fast)
-  bool exploreSimple = true;      // no textures / transparency, cheaper AO
-  bool exploreShadows = true;
-  bool exploreAO = false;
-  bool explorePointShadows = false;
+  // fast mode: used in Explore (keep it smooth) and optionally while moving in Edit mode
+  RenderProfile fast = RenderProfile::preset(RenderProfile::Fast);
+  bool fastWhileMovingInEdit = false;
   float geoMaxStep = 0.25f;
   int geoProjectIters = 1;
 };

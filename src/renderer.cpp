@@ -89,10 +89,10 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   // point lights
   int nl = 0, mask = 0;
   for (auto& l : fp.lights) {
-    if (nl >= MAX_LIGHTS) break;
+    if (nl >= MAX_LIGHTS || !fp.prof.pointLights) break;
     put4(u.lpos[nl], l.pos);
     put3(u.lcol[nl], l.color, l.range);
-    if (l.shadows && fp.pointShadows) mask |= 1 << nl;
+    if (l.shadows && fp.prof.pointShadows) mask |= 1 << nl;
     nl++;
   }
   // debug ray: resampled to at most MAX_DEBUG_PTS points
@@ -102,12 +102,15 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
                                                              : (size_t)std::llround((double)i * (fp.debugPts.size() - 1) / (MAX_DEBUG_PTS - 1));
     put4(u.dbg[i], fp.debugPts[src]);
   }
-  int32_t ii[4] = {q.maxSteps, (q.shadows && fp.shadows) ? 1 : 0, (q.ao && fp.ao) ? 1 : 0, fp.grid ? 1 : 0};
-  int32_t jj[4] = {q.geoProjectIters, n >= 2 ? n : 0, nl, fp.simple ? 1 : 0};
-  int32_t kk[4] = {mask, fp.simple ? 0 : q.transparentLayers, q.relaxedMarching ? 1 : 0, 0};
+  const RenderProfile& p = fp.prof;
+  int32_t ii[4] = {std::max(8, p.maxSteps), p.shadows ? 1 : 0, p.ao ? 1 : 0, fp.grid ? 1 : 0};
+  int32_t jj[4] = {q.geoProjectIters, n >= 2 ? n : 0, nl, p.textures ? 1 : 0};
+  int32_t kk[4] = {mask, std::clamp(p.bounces, 0, 8), q.relaxedMarching ? 1 : 0, std::clamp(p.aoSamples, 1, 5)};
+  int32_t ll[4] = {std::clamp(p.shadowSteps, 4, 256), p.specular ? 1 : 0, 0, 0};
   std::memcpy(u.i, ii, sizeof ii);
   std::memcpy(u.j, jj, sizeof jj);
   std::memcpy(u.k, kk, sizeof kk);
+  std::memcpy(u.l, ll, sizeof ll);
   return u;
 }
 
