@@ -19,6 +19,10 @@ fields (SDFs) and drawn by ray marching on the GPU. It has two rendering methods
 **Windows:** run `release/4DCAD.exe`. No installation is needed. It uses
 your graphics driver's OpenGL 3.3+, so keep the driver up to date.
 
+**CI builds:** every push is built and tested by GitHub Actions (`.github/workflows/build.yml`).
+The latest Windows exe can be downloaded from the run's **4DCAD-windows** artifact
+(Actions tab → the run → Artifacts). Pushing a tag such as `v1.2` also attaches the exe to a GitHub Release.
+
 **Building from source** (Windows or Linux) needs CMake ≥ 3.16, a C++17
 compiler and git. Dependencies (GLFW, Dear ImGui, nlohmann/json) are downloaded
 automatically.
@@ -61,12 +65,15 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 
 **Editing**
 - **Tools:** **Q** Select, **W** Move, **E** Rotate.
+- **Local / Global** (toolbar, or **L**): the gizmo and the G / R axis keys use either the object's own axes or the world axes (for objects on a world surface: the surface's directions at the object).
+- **Snap** (toolbar; hold **Ctrl** while transforming to invert it): moves land on the world grid (on a world surface: the distance moved is rounded), rotations go in angle steps and scale in scale steps. The steps are set in Settings > Edit mode.
 - **Gizmo:** always **3 arrows / 3 rings for the object's local X, Y and Z**. They are kept inside the visible slice and straightened into a clean 3D frame, so when the object or the view is turned into W, an arrow moves the object along a mix of world axes (e.g. X and W) in a straight line, without leaving the slice.
   - Move: drag an arrow to move along that local axis. Drag the centre square, or the object itself, to move in the screen plane (Shift: along depth).
   - Rotate: drag a ring to rotate about a local axis (red X, green Y, blue Z).
 - **Blender-style transforms:** **G** grab, **R** rotate, **S** scale, then X / Y / Z = the object's local axis (as on the gizmo). Click or Enter confirms; Esc or RMB cancels.
 - **Properties:** rotation is shown as 6 absolute angles (XY XZ XW YZ YW ZW).
 - **Selection:** a click selects exactly the object under the cursor; **Ctrl+click** selects its group. Shift+click multi-selects, A selects all, Esc deselects.
+- **Several objects selected:** Properties shows the last selected object's values (fields that differ are marked `*`), and a change applies to all of them. Colours, materials and other fields are copied; position, rotation and scale are applied relatively (offset, rotation about each object's own centre, scale ratio). Modifier edits reach all objects only when their modifier stacks match.
 - **Editing:** Shift+D duplicate, X/Del delete, Ctrl+G group, F focus, Ctrl+Z / Ctrl+Shift+Z undo / redo.
 
 **Explore mode (game-like)**
@@ -94,22 +101,24 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
   * Drag items into the viewport or onto tree rows to place them. In the Geodesic view only ≤3D items can be placed, and they attach to the world surface.
 * **Scene tree:**
   * Boolean groups: union, intersection, subtraction (first child minus the rest) and smooth versions.
+  * **Group origin:** a new group's origin (its centre of rotation and scaling) is its **first object**, which then sits at 0,0,0,0. The other objects get coordinates relative to it. Grouping, ungrouping and dragging objects into or out of groups convert between group-local and global coordinates, so nothing moves in the world. **Recentre origin on first object** (Properties of a group) moves the origin again, e.g. after reordering.
+  * A group whose last object is deleted or moved out is deleted too.
   * Drag rows onto groups (into), onto objects (union with it) or onto row edges (reorder).
-* **Materials** (Properties): colour, rounding, shell, **emissive** (always fully lit, casts no shadow, does not light other objects), and a **procedural 4D texture** (checker, stripes, grid, noise, rings) with a second colour, scale and strength. Textures are solid 4D textures in the object's local space, so they move and rotate with it.
+* **Materials** (Properties): colour, **rounding** (inflates the solid, rounding its edges), **shell** (hollows it into a skin of that half-thickness), **emissive** (always fully lit, casts no shadow, does not light other objects), and a **procedural 4D texture** (checker, stripes, grid, noise, rings) with a second colour, scale and strength. Textures are solid 4D textures in the object's local space, so they move and rotate with it.
 * **SDF code:** Properties > **View SDF code** shows any object (shape, group, whole tree) as a self-contained GLSL `float sdf(vec4 p)`. "Create editable custom SDF from it" turns it into a custom object.
 * **Custom SDFs:** the "Custom SDF (GLSL)" item (4D shapes folder) holds your own GLSL defining `float sdf(vec4 p)` in the object's local 4D space.
   * You can write helper functions, and use `opExtrude(d, h)`, `sU / sI / sS(a, b, k)` and `INF`.
   * "Apply code" test-compiles it and shows compiler errors. Code that does not compile is drawn as its bounding box.
   * Set **Bound** so the shape fits inside it. The renderer uses it to skip far-away work, and on the CPU clicking, collisions and placement treat the shape as that box.
   * Custom SDFs combine with booleans and modifiers like any other object.
-* **Geodesic sky:** the sky takes the colour of the world surface right under the camera (e.g. a yellow hyperplane gives a yellow sky). An outside thumbnail shows the world from the outside with your position.
+* **Geodesic sky:** a ray that hits nothing shows the colour (including the texture) of the world surface at the point it travelled to, so a multi-coloured or textured world gives a matching sky. The Full 4D sky is unchanged. An outside thumbnail shows the world from the outside with your position.
 
 ## Saving and settings
 
 * Nothing is written to your scene file unless you save (**Ctrl+S**; **Ctrl+Shift+S** = save as). The toolbar shows "unsaved" when there are changes. Quitting, New, Open and loading an example ask whether to save first.
 * On startup the last saved / opened file is reopened (falling back to the example scene).
 * **Settings** (toolbar or View menu) has three tabs, saved per user:
-  * **Edit mode**: field of view. Full 4D: orbit / pan / zoom / turn-into-W speeds, W slider, ground grid. Geodesic: fly speed, look speed, outside thumbnail and its size.
+  * **Edit mode**: field of view, local / global axes, snapping steps. Full 4D: orbit / pan / zoom / turn-into-W speeds, W slider, ground grid. Geodesic: fly speed, look speed, outside thumbnail and its size.
   * **Explore mode**: field of view, look speed, own body and its radius. Full 4D: move speed, turn-into-W speed, collisions. Geodesic: move speed, collisions.
   * **Rendering**:
     * Performance: resolution, and resolution while moving.

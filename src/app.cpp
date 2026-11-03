@@ -108,6 +108,9 @@ void App::rebuild() {
 }
 
 void App::commit() {
+  // a group whose last object was removed / moved out is deleted with it
+  pruneEmptyGroups(root);
+  selection.erase(std::remove_if(selection.begin(), selection.end(), [&](auto& id) { return !findNode(root, id); }), selection.end());
   rebuild();
   std::string s = snapshot();
   if (s != committed_) {
@@ -184,9 +187,18 @@ void App::groupSelection(BoolOp op) {
   std::string parentId = parent->id;
   size_t idx = 0;
   while (idx < parent->children.size() && parent->children[idx].id != top[0]) idx++;
+  // every object keeps its place in the world: express it in the new parent's frame
+  auto parentW = worldXf(root, parentId);
+  std::vector<std::optional<Transform>> worldOf;
+  for (auto& id : top) worldOf.push_back(worldXf(root, id));
   std::vector<Node> kids;
-  for (auto& id : top) if (auto n = removeNode(root, id)) kids.push_back(std::move(*n));
+  for (size_t k = 0; k < top.size(); k++)
+    if (auto n = removeNode(root, top[k])) {
+      if (parentW && worldOf[k]) n->xf = relativeXf(*parentW, *worldOf[k]);
+      kids.push_back(std::move(*n));
+    }
   Node g = makeGroup(op, std::move(kids));
+  centreGroupOnFirst(g);  // the group's origin is its first object (which ends up at 0,0,0,0)
   std::string gid = g.id;
   Node* p2 = findNode(root, parentId);
   p2->children.insert(p2->children.begin() + std::min(idx, p2->children.size()), std::move(g));
@@ -203,7 +215,11 @@ void App::ungroup(const std::string& id) {
   Node g = std::move(p->children[i]);
   p->children.erase(p->children.begin() + i);
   selection.clear();
-  for (auto& c : g.children) selection.push_back(c.id);
+  // back to the parent's coordinates, keeping every object where it is
+  for (auto& c : g.children) {
+    if (!g.anchor && !c.anchor) c.xf = composeXf(g.xf, c.xf);
+    selection.push_back(c.id);
+  }
   p->children.insert(p->children.begin() + i, g.children.begin(), g.children.end());
   commit();
 }
@@ -211,18 +227,26 @@ void App::ungroup(const std::string& id) {
 void App::reparent(const std::string& id, const std::string& targetId, Drop where) {
   if (id == targetId || id == root.id || isAncestor(root, id, targetId)) return;
   if (!findNode(root, targetId)) return;
+  auto W = worldXf(root, id);  // the object stays where it is in the world
   auto n = removeNode(root, id);
   if (!n) return;
+  auto into = [&](const std::string& parentId) {
+    auto P = worldXf(root, parentId);
+    if (W && P) n->xf = relativeXf(*P, *W);
+  };
   Node* target = findNode(root, targetId);
-  if (where == Drop::Into && !target->isLeaf()) target->children.push_back(std::move(*n));
+  if (where == Drop::Into && !target->isLeaf()) { into(targetId); target->children.push_back(std::move(*n)); }
   else {
     Node* p = findParent(root, targetId);
-    if (!p) { root.children.push_back(std::move(*n)); commit(); return; }
+    if (!p) { into(root.id); root.children.push_back(std::move(*n)); commit(); return; }
+    into(p->id);
     size_t i = 0;
     while (i < p->children.size() && p->children[i].id != targetId) i++;
     if (where == Drop::Wrap) {
       Node t = std::move(p->children[i]);
-      p->children[i] = makeGroup(BoolOp::Union, {std::move(t), std::move(*n)});
+      Node g = makeGroup(BoolOp::Union, {std::move(t), std::move(*n)});
+      centreGroupOnFirst(g);
+      p->children[i] = std::move(g);
     } else p->children.insert(p->children.begin() + (where == Drop::After ? i + 1 : i), std::move(*n));
   }
   commit();
@@ -248,6 +272,13 @@ void App::attachToWorld(const std::string& id) {
     auto m = removeNode(root, id);
     root.children.push_back(std::move(*m));
   }
+  commit();
+}
+
+void App::recentreGroup(const std::string& id) {
+  Node* g = findNode(root, id);
+  if (!g || g->id == root.id) return;
+  if (!centreGroupOnFirst(*g)) { toast("Cannot recentre this group (empty, or objects on a world surface)", true); return; }
   commit();
 }
 
@@ -472,6 +503,8 @@ std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
   // along one may change several world coordinates (e.g. X and W) but stays inside the slice.
   Node* n = findNode(root, id);
   M4 F = nodeWorldFrame(id);
+  // Global: world axes (on a world surface: the surface's tangent frame at the object)
+  if (editSet.globalAxes) F = (n && n->anchor) ? n->anchor->basis : identity();
   V4 out = (geo && n && n->anchor) ? col(n->anchor->basis, 3) : col(v.frame, 3);
   out = normalize(out);
   V4 a[3];
@@ -494,6 +527,69 @@ std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
     done.push_back(d);
   }
   return r;
+}
+
+static double snapTo(double x, double step) { return step > 0 ? std::round(x / step) * step : x; }
+
+std::string App::primaryOf(const std::vector<std::string>& ids) const {
+  if (ids.empty()) return "";
+  if (!selection.empty())
+    for (auto& id : ids) if (id == selection.back()) return id;
+  return ids[0];
+}
+
+double App::snapAng(double a) const { return snapNow_ ? snapTo(a, editSet.snapAngle * PI / 180) : a; }
+
+V4 App::snapDistance(const std::vector<std::string>& ids, const V4& delta) {
+  Node* n = findNode(root, primaryOf(ids));
+  if (!snapNow_ || !n || !n->anchor || world.empty()) return delta;
+  double l = length(delta);
+  return l < 1e-12 ? delta : delta * (snapTo(l, editSet.snapMove) / l);
+}
+
+void App::snapToGrid(const std::vector<std::string>& ids, const std::vector<V4>& dirs) {
+  double step = editSet.snapMove;
+  std::string pid = primaryOf(ids);
+  Node* n = findNode(root, pid);
+  if (!snapNow_ || step <= 0 || !n || (n->anchor && !world.empty())) return;
+  V4 p = nodeWorldPos(pid);
+  // orthonormal movement directions
+  std::vector<V4> d;
+  for (V4 v : dirs) {
+    for (auto& u : d) v = reject(v, u);
+    if (length(v) > 1e-6 && d.size() < 3) d.push_back(normalize(v));
+  }
+  int m = (int)d.size();
+  if (m == 0) return;
+  // each direction puts its dominant world coordinate on the grid (solve for the offsets
+  // along the directions, so the object never leaves the line / plane it is moved in)
+  int comp[3];
+  bool used[4] = {false, false, false, false};
+  for (int k = 0; k < m; k++) {
+    int best = -1;
+    for (int i = 0; i < 4; i++) if (!used[i] && (best < 0 || std::abs(d[k][i]) > std::abs(d[k][best]))) best = i;
+    comp[k] = best;
+    used[best] = true;
+  }
+  double A[3][4];
+  for (int j = 0; j < m; j++) {
+    for (int k = 0; k < m; k++) A[j][k] = d[k][comp[j]];
+    A[j][m] = snapTo(p[comp[j]], step) - p[comp[j]];
+  }
+  for (int c = 0; c < m; c++) {  // Gaussian elimination, partial pivoting
+    int piv = c;
+    for (int r = c + 1; r < m; r++) if (std::abs(A[r][c]) > std::abs(A[piv][c])) piv = r;
+    if (std::abs(A[piv][c]) < 1e-6) return;
+    for (int k = 0; k <= m; k++) std::swap(A[c][k], A[piv][k]);
+    for (int r = 0; r < m; r++) {
+      if (r == c) continue;
+      double f = A[r][c] / A[c][c];
+      for (int k = c; k <= m; k++) A[r][k] -= f * A[c][k];
+    }
+  }
+  V4 delta{0, 0, 0, 0};
+  for (int k = 0; k < m; k++) delta = delta + d[k] * (A[k][m] / A[k][k]);
+  if (length(delta) > 1e-12) translateNodes(ids, delta);
 }
 
 static double segDist(double px, double py, double ax, double ay, double bx, double by) {
@@ -592,11 +688,13 @@ void App::cancelModal() { if (modal != Modal::None) { restoreOrig(); modal = Mod
 std::string App::transformHint() const {
   std::string a;
   for (int x : modalAxes) a += AXIS[x];
+  std::string space = editSet.globalAxes ? "global " : "object ";
+  std::string snap = snapNow_ ? " (snap)" : "";
   switch (modal) {
-    case Modal::Grab: return "Grab" + (a.empty() ? std::string(" in screen plane") : " along object " + a) + " | X/Y/Z/W: object axis | click/Enter confirm, Esc/RMB cancel";
-    case Modal::Rotate: return "Rotate" + (a.empty() ? std::string(" in screen plane") : a.size() == 1 ? " about object " + a : " in object plane " + a) +
-                               " | X/Y/Z: about axis, two keys (e.g. X W): plane | click/Enter confirm, Esc/RMB cancel";
-    case Modal::Scale: return "Scale | click/Enter confirm, Esc/RMB cancel";
+    case Modal::Grab: return "Grab" + (a.empty() ? std::string(" in screen plane") : " along " + space + a) + snap + " | X/Y/Z: axis | click/Enter confirm, Esc/RMB cancel";
+    case Modal::Rotate: return "Rotate" + (a.empty() ? std::string(" in screen plane") : a.size() == 1 ? " about " + space + a : " in " + space + "plane " + a) + snap +
+                               " | X/Y/Z: about axis, two keys (e.g. X Y): plane | click/Enter confirm, Esc/RMB cancel";
+    case Modal::Scale: return std::string("Scale") + (snapNow_ ? " (snap)" : "") + " | click/Enter confirm, Esc/RMB cancel";
     default: return "";
   }
 }
@@ -609,6 +707,8 @@ void App::applyModal() {
   std::vector<std::string> ids;
   for (auto& [id, o] : orig_) ids.push_back(id);
   if (modal == Modal::Grab) {
+    std::vector<V4> dirs{right, up};
+    if (modalAxes.size() == 1) dirs = {modalAxes[0] < 3 ? gizmoAxes(primaryOf(ids), v)[modalAxes[0]] : V4{0, 0, 0, 0}};
     for (auto& [id, o] : orig_) {
       V4 c = nodeWorldPos(id);
       double depth = std::max(0.5, std::abs(dot(c - v.eye, fwd)));
@@ -622,10 +722,11 @@ void App::applyModal() {
           delta = l2 > 1e-6 ? axis * ((dx * ax + dy * ay) / l2) : axis * (dx * k);
         } else delta = {0, 0, 0, 0};
       }
-      translateNodes({id}, delta);
+      translateNodes({id}, snapDistance(ids, delta));
     }
+    snapToGrid(ids, dirs);
   } else if (modal == Modal::Rotate) {
-    double ang = dx * 0.01;
+    double ang = snapAng(dx * 0.01);
     for (auto& id : ids) {
       M4 q;
       if (modalAxes.empty()) q = rotationInPlane(right, up, -ang);
@@ -643,7 +744,11 @@ void App::applyModal() {
       rotateNodes({id}, q);
     }
   } else if (modal == Modal::Scale) {
-    for (auto& [id, o] : orig_) if (Node* n = findNode(root, id)) n->xf.scale = std::max(0.01, o.xf.scale * std::exp(dx * 0.005));
+    for (auto& [id, o] : orig_) if (Node* n = findNode(root, id)) {
+          double sc = o.xf.scale * std::exp(dx * 0.005);
+          if (snapNow_ && editSet.snapScale > 0) sc = std::max(editSet.snapScale, snapTo(sc, editSet.snapScale));
+          n->xf.scale = std::max(0.01, sc);
+        }
   }
   rebuild();
 }
@@ -676,6 +781,7 @@ void App::handleKey(int key, bool shift, bool ctrl) {
     case GLFW_KEY_Q: tool = Tool::Select; break;
     case GLFW_KEY_W: if (shift) editCam.reset4(); else tool = Tool::Move; break;
     case GLFW_KEY_E: tool = Tool::Rotate; break;
+    case GLFW_KEY_L: editSet.globalAxes = !editSet.globalAxes; toast(editSet.globalAxes ? "Transform axes: global" : "Transform axes: local"); break;
     case GLFW_KEY_G: startModal(Modal::Grab); break;
     case GLFW_KEY_R: startModal(Modal::Rotate); break;
     case GLFW_KEY_S: startModal(Modal::Scale); break;
@@ -711,9 +817,11 @@ void App::handleInput(const InputState& in, double dt) {
   lastMy_ = in.my;
   if (mode == Mode::Explore) { updateExplore(in, dt); return; }
   bool g = geo && geoEdit.valid;
+  bool snapWas = snapNow_;
+  snapNow_ = editSet.snap != in.ctrl;
   if (modal != Modal::None) {
     modalX_ = in.mx; modalY_ = in.my;
-    if (in.dx != 0 || in.dy != 0) applyModal();
+    if (in.dx != 0 || in.dy != 0 || snapWas != snapNow_) applyModal();
     if (in.pressed[0]) confirmModal();
     else if (in.pressed[1]) cancelModal();
     return;
@@ -734,6 +842,7 @@ void App::handleInput(const InputState& in, double dt) {
       gizmoHandle_ = gz.hot;
       gizmoAtPress_ = gz;
       drag_ = Drag::Gizmo;
+      resetDragTotals();
       captureOrig();
       modalView_ = currentView();
       continue;
@@ -746,6 +855,7 @@ void App::handleInput(const InputState& in, double dt) {
         bool keep = false;
         for (auto& s : selection) if (s == id || isAncestor(root, s, id)) keep = true;
         if (!keep) selection = {id};
+        resetDragTotals();
         captureOrig();
         modalView_ = currentView();
         drag_ = Drag::FreeMove;
@@ -768,35 +878,53 @@ void App::handleInput(const InputState& in, double dt) {
       case Drag::Rot4: editCam.rotate4(0, 3, in.dx * 0.006 * editSet.rot4Speed); editCam.rotate4(1, 3, -in.dy * 0.006 * editSet.rot4Speed); break;
       case Drag::Fly: flyGeoEdit(in, dt); break;
       case Drag::FreeMove: {
-        if (in.dx == 0 && in.dy == 0) break;
+        if (in.dx == 0 && in.dy == 0 && snapWas == snapNow_) break;
+        if (in.shift) dragDepth_ -= in.dy; else { dragDx_ += in.dx; dragDy_ += in.dy; }
+        restoreOrig();
         V4 right = col(v.frame, 0), up = col(v.frame, 1), fwd = col(v.frame, 2);
-        for (auto& [id, o] : orig_) {
+        std::vector<std::string> ids;
+        for (auto& [id, o] : orig_) ids.push_back(id);
+        for (auto& id : ids) {
           double depth = std::max(0.5, std::abs(dot(nodeWorldPos(id) - v.eye, fwd)));
           double k = 2 * depth * tanHalf() / vpH;
-          translateNodes({id}, in.shift ? fwd * (-in.dy * k * 2) : right * (in.dx * k) - up * (in.dy * k));
+          translateNodes({id}, snapDistance(ids, right * (dragDx_ * k) - up * (dragDy_ * k) + fwd * (dragDepth_ * k * 2)));
         }
+        std::vector<V4> dirs;
+        if (dragDx_ != 0 || dragDy_ != 0) { dirs.push_back(right); dirs.push_back(up); }
+        if (dragDepth_ != 0) dirs.push_back(fwd);
+        snapToGrid(ids, dirs);
         rebuild();
         break;
       }
       case Drag::Gizmo: {
-        if (in.dx == 0 && in.dy == 0) break;
+        if (in.dx == 0 && in.dy == 0 && snapWas == snapNow_) break;
         Gizmo& gz = gizmoAtPress_;
         std::vector<std::string> ids;
         for (auto& [id, o] : orig_) ids.push_back(id);
+        restoreOrig();  // re-apply the whole drag from the original state
         if (gizmoHandle_ <= 3) {  // arrow: move along the (projected) object axis
           auto& ax = gz.axes[gizmoHandle_];
           double sx = ax.ex - gz.cx, sy = ax.ey - gz.cy, l2 = sx * sx + sy * sy;
-          if (l2 > 1) translateNodes(ids, ax.dir * ((in.dx * sx + in.dy * sy) / l2 * gz.worldLen));
+          if (l2 > 1) dragAlong_ += (in.dx * sx + in.dy * sy) / l2 * gz.worldLen;
+          translateNodes(ids, snapDistance(ids, ax.dir * dragAlong_));
+          snapToGrid(ids, {ax.dir});
         } else if (gizmoHandle_ == 4) {  // centre: free move in the screen plane (Shift: along depth)
           double k = gz.worldLen / 95.0;
-          translateNodes(ids, in.shift ? col(v.frame, 2) * (-in.dy * k * 2) : col(v.frame, 0) * (in.dx * k) - col(v.frame, 1) * (in.dy * k));
-        } else {  // ring: rotate in the plane of two object axes, by the angle swept on screen
+          if (in.shift) dragDepth_ -= in.dy; else { dragDx_ += in.dx; dragDy_ += in.dy; }
+          V4 right = col(v.frame, 0), up = col(v.frame, 1), fwd = col(v.frame, 2);
+          translateNodes(ids, snapDistance(ids, right * (dragDx_ * k) - up * (dragDy_ * k) + fwd * (dragDepth_ * k * 2)));
+          std::vector<V4> dirs;
+          if (dragDx_ != 0 || dragDy_ != 0) { dirs.push_back(right); dirs.push_back(up); }
+          if (dragDepth_ != 0) dirs.push_back(fwd);
+          snapToGrid(ids, dirs);
+        } else {  // ring: rotate in the plane of two axes, by the angle swept on screen
           auto& ring = gz.rings[gizmoHandle_ - 10];
           double a0 = std::atan2(in.my - in.dy - gz.cy, in.mx - in.dx - gz.cx), a1 = std::atan2(in.my - gz.cy, in.mx - gz.cx);
           double da = a1 - a0;
           if (da > PI) da -= 2 * PI;
           if (da < -PI) da += 2 * PI;
-          rotateNodes(ids, rotationInPlane(ring.u, ring.v, da * ring.orient));
+          dragAngle_ += da * ring.orient;
+          rotateNodes(ids, rotationInPlane(ring.u, ring.v, snapAng(dragAngle_)));
         }
         rebuild();
         break;
@@ -976,7 +1104,8 @@ void App::saveSettings() {
   const auto& e = editSet;
   j["edit"] = {{"fov", e.fov}, {"orbitSpeed", e.orbitSpeed}, {"panSpeed", e.panSpeed}, {"zoomSpeed", e.zoomSpeed}, {"rot4Speed", e.rot4Speed},
                {"showWSlider", e.showWSlider}, {"flySpeed", e.flySpeed}, {"lookSpeed", e.lookSpeed}, {"showThumbnail", e.showThumbnail},
-               {"thumbSize", e.thumbSize}};
+               {"thumbSize", e.thumbSize}, {"globalAxes", e.globalAxes}, {"snap", e.snap}, {"snapMove", e.snapMove},
+               {"snapAngle", e.snapAngle}, {"snapScale", e.snapScale}};
   const auto& x = exploreSet;
   j["explore"] = {{"fov", x.fov}, {"lookSpeed", x.lookSpeed}, {"showOwnBody", x.showOwnBody}, {"bodyRadius", x.bodyRadius},
                   {"moveSpeed", x.moveSpeed}, {"turn4Speed", x.turn4Speed}, {"collide", x.collide}, {"geoMoveSpeed", x.geoMoveSpeed},
@@ -1005,6 +1134,8 @@ void App::loadSettings() {
       get(r, "fov", e.fov); get(r, "orbitSpeed", e.orbitSpeed); get(r, "panSpeed", e.panSpeed); get(r, "zoomSpeed", e.zoomSpeed);
       get(r, "rot4Speed", e.rot4Speed); get(r, "showWSlider", e.showWSlider); get(r, "flySpeed", e.flySpeed); get(r, "lookSpeed", e.lookSpeed);
       get(r, "showThumbnail", e.showThumbnail); get(r, "thumbSize", e.thumbSize);
+      get(r, "globalAxes", e.globalAxes); get(r, "snap", e.snap); get(r, "snapMove", e.snapMove);
+      get(r, "snapAngle", e.snapAngle); get(r, "snapScale", e.snapScale);
     }
     if (j.contains("explore")) {
       auto& r = j["explore"]; auto& x = exploreSet;

@@ -239,13 +239,14 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     auto path = pathTo(root, worlds[k]);
     Node& target = *path.back();
     emitNode(target, EvalCtx::World);
-    o << "float worldSDF" << k << "(vec4 g) {\n  vec4 p = g; float s = 1.0; MAT m;\n";
+    o << "float worldSDF" << k << "m(vec4 g, out MAT m) {\n  vec4 p = g; float s = 1.0;\n";
     for (size_t a = 0; a + 1 < path.size(); a++) {
       int i = index[path[a]->id];
       o << "  p = (u_rot[" << i << "] * (p - u_pos[" << i << "])) / u_par[" << i << "].x; s *= u_par[" << i << "].x;\n";
       o << "  {\n" << modifierCoordsGLSL(*path[a], modifierAxes(*path[a], reg), "p", "w") << "  }\n";
     }
     o << "  return " << fnName(target, EvalCtx::World) << "(p, g, s, m) * s;\n}\n";
+    o << "float worldSDF" << k << "(vec4 g) { MAT m; return worldSDF" << k << "m(g, m); }\n";
   }
 
   emitNode(root, main);
@@ -257,8 +258,9 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     }
   });
   o << "float mapScene(vec4 p, out MAT m) { " << hug.str() << "return " << fnName(root, main) << "(p, p, 1.0, m); }\n";
-  if (!world.empty()) o << "float worldSDF(vec4 p) { return worldSDF0(p); }\n";
-  else o << "float worldSDF(vec4 p) { return INF; }\n";
+  // active world: distance, and distance + surface material (used for the Geodesic sky colour)
+  if (!world.empty()) o << "float worldSDF(vec4 p) { return worldSDF0(p); }\nfloat worldSDFm(vec4 p, out MAT m) { return worldSDF0m(p, m); }\n";
+  else o << "float worldSDF(vec4 p) { return INF; }\nfloat worldSDFm(vec4 p, out MAT m) { m = MAT(0.0); return INF; }\n";
   cs.glsl = o.str();
   return cs;
 }

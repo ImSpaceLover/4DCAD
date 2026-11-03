@@ -218,6 +218,13 @@ void UI::toolbar() {
     if (toggleButton("Move", app.tool == Tool::Move, "W: gizmo arrows along the object's local X / Y / Z (kept inside the visible slice)")) app.tool = Tool::Move;
     ImGui::SameLine(0, 2);
     if (toggleButton("Rotate", app.tool == Tool::Rotate, "E: gizmo rings to rotate about the object's local X / Y / Z")) app.tool = Tool::Rotate;
+    ImGui::SameLine(0, 10);
+    auto& e = app.editSet;
+    if (toggleButton("Local", !e.globalAxes, "L: move / rotate along the object's own axes")) e.globalAxes = false;
+    ImGui::SameLine(0, 2);
+    if (toggleButton("Global", e.globalAxes, "L: move / rotate along the world axes (on a world surface: the surface's directions)")) e.globalAxes = true;
+    ImGui::SameLine(0, 10);
+    if (toggleButton("Snap", e.snap, "Snap moves to the world grid, rotations and scale to steps (Settings > Edit mode).\nHold Ctrl while transforming to invert.")) e.snap = !e.snap;
   }
   ImGui::SameLine(0, 16);
   if (ImGui::Button("Undo")) app.undo();
@@ -472,6 +479,30 @@ void UI::propertiesPanel() {
   bool isRoot = n->id == app.root.id;
   std::string nid = n->id;
 
+  // ---- several objects selected: edits of the primary (last selected) one are applied to all ----
+  std::vector<Node*> others;
+  for (auto& id : app.selection)
+    if (id != nid && id != app.root.id)
+      if (Node* o = findNode(app.root, id)) others.push_back(o);
+  Node before;
+  { auto kids = std::move(n->children); before = *n; n->children = std::move(kids); }
+  bool stacksMatch = true;
+  for (Node* o : others) if (!sameModifierTypes(*o, *n)) stacksMatch = false;
+  ModStackOp modOp;
+  // marks a field whose value differs between the selected objects (of the same kind)
+  auto mixed = [&](auto get) {
+    bool diff = false;
+    for (Node* o : others) if (o->isLeaf() == n->isLeaf() && !(get(*o) == get(*n))) diff = true;
+    if (!diff) return;
+    ImGui::SameLine();
+    ImGui::TextDisabled("*");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Differs between the selected objects (showing \"%s\")", n->name.c_str());
+  };
+  if (!others.empty()) {
+    ImGui::TextColored({0.55f, 0.8f, 1, 1}, "Editing %d objects: values from \"%s\"", (int)others.size() + 1, n->name.c_str());
+    ImGui::TextDisabled("Changes apply to all (position / rotation / scale relatively)");
+  }
+
   char nameBuf[256];
   std::snprintf(nameBuf, sizeof nameBuf, "%s", n->name.c_str());
   if (ImGui::InputText("Name", nameBuf, sizeof nameBuf)) n->name = nameBuf;
@@ -486,34 +517,45 @@ void UI::propertiesPanel() {
     float c[3] = {(float)n->color[0], (float)n->color[1], (float)n->color[2]};
     if (ImGui::ColorEdit3("Color", c)) for (int i = 0; i < 3; i++) n->color[i] = c[i];
     track();
+    mixed([](const Node& x) { return x.color; });
     if (dim < 4) {
       float th = (float)n->thickness;
       if (ImGui::DragFloat("Thickness", &th, 0.005f, 0.001f, 10.f)) n->thickness = std::max(0.001f, th);
       track();
+    mixed([](const Node& x) { return x.thickness; });
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Extent along the unused axes%s", n->anchor ? " (here: across the world surface)" : "");
     }
     float rd = (float)n->round.value_or(0), sh = (float)n->shell.value_or(0);
     if (ImGui::DragFloat("Rounding", &rd, 0.005f, -2.f, 5.f)) n->round = rd;
     track();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Inflates the solid by this distance: rounds edges and corners (negative shrinks it)");
+    mixed([](const Node& x) { return x.round.value_or(0); });
     if (ImGui::DragFloat("Shell", &sh, 0.005f, 0.f, 5.f)) n->shell = std::max(0.f, sh);
     track();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hollows the shape: keeps only a skin 2 x this thick around its surface\n(visible when cut open, e.g. by a subtraction)");
+    mixed([](const Node& x) { return x.shell.value_or(0); });
     ImGui::SeparatorText("Material");
     float em = (float)n->mat.emissive;
     if (ImGui::SliderFloat("Emissive", &em, 0, 1)) { bool was = n->mat.emissive > 0; n->mat.emissive = em; if (was != (em > 0)) done = true; }
     track();
+    mixed([](const Node& x) { return x.mat.emissive; });
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Always lit, casts no shadow, does not light other objects");
     int tex = n->mat.texture;
     if (ImGui::Combo("Texture", &tex, TEXTURE_NAMES, TEX_COUNT)) { n->mat.texture = tex; done = true; }
+    mixed([](const Node& x) { return x.mat.texture; });
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Procedural 4D solid texture in the object's local space (moves with it)");
     if (n->mat.texture != TEX_NONE) {
       float c2[3] = {(float)n->mat.color2[0], (float)n->mat.color2[1], (float)n->mat.color2[2]};
       if (ImGui::ColorEdit3("Texture colour", c2)) for (int i = 0; i < 3; i++) n->mat.color2[i] = c2[i];
       track();
+    mixed([](const Node& x) { return x.mat.color2; });
       float ts = (float)n->mat.texScale, tst = (float)n->mat.texStrength;
       if (ImGui::DragFloat("Texture scale", &ts, 0.02f, 0.01f, 100.f)) n->mat.texScale = std::max(0.01f, ts);
       track();
+    mixed([](const Node& x) { return x.mat.texScale; });
       if (ImGui::SliderFloat("Texture strength", &tst, 0, 1)) n->mat.texStrength = tst;
       track();
+    mixed([](const Node& x) { return x.mat.texStrength; });
     }
     if (n->isCustom()) {
       ImGui::SeparatorText("Custom SDF (GLSL)");
@@ -541,8 +583,13 @@ void UI::propertiesPanel() {
     ImGui::SeparatorText("Boolean");
     int op = (int)n->op;
     if (ImGui::Combo("Operator", &op, BOOL_OP_LABELS, 6)) { n->op = (BoolOp)op; done = true; }
+    mixed([](const Node& x) { return x.op; });
     if (isSmooth(n->op)) { float k = (float)n->k; if (ImGui::DragFloat("Smoothness", &k, 0.01f, 0.001f, 10.f)) n->k = std::max(0.001f, k); track(); }
     if (n->op == BoolOp::Subtraction || n->op == BoolOp::SmoothSubtraction) ImGui::TextDisabled("First child minus the following children.");
+    if (!isRoot && !n->children.empty()) {
+      if (ImGui::Button("Recentre origin on first object")) { app.recentreGroup(nid); ImGui::End(); return; }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Moves the group's origin (centre of rotation and scaling) to its first object.\nNothing moves in the world.");
+    }
   }
 
   if (!isRoot) {
@@ -550,6 +597,7 @@ void UI::propertiesPanel() {
     float pos[4] = {(float)n->xf.pos[0], (float)n->xf.pos[1], (float)n->xf.pos[2], (float)n->xf.pos[3]};
     if (ImGui::DragFloat4("Position XYZW", pos, 0.02f)) for (int i = 0; i < 4; i++) n->xf.pos[i] = pos[i];
     track();
+    mixed([](const Node& x) { return x.xf.pos; });
     if (n->anchor) ImGui::TextDisabled("Anchor point; drag the gizmo or press G to slide along the surface.");
     // absolute rotation as 6 plane angles (decomposed from the stored rotation matrix)
     auto ang = anglesFromRotation(n->xf.rot);
@@ -572,14 +620,22 @@ void UI::propertiesPanel() {
       for (int k = 0; k < 6; k++) d[k] = a[k];
       n->xf.rot = rotationFromAngles(d);
     }
-    if (ImGui::Button("Reset rotation")) { n->xf.rot = identity(); done = true; }
+    if (ImGui::Button("Reset rotation")) {
+      n->xf.rot = identity();
+      done = true;
+      for (Node* o : others) o->xf.rot = identity();  // absolute for every selected object
+      before.xf.rot = n->xf.rot;
+    }
+    mixed([](const Node& x) { return x.xf.rot; });
     float sc = (float)n->xf.scale;
     if (ImGui::DragFloat("Scale", &sc, 0.01f, 0.01f, 100.f)) n->xf.scale = std::max(0.01f, sc);
     track();
+    mixed([](const Node& x) { return x.xf.scale; });
   }
 
   // ---- modifier stack ----
   ImGui::SeparatorText("Modifiers (applied top to bottom)");
+  if (!others.empty() && !stacksMatch) ImGui::TextDisabled("Modifier stacks differ: editing \"%s\" only", n->name.c_str());
   auto problems = modifierProblems(*n, app.reg);
   auto axes = modifierAxes(*n, app.reg);
   int remove = -1, moveUp = -1;
@@ -661,12 +717,12 @@ void UI::propertiesPanel() {
     ImGui::Unindent(10);
     ImGui::PopID();
   }
-  if (remove >= 0) { n->mods.erase(n->mods.begin() + remove); done = true; }
-  if (moveUp > 0) { std::swap(n->mods[moveUp], n->mods[moveUp - 1]); done = true; }
+  if (remove >= 0) { n->mods.erase(n->mods.begin() + remove); done = true; modOp = {ModStackOp::Remove, remove, {}}; }
+  if (moveUp > 0) { std::swap(n->mods[moveUp], n->mods[moveUp - 1]); done = true; modOp = {ModStackOp::MoveUp, moveUp, {}}; }
   if (ImGui::Button("+ Add modifier")) ImGui::OpenPopup("addmod");
   if (ImGui::BeginPopup("addmod")) {
     auto add = [&](int type, const char* label, const char* tip) {
-      if (ImGui::MenuItem(label)) { Modifier m; m.type = type; if (type == MOD_REVOLVE) { m.axis = -1; m.radius = 0; } n->mods.push_back(m); done = true; }
+      if (ImGui::MenuItem(label)) { Modifier m; m.type = type; if (type == MOD_REVOLVE) { m.axis = -1; m.radius = 0; } n->mods.push_back(m); done = true; modOp = {ModStackOp::Add, -1, m}; }
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
     };
     add(MOD_EXTRUDE, "Extrude", "Adds the next axis: sweeps the shape along it (finite, infinite or half-space)");
@@ -692,6 +748,8 @@ void UI::propertiesPanel() {
     if (ImGui::Button("Attach to world surface")) { app.attachToWorld(nid); ImGui::End(); return; }
   }
   ImGui::End();
+  if ((done || live) && !others.empty())
+    for (Node* o : others) propagateEdit(before, *n, *o, stacksMatch, modOp);
   if (done) app.commit();
   else if (live) app.rebuild();
 }
@@ -932,6 +990,14 @@ void UI::qualityWindow() {
       F("Turn into W speed", e.rot4Speed, 0.1f, 4, "%.2f", "Alt+drag rotation into the 4th dimension");
       ImGui::Checkbox("W slider", &e.showWSlider);
       ImGui::Checkbox("Ground grid", &app.quality.grid);
+      ImGui::SeparatorText("Transforming");
+      ImGui::Checkbox("Global axes (L)", &e.globalAxes);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Gizmo and G / R axis keys use the world axes instead of the object's own axes");
+      ImGui::Checkbox("Snapping", &e.snap);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hold Ctrl while transforming to invert");
+      F("Grid step", e.snapMove, 0.01f, 5, "%.2f", "Moved objects land on multiples of this (on a world surface: the distance moved)");
+      F("Angle step", e.snapAngle, 1, 90, "%.0f deg");
+      F("Scale step", e.snapScale, 0.01f, 1, "%.2f");
       ImGui::SeparatorText("Geodesic 3D");
       F("Fly speed", e.flySpeed, 0.2f, 30, "%.1f", "Hold RMB + WASD (the wheel also changes it)");
       F("Look speed", e.lookSpeed, 0.1f, 4);
@@ -1075,6 +1141,8 @@ void UI::helpWindow() {
   ImGui::BulletText("Move: drag an arrow to move along that local axis, the centre square (or the object) to move in the screen plane");
   ImGui::BulletText("Rotate: drag a ring to rotate about a local axis. Orbiting has no angle limit");
   ImGui::BulletText("G grab, R rotate, S scale; then X/Y/Z = local axis; Enter/click confirm, Esc cancel");
+  ImGui::BulletText("L: local / global axes for the gizmo and G / R. Snap (toolbar): grid / angle / scale steps; hold Ctrl to invert while transforming");
+  ImGui::BulletText("Several objects selected: Properties edits all of them (position / rotation / scale relatively). Groups take their first object as origin");
   ImGui::BulletText("Click: select the object | Ctrl+click: its group | Shift+click: multi | A all | Esc none | Shift+D duplicate | X/Del delete | Ctrl+G group | F focus");
   ImGui::BulletText("Properties > View SDF code shows any object as GLSL; Custom SDF objects (4D shapes folder) take your own GLSL");
   ImGui::BulletText("Shapes are a point plus modifiers: Extrude / Revolve add the next axis (X, Y, Z, W); Rotate, Mirror, Repeat reshape");
