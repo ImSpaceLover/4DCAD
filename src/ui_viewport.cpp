@@ -39,13 +39,28 @@ void UI::viewport(double dt) {
     if (ImGui::VSliderFloat("##W", {26, 220}, &w, -range, range, "")) app.setSliceW(w);
     ImGui::PopStyleColor();
     sliderHovered = ImGui::IsItemHovered() || ImGui::IsItemActive();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Slice W = %.2f\nMoves the visible 3D slice along the camera's 4th axis.\nDouble-click the button below to reset.", w);
+    int sa = app.editCam.slider;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Slice %c = %.2f", AXIS[sa], w);
     ImGui::SetCursorScreenPos({p0.x + 8, p0.y + 314});
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {3, 1});
-    if (ImGui::SmallButton("W=0")) app.setSliceW(0);
+    char zero[8];
+    std::snprintf(zero, sizeof zero, "%c=0", AXIS[sa]);
+    if (ImGui::SmallButton(zero)) app.setSliceW(0);
     sliderHovered |= ImGui::IsItemHovered();
+    // which world axis is on the slider (the other three are shown)
+    for (int a = 0; a < 4; a++) {
+      ImGui::SetCursorScreenPos({p0.x + 8, p0.y + 338 + 21.f * a});
+      char lb[4] = {AXIS[a], 0};
+      ImGui::PushID(a);
+      if (toggleButton(lb, a == sa)) app.setSliderAxis(a);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Put %c on the slider (show the other three axes)", AXIS[a]);
+      sliderHovered |= ImGui::IsItemHovered();
+      ImGui::PopID();
+    }
     ImGui::PopStyleVar();
-    dl->AddText({p0.x + 12, p0.y + 72}, IM_COL32(200, 120, 230, 255), "W");
+    char sl[2] = {AXIS[sa], 0};
+    const ImU32 slc[4] = {IM_COL32(224, 85, 85, 255), IM_COL32(95, 207, 95, 255), IM_COL32(85, 136, 238, 255), IM_COL32(200, 120, 230, 255)};
+    dl->AddText({p0.x + 12, p0.y + 72}, slc[sa], sl);
     char buf[32];
     std::snprintf(buf, sizeof buf, "%.2f", w);
     dl->AddText({p0.x + 44, p0.y + 90 + 220 * (1 - (w + range) / (2 * range)) - 7}, IM_COL32(220, 220, 220, 255), buf);
@@ -175,7 +190,8 @@ void UI::overlays(ImDrawList* dl) {
   // Blender-like gizmo: the object's own X/Y/Z/W axes projected into the visible slice
   Gizmo g = app.gizmo();
   if (g.visible) {
-    const ImU32 cols[3] = {IM_COL32(230, 80, 80, 255), IM_COL32(100, 210, 100, 255), IM_COL32(80, 130, 240, 255)};
+    // colour / letter of the axis each handle moves along (local X/Y/Z, or the world axis in Global)
+    const ImU32 cols[4] = {IM_COL32(230, 80, 80, 255), IM_COL32(100, 210, 100, 255), IM_COL32(80, 130, 240, 255), IM_COL32(200, 110, 230, 255)};
     ImVec2 c = {(float)g.cx, (float)g.cy};
     auto bright = [](ImU32 col) { return col | IM_COL32(60, 60, 60, 0); };
     if (app.tool == Tool::Move) {
@@ -183,14 +199,15 @@ void UI::overlays(ImDrawList* dl) {
         auto& ax = g.axes[a];
         if (!ax.visible) continue;
         bool hot = g.hot == a;
-        ImU32 col = hot ? IM_COL32(255, 230, 120, 255) : cols[a];
+        ImU32 col = hot ? IM_COL32(255, 230, 120, 255) : cols[ax.axis];
+        if (ax.faded && !hot) col = (col & 0x00FFFFFF) | IM_COL32(0, 0, 0, 110);  // points out of the visible slice
         ImVec2 e = {(float)ax.ex, (float)ax.ey};
         float dx = e.x - c.x, dy = e.y - c.y, l = std::sqrt(dx * dx + dy * dy);
         if (l < 1) continue;
         float ux = dx / l, uy = dy / l;
         dl->AddLine(c, {e.x - ux * 10, e.y - uy * 10}, col, hot ? 4.f : 3.f);
         dl->AddTriangleFilled(e, {e.x - ux * 14 - uy * 6, e.y - uy * 14 + ux * 6}, {e.x - ux * 14 + uy * 6, e.y - uy * 14 - ux * 6}, col);
-        char l1[2] = {AXIS[a], 0};
+        char l1[2] = {AXIS[ax.axis], 0};
         dl->AddText({e.x + ux * 6 - 4, e.y + uy * 6 - 7}, col, l1);
       }
       dl->AddRectFilled({c.x - 6, c.y - 6}, {c.x + 6, c.y + 6}, g.hot == 4 ? IM_COL32(255, 230, 120, 255) : IM_COL32(230, 230, 230, 200), 2);
@@ -199,14 +216,14 @@ void UI::overlays(ImDrawList* dl) {
         auto& ring = g.rings[r];
         bool hot = g.hot == 10 + (int)r;
         // ring colour = the local axis it rotates about (YZ -> X red, XZ -> Y green, XY -> Z blue)
-        int about = 3 - ring.a - ring.b;
+        int about = g.axes[3 - ring.a - ring.b].axis;
         ImU32 col = hot ? IM_COL32(255, 230, 120, 255) : bright(cols[about]);
         std::vector<ImVec2> pts;
         for (auto& p : ring.pts) pts.push_back({(float)p.first, (float)p.second});
         dl->AddPolyline(pts.data(), (int)pts.size(), col, 0, hot ? 3.5f : 2.f);
         if (hot) {
           char lbl[8];
-          std::snprintf(lbl, sizeof lbl, "%c%c", AXIS[ring.a], AXIS[ring.b]);
+          std::snprintf(lbl, sizeof lbl, "%c%c", AXIS[ring.la], AXIS[ring.lb]);
           dl->AddText({pts[8].x + 6, pts[8].y - 6}, col, lbl);
         }
       }

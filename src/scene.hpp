@@ -102,6 +102,7 @@ struct CameraState {
   V4 target{0, 0.5, 0, 0};
   double distance = 8, yaw = 0.6, pitch = -0.35;
   M4 rot4 = identity();
+  int slider = 3;  // world axis on the slice slider (the other three are shown)
 };
 
 /** Ray-marching / rendering settings. */

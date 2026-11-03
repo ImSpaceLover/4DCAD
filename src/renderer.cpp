@@ -194,6 +194,9 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
   gl::Uniform4fv(u(*p, "u_markerFwd"), 1, mf);
   gl::Uniform1f(u(*p, "u_markerSkip"), fp.markerSkip);
   gl::Uniform3f(u(*p, "u_skyCol"), fp.skyCol[0], fp.skyCol[1], fp.skyCol[2]);
+  float ax[16];
+  for (int i = 0; i < 16; i++) ax[i] = (float)fp.axes[i];
+  gl::UniformMatrix4fv(u(*p, "u_axes"), 1, GL_FALSE, ax);
   gl::Disable(GL_SCISSOR_TEST);
   gl::Disable(GL_BLEND);
   gl::Disable(GL_DEPTH_TEST);

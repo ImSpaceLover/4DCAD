@@ -46,6 +46,14 @@ void UI::menuBar() {
     ImGui::MenuItem("Outside thumbnail (Geodesic)", nullptr, &app.editSet.showThumbnail);
     ImGui::MenuItem("Show own body (Explore)", nullptr, &app.exploreSet.showOwnBody);
     if (ImGui::MenuItem("Reset 4D orientation", "Shift+W")) app.editCam.reset4();
+    if (ImGui::BeginMenu("Slider axis", !app.geo)) {
+      for (int k = 0; k < 4; k++) {
+        char lb[24];
+        std::snprintf(lb, sizeof lb, "%c on the slider", AXIS[k]);
+        if (ImGui::MenuItem(lb, nullptr, app.editCam.slider == k)) app.setSliderAxis(k);
+      }
+      ImGui::EndMenu();
+    }
     if (ImGui::MenuItem("Front / Right / Top / Along W", "1 3 7 9")) app.standardView(0);
     ImGui::Separator();
     ImGui::MenuItem("Settings...", nullptr, &showQuality_);

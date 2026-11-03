@@ -340,6 +340,55 @@ int main() {
     app.editSet.globalAxes = false;
   }
 
+  // --- slider axis swap; Global gizmo moves along exactly one world coordinate ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.setSliderAxis(1);  // Y on the slider: X, W, Z shown
+    M4 F = app.editCam.frame();
+    app.editCam.yaw = 0; app.editCam.pitch = 0;
+    F = app.editCam.frame();
+    CHECK(length(col(F, 0) - unit(0)) < 1e-12 && length(col(F, 1) - unit(3)) < 1e-12 && length(col(F, 2) - unit(2)) < 1e-12,
+          "Y on the slider: right X, up W, forward Z");
+    CHECK(std::abs(std::abs(dot(col(F, 3), unit(1))) - 1) < 1e-12, "slider direction = Y");
+    app.setSliceW(2.5);
+    CHECK(std::abs(app.editCam.target[1] - 2.5) < 1e-12 && std::abs(app.sliceW() - 2.5) < 1e-12, "slider value = the Y coordinate");
+    app.editSet.globalAxes = true;
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string cb = app.selection[0];
+    findNode(app.root, cb)->xf.pos = app.editCam.target;
+    app.rebuild();
+    app.tool = Tool::Move;
+    Gizmo gz = app.gizmo();
+    CHECK(gz.axes[0].axis == 0 && gz.axes[1].axis == 3 && gz.axes[2].axis == 2, "global arrows labelled X, W, Z");
+    // view turned into the 4th dimension: arrows still move along one world coordinate only
+    app.setSliderAxis(3);
+    app.editCam.rotate4(0, 3, 0.5);
+    app.rebuild();
+    gz = app.gizmo();
+    CHECK(gz.visible && length(gz.axes[0].dir - unit(0)) < 1e-12, "global X arrow = world X exactly");
+    CHECK(gz.axes[0].faded && !gz.axes[1].faded, "X arrow leaves the turned slice: faded");
+    V4 p0 = findNode(app.root, cb)->xf.pos;
+    double mx = (gz.cx + gz.axes[0].ex) / 2, my = (gz.cy + gz.axes[0].ey) / 2;
+    app.handleInput(frameInput(mx, my, 0, 0, false, false, false), 0.016);
+    app.handleInput(frameInput(mx, my, 0, 0, true, true, false), 0.016);
+    for (int i = 1; i <= 10; i++) app.handleInput(frameInput(mx + 8 * i, my, 8, 0, true, false, false), 0.016);
+    app.handleInput(frameInput(mx + 80, my, 0, 0, false, false, true), 0.016);
+    V4 d = findNode(app.root, cb)->xf.pos - p0;
+    CHECK(std::abs(d[0]) > 0.05 && std::abs(d[1]) + std::abs(d[2]) + std::abs(d[3]) < 1e-12, "moved along X only (%.3f %.3f %.3f %.3f)", d[0], d[1], d[2], d[3]);
+    // G then W in Global: along world W only
+    p0 = findNode(app.root, cb)->xf.pos;
+    app.selection = {cb};
+    app.startModal(Modal::Grab);
+    app.handleKey(87, false, false);  // W
+    app.handleInput(frameInput(mx + 40, my - 30, 40, -30, false, false, false), 0.016);
+    app.confirmModal();
+    d = findNode(app.root, cb)->xf.pos - p0;
+    CHECK(std::abs(d[3]) > 1e-3 && std::abs(d[0]) + std::abs(d[1]) + std::abs(d[2]) < 1e-12, "G W: only W changes (%.3f)", d[3]);
+    app.editSet.globalAxes = false;
+    app.editCam.reset4();
+  }
+
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---
   app.loadScene(planetScene());
   app.setGeo(true);

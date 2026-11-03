@@ -32,6 +32,7 @@ struct FrameParams {
   V4 markerFwd{0, 0, 1, 0};                     // facing direction (draws a small "nose")
   float markerSkip = 0;                         // primary rays ignore the body for t < skip (first person)
   std::array<float, 3> skyCol{0.35f, 0.4f, 0.55f};  // Geodesic sky = world surface colour
+  M4 axes = identity();  // world axes shown as display X, Y, Z and on the slider (FullCamera::axes)
 };
 
 class Renderer {

@@ -59,13 +59,14 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 **Edit mode, Full 4D view (Blender-like)**
 - **Navigation:** RMB/MMB drag orbits, with no angle limit, so you can go over the top. A **middle-click** on an object sets the **centre of rotation** (shown as a small crosshair; middle-click empty space to reset it). Shift+drag pans, the wheel or Ctrl+drag zooms, and Alt+drag rotates the view into W.
 - **W slider** (left edge of the viewport): moves the visible 3D slice along the camera's 4th axis.
+- **Slider axis** (the X / Y / Z / W buttons under the slider, or View > Slider axis): chooses which world axis is on the slider; the other three are the shown axes (e.g. Y on the slider shows X, W and Z with W pointing up). Switching resets the 4D orientation.
 - **Standard views:** 1 / 3 / 7 / 9 give front / right / top / along W. Shift+W resets the 4D orientation.
 
 **Edit mode, Geodesic view (game-like):** hold **RMB** to look around with the mouse. While holding it, WASD flies along the surface, Space/Shift move up/down, Q/E roll, and the wheel sets fly speed. The left mouse button stays free for selecting and the gizmo.
 
 **Editing**
 - **Tools:** **Q** Select, **W** Move, **E** Rotate.
-- **Local / Global** (toolbar, or **L**): the gizmo and the G / R axis keys use either the object's own axes or the world axes (for objects on a world surface: the surface's directions at the object).
+- **Local / Global** (toolbar, or **L**): the gizmo and the G / R axis keys use either the object's own axes or the world axes. In Global an arrow moves the object along exactly one world coordinate (the three shown axes; G then X / Y / Z / W for any axis). If the view is turned into the 4th dimension, an arrow that leaves the visible slice is drawn faded. On a world surface, Global means the surface's directions at the object.
 - **Snap** (toolbar; hold **Ctrl** while transforming to invert it): moves land on the world grid (on a world surface: the distance moved is rounded), rotations go in angle steps and scale in scale steps. The steps are set in Settings > Edit mode.
 - **Gizmo:** always **3 arrows / 3 rings for the object's local X, Y and Z**. They are kept inside the visible slice and straightened into a clean 3D frame, so when the object or the view is turned into W, an arrow moves the object along a mix of world axes (e.g. X and W) in a straight line, without leaving the slice.
   - Move: drag an arrow to move along that local axis. Drag the centre square, or the object itself, to move in the screen plane (Shift: along depth).

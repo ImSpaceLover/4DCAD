@@ -42,6 +42,7 @@ uniform vec4 u_markerCol;  // rgb, radius (0 = hidden)
 uniform vec4 u_markerFwd;
 uniform float u_markerSkip;
 uniform vec3 u_skyCol;     // Geodesic sky colour (= world surface colour)
+uniform mat4 u_axes;       // world axes acting as the display X, Y (up), Z and slider axis
 
 bool g_noBody = false;     // primary ray still inside the player's own body
 
@@ -89,9 +90,12 @@ vec3 sky(vec4 dir, vec3 surf) {
   // the sky of a world surface has the colour of the surface the ray travelled to
   return surf * (0.9 + 0.1 * dot(dir, normalize(u_light)));
 #else
-  return mix(u_skyBottom, u_skyTop, clamp(dir.y * 0.5 + 0.5, 0.0, 1.0)) + 0.05 * dir.w;
+  return mix(u_skyBottom, u_skyTop, clamp(dot(dir, u_axes[1]) * 0.5 + 0.5, 0.0, 1.0)) + 0.05 * dot(dir, u_axes[3]);
 #endif
 }
+
+// colour of a world axis direction (X red, Y green, Z blue, W purple)
+vec3 axisCol(vec4 v) { v = abs(v); return v.x * vec3(0.9, 0.25, 0.25) + v.y * vec3(0.3, 0.8, 0.3) + v.z * vec3(0.25, 0.45, 0.95) + v.w * vec3(0.8, 0.3, 0.9); }
 
 float gridLine(float x) {
   float f = abs(fract(x - 0.5) - 0.5);
@@ -229,19 +233,21 @@ void main() {
   }
 
 #ifndef VIEW_GEO
-  if (u_grid == 1 && abs(rd.y) > 1e-4) {
-    float tg = -ro.y / rd.y;
+  // ground grid in display coordinates (the shown axes: X, up, Z; lines along the slider axis)
+  vec4 rod = ro * u_axes, rdd = rd * u_axes;
+  if (u_grid == 1 && abs(rdd.y) > 1e-4) {
+    float tg = -rod.y / rdd.y;
     if (tg > 0.0 && tg < t) {
-      vec4 g = ro + rd * tg;
+      vec4 g = rod + rdd * tg;
       float fade = exp(-tg * 0.05);
       float gl = max(gridLine(g.x), gridLine(g.z)) * 0.25;
       float gw = gridLine(g.w) * 0.25;
-      vec3 gc = vec3(0.8) * gl + vec3(0.8, 0.3, 0.9) * gw;
+      vec3 gc = vec3(0.8) * gl + axisCol(u_axes[3]) * gw;
       float ax = 1.0 - smoothstep(0.0, fwidth(g.z) * 1.5, abs(g.z));
       float az = 1.0 - smoothstep(0.0, fwidth(g.x) * 1.5, abs(g.x));
       col = mix(col, gc + col * 0.5, max(gl, gw) * fade);
-      col = mix(col, vec3(0.9, 0.25, 0.25), ax * fade * 0.8);
-      col = mix(col, vec3(0.25, 0.45, 0.95), az * fade * 0.8);
+      col = mix(col, axisCol(u_axes[0]), ax * fade * 0.8);
+      col = mix(col, axisCol(u_axes[2]), az * fade * 0.8);
     }
   }
 #endif

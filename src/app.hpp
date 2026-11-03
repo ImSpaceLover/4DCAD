@@ -66,9 +66,9 @@ struct ExploreSettings {
 struct Gizmo {
   bool visible = false;
   double cx = 0, cy = 0;           // centre (window pixels)
-  struct Axis { bool visible = false; int axis = 0; V4 dir{}; double ex = 0, ey = 0; };
+  struct Axis { bool visible = false; int axis = 0; V4 dir{}; double ex = 0, ey = 0; bool faded = false; };  // axis: label (X..W); faded: leaves the slice
   Axis axes[3];                    // the object's local X, Y, Z, straightened into the visible slice
-  struct Ring { int a = 0, b = 0; V4 u{}, v{}; std::vector<std::pair<double, double>> pts; double orient = 1; };
+  struct Ring { int a = 0, b = 0; V4 u{}, v{}; std::vector<std::pair<double, double>> pts; double orient = 1; int la = 0, lb = 0; };  // la/lb: axis labels
   std::vector<Ring> rings;         // rotation planes between visible axes
   double worldLen = 1;             // world length of an arrow
   int hot = -1;                    // hovered handle: 0..2 arrows, 4 centre, 10+ rings
@@ -155,6 +155,10 @@ class App {
   std::optional<RayHit> pick(double x, double y);
   void focusSelection();
   void standardView(int which);
+  /** Full 4D: put world axis s (0..3 = X..W) on the slice slider; the other three are shown. */
+  void setSliderAxis(int s);
+  /** World axis (0..3) shown as gizmo slot k (0..2) in Global mode. */
+  int globalAxisLabel(int k) const;
 
   // --- placement (library objects) ---
   bool canPlace(const std::string& objectId, std::string* reason);
@@ -227,6 +231,9 @@ class App {
   M4 parentWorldRotation(const std::string& id, double* scaleAcc);
   /** The object's local X, Y, Z straightened into the visible slice (orthonormal, world space). */
   std::array<V4, 3> gizmoAxes(const std::string& id, const View& v);
+  /** Direction for the G / R axis key k (0..3 = X..W): Global = that world axis exactly, Local = gizmo axis. */
+  V4 keyAxis(const std::string& id, const View& v, int k);
+  bool globalExact(const std::string& id);
   SurfaceField field() { return worldField(*ev); }
   void updateExplore(const InputState& in, double dt);
   void flyGeoEdit(const InputState& in, double dt);

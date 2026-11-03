@@ -479,7 +479,7 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
 std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   j["world"] = world.empty() ? json(nullptr) : json(world);
-  if (cam) j["camera"] = {{"target", v4j(cam->target)}, {"distance", cam->distance}, {"yaw", cam->yaw}, {"pitch", cam->pitch}, {"rot4", m4j(cam->rot4)}};
+  if (cam) j["camera"] = {{"target", v4j(cam->target)}, {"distance", cam->distance}, {"yaw", cam->yaw}, {"pitch", cam->pitch}, {"rot4", m4j(cam->rot4)}, {"slider", cam->slider}};
   return j.dump(2);
 }
 
@@ -502,6 +502,7 @@ SceneFile sceneFromJson(const std::string& text) {
     cs.yaw = c.value("yaw", 0.6);
     cs.pitch = c.value("pitch", -0.35);
     cs.rot4 = orthonormalize(jm4(c.value("rot4", json::array())));
+    cs.slider = std::clamp(c.value("slider", 3), 0, 3);
     f.camera = cs;
   }
   return f;

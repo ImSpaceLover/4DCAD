@@ -503,8 +503,15 @@ std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
   // along one may change several world coordinates (e.g. X and W) but stays inside the slice.
   Node* n = findNode(root, id);
   M4 F = nodeWorldFrame(id);
-  // Global: world axes (on a world surface: the surface's tangent frame at the object)
-  if (editSet.globalAxes) F = (n && n->anchor) ? n->anchor->basis : identity();
+  if (editSet.globalAxes) {
+    if (n && n->anchor) F = n->anchor->basis;  // on a world surface: the surface's directions at the object
+    else {
+      // the shown world axes, exactly: an arrow changes a single coordinate (it may leave the slice)
+      std::array<V4, 3> r;
+      for (int k = 0; k < 3; k++) r[k] = unit(globalAxisLabel(k));
+      return r;
+    }
+  }
   V4 out = (geo && n && n->anchor) ? col(n->anchor->basis, 3) : col(v.frame, 3);
   out = normalize(out);
   V4 a[3];
@@ -527,6 +534,30 @@ std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
     done.push_back(d);
   }
   return r;
+}
+
+bool App::globalExact(const std::string& id) {
+  Node* n = findNode(root, id);
+  return editSet.globalAxes && n && !n->anchor;
+}
+
+int App::globalAxisLabel(int k) const {
+  if (geo) return k;
+  M4 p = editCam.axes();
+  V4 c = col(p, k);
+  for (int i = 0; i < 4; i++) if (std::abs(c[i]) > 0.5) return i;
+  return k;
+}
+
+V4 App::keyAxis(const std::string& id, const View& v, int k) {
+  if (globalExact(id)) return unit(k);
+  return k < 3 ? gizmoAxes(id, v)[k] : V4{0, 0, 0, 0};
+}
+
+void App::setSliderAxis(int s) {
+  if (s < 0 || s > 3) return;
+  editCam.setSlider(s);
+  lastChange_ = now;
 }
 
 static double snapTo(double x, double step) { return step > 0 ? std::round(x / step) * step : x; }
@@ -615,6 +646,9 @@ Gizmo App::gizmo() {
     ax.dir = dirs[a];
     if (!project(c + ax.dir * g.worldLen, v, ax.ex, ax.ey)) { ax.ex = g.cx; ax.ey = g.cy; }
     ax.visible = true;  // always 3 arrows (an arrow pointing at the camera is just short)
+    bool exact = globalExact(n->id);
+    ax.axis = exact ? globalAxisLabel(a) : a;
+    ax.faded = exact && !geo && std::abs(dot(ax.dir, col(v.frame, 3))) > 0.05;
   }
   if (tool == Tool::Rotate) {
     double r = g.worldLen * 0.85;
@@ -624,6 +658,8 @@ Gizmo App::gizmo() {
       ring.a = pl[0]; ring.b = pl[1];
       ring.u = dirs[pl[0]];
       ring.v = dirs[pl[1]];
+      ring.la = g.axes[pl[0]].axis;
+      ring.lb = g.axes[pl[1]].axis;
       bool ok = true;
       for (int k = 0; k <= 64 && ok; k++) {
         double t = k / 64.0 * 2 * PI, sx, sy;
@@ -708,14 +744,14 @@ void App::applyModal() {
   for (auto& [id, o] : orig_) ids.push_back(id);
   if (modal == Modal::Grab) {
     std::vector<V4> dirs{right, up};
-    if (modalAxes.size() == 1) dirs = {modalAxes[0] < 3 ? gizmoAxes(primaryOf(ids), v)[modalAxes[0]] : V4{0, 0, 0, 0}};
+    if (modalAxes.size() == 1) dirs = {keyAxis(primaryOf(ids), v, modalAxes[0])};
     for (auto& [id, o] : orig_) {
       V4 c = nodeWorldPos(id);
       double depth = std::max(0.5, std::abs(dot(c - v.eye, fwd)));
       double k = 2 * depth * tanHalf() / vpH;
       V4 delta = right * (dx * k) - up * (dy * k);
       if (modalAxes.size() == 1) {
-        V4 axis = modalAxes[0] < 3 ? gizmoAxes(id, v)[modalAxes[0]] : V4{0, 0, 0, 0};
+        V4 axis = keyAxis(id, v, modalAxes[0]);
         double sx0, sy0, sx1, sy1;
         if (length(axis) > 0.5 && project(c, v, sx0, sy0) && project(c + axis, v, sx1, sy1)) {
           double ax = sx1 - sx0, ay = sy1 - sy0, l2 = ax * ax + ay * ay;
@@ -734,9 +770,7 @@ void App::applyModal() {
         int a, b;
         if (modalAxes.size() >= 2) { a = modalAxes[0]; b = modalAxes[1]; }
         else { int x = modalAxes[0]; a = x == 0 ? 1 : 0; b = x == 2 ? 1 : x == 3 ? 1 : 2; if (x == 1) { a = 2; b = 0; } }
-        auto gax = gizmoAxes(id, v);
-        if (a > 2 || b > 2) continue;
-        V4 u = gax[a], w = gax[b];
+        V4 u = keyAxis(id, v, a), w = keyAxis(id, v, b);
         w = reject(w, u);
         if (length(u) < 0.5 || length(w) < 0.2) continue;
         q = rotationInPlane(u, normalize(w), ang);
@@ -1048,6 +1082,8 @@ void App::renderFrame() {
   fp.quality = &quality;
   fp.light = light();
   fp.skyCol = worldColor();
+  if (!fp.geo) fp.axes = editCam.axes();
+  key << editCam.slider << ',';
   for (float x : fp.skyCol) key << x << ',';
   // the player's body in Explore: casts a shadow and can be seen when light wraps around a closed world
   float r = (float)exploreSet.bodyRadius;
