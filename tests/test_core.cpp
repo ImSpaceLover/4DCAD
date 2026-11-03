@@ -228,6 +228,70 @@ int main() {
     CLOSE(length(c2.view().eye - v.eye), 0, 1e-9);
   }
 
+  // frame conversions: compose / relative round trip
+  {
+    Transform P; P.pos = {1, -2, 0.5, 3}; P.rot = mul(planeRotation(0, 3, 0.7), planeRotation(1, 2, -0.4)); P.scale = 2;
+    Transform C; C.pos = {0.3, 0.1, -1, 2}; C.rot = planeRotation(0, 2, 1.1); C.scale = 0.5;
+    Transform W = composeXf(P, C), back = relativeXf(P, W);
+    CLOSE(length(back.pos - C.pos), 0, 1e-9);
+    CLOSE(back.scale, C.scale, 1e-12);
+    double e = 0; for (int i = 0; i < 16; i++) e = std::max(e, std::abs(back.rot[i] - C.rot[i]));
+    CLOSE(e, 0, 1e-9);
+  }
+  // empty groups are pruned bottom-up
+  {
+    Node root = makeGroup(BoolOp::Union, {}, "root");
+    Node inner = makeGroup(BoolOp::Union, {}, "inner");
+    Node outer = makeGroup(BoolOp::Union, {inner}, "outer");
+    root.children = {outer, makeLeaf("point", "a")};
+    pruneEmptyGroups(root);
+    CHECK(root.children.size() == 1 && root.children[0].isLeaf(), "nested empty groups removed");
+  }
+  // centring a group on its first object keeps world positions
+  {
+    Node a = makeLeaf("point", "a", {1, 2, 3, 4}), b = makeLeaf("point", "b", {-1, 0, 2, 0});
+    Node g = makeGroup(BoolOp::Union, {a, b});
+    g.xf.pos = {0.5, 0, 0, 0}; g.xf.rot = planeRotation(0, 1, 0.6); g.xf.scale = 1.5;
+    V4 wa = composeXf(g.xf, g.children[0].xf).pos, wb = composeXf(g.xf, g.children[1].xf).pos;
+    CHECK(centreGroupOnFirst(g), "centred");
+    CLOSE(length(g.children[0].xf.pos), 0, 1e-12);
+    CLOSE(length(composeXf(g.xf, g.children[0].xf).pos - wa), 0, 1e-9);
+    CLOSE(length(composeXf(g.xf, g.children[1].xf).pos - wb), 0, 1e-9);
+  }
+  // multi-object editing: changed fields copied, transforms relative, kinds respected
+  {
+    Node p = makeLeaf("point", "p", {0, 0, 0, 0}), t = makeLeaf("point", "t", {5, 0, 0, 0});
+    Node grp = makeGroup(BoolOp::Union, {makeLeaf("point", "x")});
+    Modifier ex; ex.type = MOD_EXTRUDE;
+    p.mods = {ex}; t.mods = {ex};
+    t.xf.scale = 2; t.color = {0, 0, 1}; t.thickness = 0.7;
+    Node before = p;
+    p.color = {1, 0, 0};
+    p.xf.pos = {0, 1, 0, 0};
+    p.xf.scale = 1.5;
+    p.xf.rot = planeRotation(0, 1, 0.3);
+    p.mods[0].length = 5;
+    propagateEdit(before, p, t, true);
+    propagateEdit(before, p, grp, true);
+    CHECK(t.color == p.color, "colour copied");
+    CLOSE(t.thickness, 0.7, 1e-12);  // untouched field kept
+    CLOSE(length(t.xf.pos - V4{5, 1, 0, 0}), 0, 1e-12);
+    CLOSE(t.xf.scale, 3, 1e-12);
+    CLOSE(t.xf.rot[0], std::cos(0.3), 1e-9);
+    CLOSE(t.mods[0].length, 5, 1e-12);
+    CHECK(grp.color != p.color, "leaf fields do not reach groups");
+    CLOSE(grp.xf.pos[1], 1, 1e-12);  // transforms do
+    Node u = makeLeaf("point", "u");
+    Modifier mi; mi.type = MOD_MIRROR;
+    u.mods = {mi};
+    propagateEdit(before, p, u, false);
+    CHECK(u.mods.size() == 1 && u.mods[0].type == MOD_MIRROR, "different stacks are not touched");
+    ModStackOp add{ModStackOp::Add, -1, mi};
+    Node v = makeLeaf("point", "v"); v.mods = {ex};
+    propagateEdit(p, p, v, true, add);
+    CHECK(v.mods.size() == 2 && v.mods[1].type == MOD_MIRROR, "added modifier reaches matching stacks");
+  }
+
   std::printf("%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

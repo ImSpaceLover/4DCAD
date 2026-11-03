@@ -140,6 +140,36 @@ bool isAncestor(Node& root, const std::string& anc, const std::string& id);
 std::optional<Node> removeNode(Node& root, const std::string& id);
 Node cloneFresh(const Node& n);
 
+// ---- transforms between frames (uniform scale: x_parent = pos + scale * rot * x_local) ----
+/** The transform of `child` (given in `parent`'s local frame) expressed in the frame `parent` lives in. */
+Transform composeXf(const Transform& parent, const Transform& child);
+/** Inverse of composeXf: `world` expressed in the local frame of `parentWorld`. */
+Transform relativeXf(const Transform& parentWorld, const Transform& world);
+/** World transform of a node, composed along its path. nullopt if the node is missing or an
+ *  anchored node lies on the path (anchors live in surface tangent frames: no plain conversion). */
+std::optional<Transform> worldXf(Node& root, const std::string& id);
+/** Moves a group's origin to its first child's position without moving anything in the world
+ *  (the first child ends up at 0,0,0,0). Returns false if nothing could be done (no children, anchors). */
+bool centreGroupOnFirst(Node& g);
+/** Removes (recursively, bottom-up) every group below the root that has no children. */
+void pruneEmptyGroups(Node& root);
+
+// ---- editing several objects at once ----
+/** Structural change of a modifier stack done in the Properties panel. */
+struct ModStackOp {
+  enum Kind { None, Add, Remove, MoveUp } kind = None;
+  int index = -1;
+  Modifier mod;  // Add
+};
+/** Same modifier types in the same order. */
+bool sameModifierTypes(const Node& a, const Node& b);
+/** Applies to `target` what changed between `before` and `after` (one frame of edits on the
+ *  primary object): changed fields are copied, position / rotation / scale changes are applied
+ *  relatively (offset, rotation about the target's own centre, scale ratio). Leaf-only fields
+ *  only reach leaves and group-only fields only groups. Modifiers are edited only when
+ *  `stacksMatch` (all selected stacks have the same types). */
+void propagateEdit(const Node& before, const Node& after, Node& target, bool stacksMatch, const ModStackOp& op = {});
+
 class PrimitiveRegistry {
  public:
   PrimitiveRegistry();

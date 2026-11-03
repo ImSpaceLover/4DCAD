@@ -59,6 +59,8 @@ float map(vec4 p, out MAT m) {
 }
 
 #ifdef VIEW_GEO
+MAT g_projMat = MAT(0.0);  // world surface material at the last projected point
+
 vec4 projectToWorld(inout vec4 p) {
   const float e = 1e-3;
   vec4 n = vec4(0.0, 1.0, 0.0, 0.0);
@@ -68,7 +70,9 @@ vec4 projectToWorld(inout vec4 p) {
     for (int i = 0; i < 5; i++) {
       vec4 o = vec4(0.0);
       if (i > 0) o[i - 1] = e;
-      v[i] = worldSDF(p + o);
+      MAT wm;
+      v[i] = worldSDFm(p + o, wm);
+      if (i == 0) g_projMat = wm;
     }
     vec4 g = (vec4(v[1], v[2], v[3], v[4]) - v[0]) / e;
     float gg = max(dot(g, g), 1e-8);
@@ -79,10 +83,11 @@ vec4 projectToWorld(inout vec4 p) {
 }
 #endif
 
-vec3 sky(vec4 dir) {
+// surf: Geodesic only, the colour of the world surface where the ray ended
+vec3 sky(vec4 dir, vec3 surf) {
 #ifdef VIEW_GEO
-  // the sky of a world surface has the colour of the surface itself
-  return u_skyCol * (0.9 + 0.1 * dot(dir, normalize(u_light)));
+  // the sky of a world surface has the colour of the surface the ray travelled to
+  return surf * (0.9 + 0.1 * dot(dir, normalize(u_light)));
 #else
   return mix(u_skyBottom, u_skyTop, clamp(dir.y * 0.5 + 0.5, 0.0, 1.0)) + 0.05 * dir.w;
 #endif
@@ -115,6 +120,7 @@ void main() {
   int sSteps = 0;
   vec4 L = normalize(u_light), Ll = L;
   float dif = 0.0;
+  vec3 rayWorldCol = u_skyCol;  // Geodesic: world surface colour where the primary ray currently is
 
   for (int it = 0; it < 2000; it++) {
     if (phase == DONE) break;
@@ -191,6 +197,7 @@ void main() {
         p = ap; dir = adir;
 #ifdef VIEW_GEO
         wn = nn;
+        if (u_geoIters > 0) rayWorldCol = g_projMat[0].rgb;
 #endif
       } else { sp = ap; sdir = adir; }
     }
@@ -207,17 +214,17 @@ void main() {
     float spec = pow(max(dot(n, H), 0.0), 40.0) * 0.35;
     float fre = pow(1.0 - max(dot(n, V), 0.0), 3.0);
 #ifdef VIEW_GEO
-    vec3 rim = u_skyCol;
+    vec3 rim = rayWorldCol;
 #else
-    vec3 rim = sky(n);
+    vec3 rim = sky(n, rayWorldCol);
 #endif
     vec3 lit = base * (u_ambient * ao + 0.9 * dif * sh) + spec * sh + 0.12 * fre * ao * rim;
     col = mix(lit, base, emissive);  // emissive: always fully lit, unshadowed
     col = mix(col, vec3(1.0, 0.6, 0.15), hm[0].a * (0.25 + 0.5 * fre));
     float f = t / u_maxDist;
-    col = mix(col, sky(dir), clamp(u_fog * f * f * 1.5, 0.0, 1.0));
+    col = mix(col, sky(dir, rayWorldCol), clamp(u_fog * f * f * 1.5, 0.0, 1.0));
   } else {
-    col = sky(dir);
+    col = sky(dir, rayWorldCol);
     t = 1e9;
   }
 

@@ -235,6 +235,111 @@ int main() {
     CHECK(app.lastFile == path, "remembered as last file");
   }
 
+  // --- grouping: origin at the first object, nothing moves; leaving a group restores global coordinates ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string a = app.selection[0];
+    app.placeItem("builtin-sphere", std::nullopt);
+    std::string b = app.selection[0];
+    findNode(app.root, a)->xf.pos = {1, 0.5, -2, 0.3};
+    findNode(app.root, b)->xf.pos = {-1.5, 1, 0.5, -0.2};
+    findNode(app.root, b)->xf.rot = planeRotation(0, 2, 0.4);
+    app.rebuild();
+    V4 wa = app.nodeWorldPos(a), wb = app.nodeWorldPos(b);
+    app.selection = {a, b};
+    app.groupSelection(BoolOp::Union);
+    std::string g = app.selection[0];
+    CHECK(length(findNode(app.root, g)->xf.pos - wa) < 1e-9, "group origin = first object");
+    CHECK(length(findNode(app.root, a)->xf.pos) < 1e-12, "first object at 0,0,0,0");
+    CHECK(length(app.nodeWorldPos(a) - wa) < 1e-9 && length(app.nodeWorldPos(b) - wb) < 1e-9, "grouping does not move objects");
+    // rotate / scale the group about its origin, then drag b out: it stays where it is
+    Node* gn = findNode(app.root, g);
+    gn->xf.rot = planeRotation(1, 3, 0.8);
+    gn->xf.scale = 1.7;
+    app.commit();
+    V4 wb2 = app.nodeWorldPos(b);
+    CHECK(length(app.nodeWorldPos(a) - wa) < 1e-9, "rotation / scaling pivot is the first object");
+    app.reparent(b, app.root.children[0].id, App::Drop::After);
+    CHECK(findParent(app.root, b) == &app.root, "moved out");
+    CHECK(length(app.nodeWorldPos(b) - wb2) < 1e-9, "leaving a group keeps the world position");
+    CHECK(std::abs(findNode(app.root, b)->xf.scale - 1.7) < 1e-9, "scale back in global terms");
+    // ... and back in
+    app.reparent(b, g, App::Drop::Into);
+    CHECK(length(app.nodeWorldPos(b) - wb2) < 1e-9, "entering a group keeps the world position");
+    // ungroup restores global coordinates
+    app.ungroup(g);
+    CHECK(!findNode(app.root, g), "ungrouped");
+    CHECK(length(app.nodeWorldPos(a) - wa) < 1e-9 && length(app.nodeWorldPos(b) - wb2) < 1e-9, "ungroup keeps positions");
+    // removing every object of a group deletes the group
+    app.selection = {a, b};
+    app.groupSelection(BoolOp::Union);
+    g = app.selection[0];
+    app.selection = {a};
+    app.deleteSelection();
+    CHECK(findNode(app.root, g), "group with one object left stays");
+    app.reparent(b, app.root.children[0].id, App::Drop::After);
+    CHECK(!findNode(app.root, g), "group emptied by dragging out is deleted");
+    // recentre on the (new) first object
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string c = app.selection[0];
+    findNode(app.root, c)->xf.pos = {3, 0, 0, 0};
+    app.selection = {b, c};
+    app.groupSelection(BoolOp::Union);
+    g = app.selection[0];
+    V4 wc = app.nodeWorldPos(c);
+    app.reparent(c, b, App::Drop::Before);  // c is now first
+    app.recentreGroup(g);
+    CHECK(length(findNode(app.root, g)->xf.pos - wc) < 1e-9 && length(app.nodeWorldPos(c) - wc) < 1e-9, "recentre on first object");
+  }
+  // --- global axes and snapping ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string cb = app.selection[0];
+    Node* n = findNode(app.root, cb);
+    n->xf.pos = app.editCam.target + V4{0.07, 0.03, 0, 0};
+    n->xf.rot = planeRotation(0, 2, 0.5);
+    app.editCam.reset4();
+    app.rebuild();
+    app.tool = Tool::Move;
+    app.editSet.globalAxes = true;
+    Gizmo gz = app.gizmo();
+    CHECK(gz.visible && std::abs(gz.axes[0].dir[0] - 1) < 1e-9 && std::abs(gz.axes[2].dir[2] - 1) < 1e-9, "global gizmo axes = world X / Z");
+    app.editSet.globalAxes = false;
+    gz = app.gizmo();
+    CHECK(std::abs(gz.axes[0].dir[0] - std::cos(0.5)) < 1e-6, "local gizmo axes follow the object");
+    // snapped drag of the X arrow: X lands on the grid, other coordinates unchanged
+    app.editSet.globalAxes = true;
+    app.editSet.snap = true;
+    gz = app.gizmo();
+    V4 p0 = n->xf.pos;
+    double ex = gz.axes[0].ex, ey = gz.axes[0].ey, mx = (gz.cx + ex) / 2, my = (gz.cy + ey) / 2;
+    app.handleInput(frameInput(mx, my, 0, 0, false, false, false), 0.016);
+    app.handleInput(frameInput(mx, my, 0, 0, true, true, false), 0.016);
+    for (int i = 1; i <= 10; i++) app.handleInput(frameInput(mx + 13 * i, my, 13, 0, true, false, false), 0.016);
+    app.handleInput(frameInput(mx + 130, my, 0, 0, false, false, true), 0.016);
+    V4 p1 = findNode(app.root, cb)->xf.pos;
+    double r = p1[0] / app.editSet.snapMove;
+    CHECK(std::abs(r - std::round(r)) < 1e-6 && std::abs(p1[0] - p0[0]) > 0.1, "snapped X %.4f", p1[0]);
+    CHECK(std::abs(p1[1] - p0[1]) < 1e-9 && std::abs(p1[2] - p0[2]) < 1e-9 && std::abs(p1[3] - p0[3]) < 1e-9, "snap stays on the axis");
+    // snapped rotation (R modal): angle in 15 degree steps
+    app.selection = {cb};
+    findNode(app.root, cb)->xf.rot = identity();
+    app.rebuild();
+    app.handleInput(frameInput(500, 350, 0, 0, false, false, false), 0.016);
+    app.startModal(Modal::Rotate);
+    app.handleInput(frameInput(537, 350, 37, 0, false, false, false), 0.016);  // 0.37 rad -> 15 deg
+    app.confirmModal();
+    M4 R = findNode(app.root, cb)->xf.rot;
+    double ang = std::acos(std::min(1.0, std::max(-1.0, (R[0] + R[5] + R[10] + R[15] - 2) / 2)));
+    CHECK(std::abs(ang - 15 * PI / 180) < 1e-6, "snapped rotation %.4f", ang * 180 / PI);
+    app.editSet.snap = false;
+    app.editSet.globalAxes = false;
+  }
+
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---
   app.loadScene(planetScene());
   app.setGeo(true);

@@ -41,6 +41,12 @@ struct EditSettings {
   double flySpeed = 2, lookSpeed = 1;
   bool showThumbnail = true;
   int thumbSize = 300;
+  // transform tools
+  bool globalAxes = false;  // gizmo / G / R axes: false = the object's local axes, true = world axes
+  bool snap = false;        // snapping (Ctrl while transforming inverts it)
+  double snapMove = 0.25;   // grid step (world units)
+  double snapAngle = 15;    // degrees
+  double snapScale = 0.1;
 };
 
 /** Explore mode settings (Full 4D + Geodesic sub-settings). */
@@ -128,6 +134,8 @@ class App {
   void duplicateSelection();
   void groupSelection(BoolOp op);
   void ungroup(const std::string& id);
+  /** Moves a group's origin to its first object, without moving anything. */
+  void recentreGroup(const std::string& id);
   enum class Drop { Into, Before, After, Wrap };
   void reparent(const std::string& id, const std::string& target, Drop where);
   void setWorld(const std::string& id);
@@ -165,6 +173,8 @@ class App {
   /** Gizmo for the current selection (Move / Rotate tool), in screen space. */
   Gizmo gizmo();
   bool gizmoDragging() const { return gizmoHandle_ >= 0; }
+  /** Snapping is in effect for the current transform (setting, inverted while Ctrl is held). */
+  bool snapping() const { return snapNow_; }
   bool flying() const { return drag_ == Drag::Fly; }
   int gizmoHandle() const { return gizmoHandle_; }
 
@@ -199,6 +209,16 @@ class App {
   bool dragMoved_ = false;
   int gizmoHandle_ = -1;
   Gizmo gizmoAtPress_;
+  // drag totals since the press (transforms are re-applied from the original state, so snapping never drifts)
+  double dragDx_ = 0, dragDy_ = 0, dragDepth_ = 0, dragAlong_ = 0, dragAngle_ = 0;
+  bool snapNow_ = false;
+  void resetDragTotals() { dragDx_ = dragDy_ = dragDepth_ = dragAlong_ = dragAngle_ = 0; }
+  std::string primaryOf(const std::vector<std::string>& ids) const;
+  /** Moves `ids` so the primary object's world position lands on the snapping grid, within the span of `dirs`. */
+  void snapToGrid(const std::vector<std::string>& ids, const std::vector<V4>& dirs);
+  /** Anchored primary: rounds the travelled distance instead (no grid on a curved surface). */
+  V4 snapDistance(const std::vector<std::string>& ids, const V4& delta);
+  double snapAng(double a) const;
   std::string snapshot();
   void restore(const std::string& s);
   void captureOrig();

@@ -92,6 +92,110 @@ Node cloneFresh(const Node& n) {
 }
 
 // ---------------------------------------------------------------- registry
+// ============================================================ frames
+Transform composeXf(const Transform& P, const Transform& C) {
+  Transform r;
+  r.pos = P.pos + mul(P.rot, C.pos) * P.scale;
+  r.rot = orthonormalize(mul(P.rot, C.rot));
+  r.scale = P.scale * C.scale;
+  return r;
+}
+
+Transform relativeXf(const Transform& P, const Transform& W) {
+  Transform r;
+  M4 inv = transpose(P.rot);
+  double s = P.scale != 0 ? P.scale : 1;
+  r.pos = mul(inv, W.pos - P.pos) * (1 / s);
+  r.rot = orthonormalize(mul(inv, W.rot));
+  r.scale = W.scale / s;
+  return r;
+}
+
+std::optional<Transform> worldXf(Node& root, const std::string& id) {
+  auto path = pathTo(root, id);
+  if (path.empty()) return std::nullopt;
+  Transform acc;
+  for (Node* n : path) {
+    if (n->anchor) return std::nullopt;
+    acc = composeXf(acc, n->xf);
+  }
+  return acc;
+}
+
+bool centreGroupOnFirst(Node& g) {
+  if (g.isLeaf() || g.children.empty() || g.anchor) return false;
+  for (auto& c : g.children) if (c.anchor) return false;
+  V4 o = g.children[0].xf.pos;
+  g.xf.pos = g.xf.pos + mul(g.xf.rot, o) * g.xf.scale;
+  for (auto& c : g.children) c.xf.pos = c.xf.pos - o;
+  return true;
+}
+
+void pruneEmptyGroups(Node& root) {
+  std::function<void(Node&)> rec = [&](Node& n) {
+    for (auto& c : n.children) rec(c);
+    n.children.erase(std::remove_if(n.children.begin(), n.children.end(), [](const Node& c) { return !c.isLeaf() && c.children.empty(); }),
+                     n.children.end());
+  };
+  rec(root);
+}
+
+// ============================================================ multi-object editing
+bool sameModifierTypes(const Node& a, const Node& b) {
+  if (a.mods.size() != b.mods.size()) return false;
+  for (size_t i = 0; i < a.mods.size(); i++) if (a.mods[i].type != b.mods[i].type) return false;
+  return true;
+}
+
+void propagateEdit(const Node& B, const Node& A, Node& T, bool stacksMatch, const ModStackOp& op) {
+  auto ch = [](auto& b, auto& a, auto& t) { if (!(b == a)) t = a; };
+  if (B.isLeaf() == T.isLeaf()) {
+    if (T.isLeaf()) {
+      ch(B.color, A.color, T.color);
+      ch(B.thickness, A.thickness, T.thickness);
+      ch(B.round, A.round, T.round);
+      ch(B.shell, A.shell, T.shell);
+      ch(B.mat.emissive, A.mat.emissive, T.mat.emissive);
+      ch(B.mat.texture, A.mat.texture, T.mat.texture);
+      ch(B.mat.texScale, A.mat.texScale, T.mat.texScale);
+      ch(B.mat.texStrength, A.mat.texStrength, T.mat.texStrength);
+      ch(B.mat.color2, A.mat.color2, T.mat.color2);
+      if (B.isCustom() && T.isCustom()) { ch(B.code, A.code, T.code); ch(B.codeBound, A.codeBound, T.codeBound); }
+    } else {
+      ch(B.op, A.op, T.op);
+      ch(B.k, A.k, T.k);
+    }
+  }
+  // transforms: relative
+  if (!T.anchor) {
+    V4 d = A.xf.pos - B.xf.pos;
+    if (length(d) > 0) T.xf.pos = T.xf.pos + d;
+    if (A.xf.rot != B.xf.rot) T.xf.rot = orthonormalize(mul(mul(A.xf.rot, transpose(B.xf.rot)), T.xf.rot));
+  } else if (A.xf.rot != B.xf.rot) {
+    T.xf.rot = orthonormalize(mul(mul(A.xf.rot, transpose(B.xf.rot)), T.xf.rot));  // anchored: rotation within the tangent frame
+  }
+  if (A.xf.scale != B.xf.scale && B.xf.scale > 0) T.xf.scale = std::max(0.01, T.xf.scale * A.xf.scale / B.xf.scale);
+  // modifiers
+  if (!stacksMatch) return;
+  if (op.kind == ModStackOp::Add) { T.mods.push_back(op.mod); return; }
+  if (op.kind == ModStackOp::Remove) { if (op.index >= 0 && op.index < (int)T.mods.size()) T.mods.erase(T.mods.begin() + op.index); return; }
+  if (op.kind == ModStackOp::MoveUp) { if (op.index > 0 && op.index < (int)T.mods.size()) std::swap(T.mods[op.index], T.mods[op.index - 1]); return; }
+  if (!sameModifierTypes(B, A) || !sameModifierTypes(B, T)) return;
+  for (size_t i = 0; i < A.mods.size(); i++) {
+    const Modifier &b = B.mods[i], &a = A.mods[i];
+    Modifier& t = T.mods[i];
+    ch(b.axis, a.axis, t.axis);
+    ch(b.spacing, a.spacing, t.spacing);
+    ch(b.count, a.count, t.count);
+    ch(b.mode, a.mode, t.mode);
+    ch(b.length, a.length, t.length);
+    ch(b.radius, a.radius, t.radius);
+    ch(b.i, a.i, t.i);
+    ch(b.j, a.j, t.j);
+    ch(b.angle, a.angle, t.angle);
+  }
+}
+
 PrimitiveRegistry::PrimitiveRegistry() {
   list_ = builtinPrimitives();
   PrimitiveDef custom;  // placeholder for GLSL custom SDF leaves (base dimension 4)
