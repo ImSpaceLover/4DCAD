@@ -29,6 +29,8 @@ void applyModifier(V4& q, const Modifier& m);  // mirror / repeat / rotate
 double modifierCoords(const Node& n, const std::vector<ModAxis>& ax, V4& q, double* t);
 /** Distance pass (innermost first): applies the captured extrusions. */
 double modifierDistance(const Node& n, const std::vector<ModAxis>& ax, double d, const double* t);
+/** Radial repeat: angle (radians) of the copy nearest to polar angle a. */
+double radialCopyAngle(const Modifier& m, double a);
 double opExtrudeD(double d, double wy);
 
 struct Sample {

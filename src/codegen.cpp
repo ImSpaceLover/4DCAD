@@ -22,6 +22,22 @@ float opExtrude(float d, float wy) {
 // smooth booleans; an operand >= INF/2 means "empty" (avoids float cancellation in mix(1e9, a, 1))
 float sU(float a, float b, float k) { if (b >= INF * 0.5) return a; if (a >= INF * 0.5) return b; float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
 float sI(float a, float b, float k) { if (a >= INF * 0.5 || b >= INF * 0.5) return INF; float h = clamp(0.5 - 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) + k * h * (1.0 - h); }
+// radial repeat in a plane: v = the plane's coordinates. Copies at angles s + k*st (k = 0..n-1),
+// at distance r from the axis: maps v into the frame of the nearest copy.
+vec2 opRadial(vec2 v, float r, float n, float s, float st) {
+  float a = (v.x == 0.0 && v.y == 0.0) ? 0.0 : atan(v.y, v.x);
+  float rel = mod(a - s, 6.28318530718);
+  float k0 = abs(st) > 1e-9 ? clamp(floor(rel / st), 0.0, n - 1.0) : 0.0;
+  float best = 1e9, ang = s;
+  for (int c = 0; c < 4; c++) {
+    float k = c == 0 ? k0 : c == 1 ? min(k0 + 1.0, n - 1.0) : c == 2 ? 0.0 : n - 1.0;
+    float t = s + k * st;
+    float dd = abs(mod(a - t + 3.14159265359, 6.28318530718) - 3.14159265359);
+    if (dd < best) { best = dd; ang = t; }
+  }
+  float cs = cos(ang), sn = sin(ang);
+  return vec2(cs * v.x + sn * v.y - r, -sn * v.x + cs * v.y);
+}
 float sS(float a, float b, float k) { if (b >= INF * 0.5 || a >= INF * 0.5) return a; float h = clamp(0.5 - 0.5 * (a + b) / k, 0.0, 1.0); return mix(a, -b, h) + k * h * (1.0 - h); }
 )";
 
@@ -93,7 +109,11 @@ static std::string modifierCoordsGLSL(const Node& n, const std::vector<ModAxis>&
     const Modifier& m = n.mods[k];
     if (!ax[k].valid) continue;
     switch (m.type) {
-      case MOD_MIRROR: o << "  " << c(m.axis) << " = abs(" << c(m.axis) << ");\n"; break;
+      case MOD_MIRROR:
+        o << "  " << c(m.axis) << " = abs(" << c(m.axis) << ")";
+        if (m.offset != 0) o << " - " << glslFloat(m.offset);
+        o << ";\n";
+        break;
       case MOD_REPEAT: {
         if (m.spacing <= 0) break;
         std::string a = c(m.axis), s = glslFloat(m.spacing);
@@ -102,10 +122,10 @@ static std::string modifierCoordsGLSL(const Node& n, const std::vector<ModAxis>&
         o << "  " << a << " -= " << s << " * " << r << ";\n";
         break;
       }
-      case MOD_ROTATE: {
-        double ang = -m.angle * PI / 180;
-        o << "  " << v << "." << C[m.i] << C[m.j] << " = mat2(" << glslFloat(std::cos(ang)) << ", " << glslFloat(std::sin(ang)) << ", "
-          << glslFloat(-std::sin(ang)) << ", " << glslFloat(std::cos(ang)) << ") * " << v << "." << C[m.i] << C[m.j] << ";\n";
+      case MOD_RADIAL: {
+        std::string sw = std::string(v) + "." + C[m.i] + C[m.j];
+        o << "  " << sw << " = opRadial(" << sw << ", " << glslFloat(m.radius) << ", " << glslFloat(std::max(1, m.count)) << ", "
+          << glslFloat(m.startAngle * PI / 180) << ", " << glslFloat(m.angle * PI / 180) << ");\n";
         break;
       }
       case MOD_EXTRUDE:
@@ -209,11 +229,12 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     if (n.isLeaf()) {
       if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
-      for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * u_par[" << i << "].z);\n";
       L << extrudeGLSL(n, ax, "");
+      // shell / rounding act on the shape itself, before its thickness along the unused axes
       double shell = n.shell.value_or(0.0), round = n.round.value_or(0.0);
       if (shell > 0) L << "  d = abs(d) - " << glslFloat(shell) << ";\n";
       if (round != 0) L << "  d -= " << glslFloat(round) << ";\n";
+      for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * u_par[" << i << "].z);\n";
       L << "  vec3 col = u_col[" << i << "].rgb;\n";
       if (const char* tf = texFn(n.mat.texture))
         L << "  col = mix(col, u_col2[" << i << "].rgb, " << tf << "(q0 * u_mat[" << i << "].y) * u_mat[" << i << "].z);\n";
@@ -359,8 +380,6 @@ std::string standaloneGLSL(const Node& top, const PrimitiveRegistry& reg) {
         std::string fn = "prim_" + std::to_string(k);
         if (def && !def->steps.empty()) { pre << primitiveGLSL(*def, fn); body << "  float " << d << " = " << fn << "(" << q << ");\n"; }
         else body << "  float " << d << " = -1e9;  // point\n";
-        for (int a = nodeDim(n, reg); a < 4; a++)
-          body << "  " << d << " = opExtrude(" << d << ", abs(" << q << "." << C[a] << ") - " << glslFloat(n.thickness / 2) << ");  // thin along " << AXIS[a] << "\n";
       }
     } else {
       static const char* opf[6] = {"min(%a, %b)", "max(%a, %b)", "max(%a, -%b)", "sU(%a, %b, %k)", "sI(%a, %b, %k)", "sS(%a, %b, %k)"};
@@ -380,6 +399,9 @@ std::string standaloneGLSL(const Node& top, const PrimitiveRegistry& reg) {
     if (n.isLeaf()) {
       if (n.shell.value_or(0) > 0) body << "  " << d << " = abs(" << d << ") - " << glslFloat(*n.shell) << ";\n";
       if (n.round.value_or(0) != 0) body << "  " << d << " -= " << glslFloat(*n.round) << ";\n";
+      if (!n.isCustom())
+        for (int a = nodeDim(n, reg); a < 4; a++)
+          body << "  " << d << " = opExtrude(" << d << ", abs(" << q << "." << C[a] << ") - " << glslFloat(n.thickness / 2) << ");  // thin along " << AXIS[a] << "\n";
     }
     if (!isTop && n.xf.scale != 1) body << "  " << d << " *= " << glslFloat(n.xf.scale) << ";\n";
     return d;
@@ -387,7 +409,7 @@ std::string standaloneGLSL(const Node& top, const PrimitiveRegistry& reg) {
   std::string res = emit(top, "p", true);
   std::ostringstream o;
   o << "// SDF of \"" << top.name << "\" in its own local space (generated, self-contained).\n"
-    << "// Helpers available: opExtrude, sU, sI, sS, INF.\n" << pre.str() << "float sdf(vec4 p) {\n" << body.str() << "  return " << res << ";\n}\n";
+    << "// Helpers available: opExtrude, opRadial, sU, sI, sS, INF.\n" << pre.str() << "float sdf(vec4 p) {\n" << body.str() << "  return " << res << ";\n}\n";
   return o.str();
 }
 
