@@ -1192,6 +1192,8 @@ void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
     if (P(Action::Reset4D) && !geo) { V4 e = editCam.view().eye; editCam.reset4(); editCam.target = e + col(editCam.frame(), 2) * editCam.distance; }
     if (P(Action::DebugRay)) { debugRay = !debugRay; debugFrozen = false; lastChange_ = now; }
     if (P(Action::DebugRayFreeze) && debugRay) debugFrozen = !debugFrozen;  // the status line shows it
+    if (P(Action::ExplorePlay)) playing = !playing;  // the animation plays while you walk around
+    if (P(Action::ExploreRestart)) { setFrame(anim.start); playing = true; }
     return;
   }
   if (drag_ == Drag::Fly) return;  // movement keys while RMB is held
