@@ -8,6 +8,7 @@
 #include <cstdlib>
 
 #include "app.hpp"
+#include "codegen.hpp"
 #include "renderer.hpp"
 #include "examples.hpp"
 
@@ -830,6 +831,56 @@ int main() {
       RayTrace fw = traceRay(*c.ev, false, dv.eye, col(dv.frame, 2), c.quality);
       auto ph = c.pick(500, 350);
       CHECK(fw.reason == RayTrace::Hit && ph && fw.node == ph->node, "%s: debug ray hits the picked object", nm);
+    }
+
+    // --- far from the origin: exact infinite shapes, small GPU matrices, culling
+    {
+      // the ground (half-space below the plane y = 0) is exact anywhere: 50 along it, 1.3 above it
+      V4 p = mul(cs::translation(c.space, {50, 0, 20, 0}), cs::expO(c.space, {0, 1.3, 0, 0}));
+      Sample g = c.ev->evalCurved(p);
+      if (kind == SpaceKind::Hyperbolic)  // (a 3-sphere of radius 5 wraps around past other objects)
+        CHECK(g.node && g.node->name == "Ground" && std::abs(g.d - 1.3) < 1e-6, "%s: ground distance far away (%.6f)", nm, g.d);
+      // an infinite repeat: every copy is an exact translate along its line
+      Node row = makeShape("sphere", "Row", {0, 3, 0, 0});
+      row.xf.scale = 0.5;
+      Modifier rep;
+      rep.type = MOD_REPEAT; rep.axis = 0; rep.spacing = 5; rep.count = 0;
+      row.mods.push_back(rep);
+      std::string rowId = row.id;
+      c.root.children.push_back(row);
+      c.rebuild();
+      M4 W = c.nodeWorldIso(rowId);
+      V4 off = cs::expO(c.space, {0.2, 0.9, -0.4, 0});  // near a copy, in the row's frame
+      double d0 = c.ev->evalCurved(mul(W, off)).d;
+      int nc = kind == SpaceKind::Hyperbolic ? 7 : 3;  // (spherical: less than half way round)
+      double d7 = c.ev->evalCurved(mul(W, mul(cs::translation(c.space, {nc * 2.5, 0, 0, 0}), off))).d;  // copies along (world spacing 2.5)
+      CHECK(std::abs(d0 - d7) < 1e-6 && std::abs(d0 - (cs::distance(c.space, cs::origin(), off) - 0.5)) < 1e-6 * (kind == SpaceKind::Hyperbolic ? 1 : 1e6),
+            "%s: repeat copies are exact translates (%.6f / %.6f)", nm, d0, d7);
+      if (kind == SpaceKind::Hyperbolic) {
+        // the camera 60 away (12 R; doubles hold to about 15 R from the origin): the ground's matrix stays small (re-anchored), far objects are culled
+        M4 saved = c.curvCam.iso;
+        c.curvCam.iso = cs::renorm(k, mul(cs::translation(c.space, {60, 0, 0, 0}), cs::translation(c.space, {0, 1.2, 4, 0})));
+        View fv = c.currentView();
+        CompiledScene cmp = compileScene(c.root, c.reg, "", false, nullptr, c.space.kind);
+        auto data = packNodes(c.root, c.reg, cmp, {}, &c.space, &fv.frame);
+        for (size_t i = 0; i < cmp.nodeIds.size(); i++) {
+          Node* nd = findNode(c.root, cmp.nodeIds[i]);
+          const float* v = &data[i * 48];
+          float mx = 0;
+          for (int q = 0; q < 16; q++) mx = std::max(mx, std::abs(v[q]));
+          if (nd->name == "Ground") CHECK(mx < 10, "ground matrix stays small far away (%g)", mx);
+          if (nd->name == "Cube") CHECK(v[32] < 0 || cs::distance(c.space, fv.eye, c.nodeWorldPos(nd->id)) < 13 * c.space.R() + 2, "far objects are culled");
+        }
+        {
+          // nothing else near: the ground is what is closest, at the true height (1.2 up a slanted walk of |(0, 1.2, 4)|)
+          double len = std::sqrt(1.2 * 1.2 + 16), hgt = c.space.R() * std::asinh(std::sinh(len / c.space.R()) * 1.2 / len);
+          Sample se = c.ev->evalCurved(fv.eye);
+          CHECK(se.node && se.node->name == "Ground" && std::abs(se.d - hgt) < 1e-4, "far camera above the ground (%.6f vs %.6f)", se.d, hgt);
+        }
+        c.curvCam.iso = saved;
+      }
+      removeNode(c.root, rowId);
+      c.rebuild();
     }
 
     // --- editing: moving along a direction slides the object along the geodesic by that distance

@@ -119,7 +119,15 @@ How it works:
   * a ball is an exact geodesic ball;
   * a cube has very slightly curved faces;
   * marching stays safe in both spaces.
-* Shading is done relative to the camera, which keeps float precision near you; hyperbolic rays stop after 12R.
+* **Precision.** Hyperbolic coordinates grow like e^(distance / R), so:
+  * Each object's transform relative to the camera is computed in double precision on the CPU. The GPU only sees small numbers near you.
+  * Infinite objects are re-anchored next to the camera: planes and half-spaces at the nearest point, infinite repeats at the nearest copy, honeycombs at your cell.
+  * Objects beyond the rays' reach are skipped.
+  * Hyperbolic rays stop after 12R (7R with a honeycomb); anything further is below a pixel.
+  * You can wander about 15R from the scene's origin; beyond that, double precision on the CPU runs out.
+* **Infinite shapes are exact.**
+  * An infinite extrusion is measured from the point's nearest spot on its plane or line, so slabs and tubes have a true constant thickness.
+  * A Repeat places exact copies along a straight line of the space (in spherical space they come round again after 2πR).
 
 Everything else works as in Flat 4D:
 * Materials, textures, lights, shadows, glass and mirrors, stochastic sampling.

@@ -3,6 +3,7 @@
 // moving cameras along world surfaces.
 #pragma once
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -52,6 +53,21 @@ inline double attachCut(double reach, double radius) {
   return bend + 0.05;
 }
 
+/** Curved scenes: local axes along which a leaf extends forever unchanged (infinite extrusions). */
+std::vector<int> symmetryAxes(const Node& n, const PrimitiveRegistry& reg);
+/** A frame change for an infinite object (plane, rod, infinite repeat) that brings its origin next to
+ *  c (a point in its frame) without changing the object; identity when there is none. S = total scale. */
+M4 anchorNear(const Space& sp, const Node& n, const PrimitiveRegistry& reg, const V4& c, double S);
+/** Curved scenes: the outermost repeat of a leaf, done exactly (copies = translates along a geodesic). */
+const Modifier* exactRepeat(const Node& n);
+/** Index of the copy nearest to the model point q (in the node's frame); S = the node's total scale. */
+double repeatCopy(const Space& sp, const Modifier& m, const V4& q, double S);
+/** Moves q (node frame) so its foot on the geodesic subspace spanned by the axes is the origin. */
+V4 toSymmetrySlice(const Space& sp, const std::vector<int>& axes, const V4& q);
+/** Bounding radius (local units, with its scale) of one copy of a repeated leaf. */
+double anchoredRadiusAny(const Node& n, const PrimitiveRegistry& reg);
+/** Bounding radius (local units, with the node's scale) of the part near the re-anchored origin. */
+double anchoredRadius(const Node& n, const PrimitiveRegistry& reg);
 /** Spherical scenes: factor applied to local distances of objects of this world radius (1 otherwise). */
 double curvedFactor(const Space& s, double radius);
 
@@ -83,6 +99,9 @@ class SceneEvaluator {
     // curved scenes: inverse isometry relative to the parent, total scale, distance factor (spherical)
     M4 isoInv = identity();
     double S = 1, factor = 1;
+    std::vector<int> symAxes;             // infinite extrusion axes (measured from the foot point)
+    std::shared_ptr<Node> noRepeat;       // the shape without its outermost repeat (exact repeat)
+    std::shared_ptr<struct Prep> noRepeatPrep;
   };
   Node& root_;
   const PrimitiveRegistry& reg_;

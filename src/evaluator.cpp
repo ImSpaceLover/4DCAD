@@ -185,6 +185,13 @@ SceneEvaluator::SceneEvaluator(Node& root, const PrimitiveRegistry& reg, const s
       p.isoInv = cs::inverse(space.k(), cs::nodeIso(space, n.xf, sAnc));
       p.S = sAnc * n.xf.scale;
       p.factor = curvedFactor(space, std::isfinite(p.radius) ? p.radius * sAnc : INFINITY);
+      p.symAxes = symmetryAxes(n, reg);
+      if (exactRepeat(n)) {
+        p.noRepeat = std::make_shared<Node>(n);
+        p.noRepeat->mods.pop_back();
+        p.noRepeatPrep = std::make_shared<Prep>(p);
+        p.noRepeatPrep->axes = modifierAxes(*p.noRepeat, reg);
+      }
       for (auto& c : n.children) visit(c, p.S);
     };
     visit(root, 1.0);
@@ -197,6 +204,103 @@ double curvedFactor(const Space& s, double radius) {
   if (s.kind != SpaceKind::Spherical) return 1.0;
   double t = std::min(std::isfinite(radius) ? radius + 0.5 : 1e9, PI * s.R() / 2) / s.R();
   return t < 1e-6 ? 1.0 : std::max(std::sin(t) / t, 0.5);
+}
+
+// ---- infinite objects in curved spaces: re-anchoring near a point (precision) ----
+// Local axes (0..2) along which a leaf extends forever unchanged: infinite extrusions, with no
+// other modifier that would depend on the position along them. Moving the leaf's frame along
+// those axes (inside the geodesic plane / line they span) is a symmetry of the shape.
+std::vector<int> symmetryAxes(const Node& n, const PrimitiveRegistry& reg) {
+  std::vector<int> out;
+  if (!n.isLeaf() || n.isPolytope() || n.isCustom()) return out;
+  auto ax = modifierAxes(n, reg);
+  for (size_t i = 0; i < n.mods.size(); i++) {
+    const Modifier& m = n.mods[i];
+    if (!ax[i].valid) continue;
+    if (m.type != MOD_EXTRUDE) return {};
+    if (m.mode == ExtrudeMode::Infinite && ax[i].newAxis < 3) out.push_back(ax[i].newAxis);
+  }
+  if (out.size() >= 3) return {};  // fills all of space: nothing to gain
+  return out;
+}
+
+// A frame change for an infinite object that brings its origin next to the camera (c = the
+// camera in the object's frame) without changing the object: identity when there is none.
+M4 anchorNear(const Space& sp, const Node& n, const PrimitiveRegistry& reg, const V4& c, double S) {
+  double k = sp.k();
+  auto axes = symmetryAxes(n, reg);
+  if (!axes.empty()) {
+    // the nearest point of the geodesic plane / line through the origin spanned by those axes:
+    // (components along it, w) normalised; its norm^2 = 1 - k |components off it|^2 (no cancellation)
+    V4 f{0, 0, 0, c[3]};
+    double off2 = 0;
+    for (int a = 0; a < 3; a++) {
+      if (std::find(axes.begin(), axes.end(), a) != axes.end()) f[a] = c[a];
+      else off2 += c[a] * c[a];
+    }
+    double l = 1 - k * off2;
+    if (l <= 1e-12) return identity();
+    return cs::transvection(k, cs::origin(), f * (1 / std::sqrt(l)));
+  }
+  // repeat (the outermost modifier): the copy nearest to c along the line of copies
+  if (const Modifier* m = exactRepeat(n); m && m->count == 0) {  // (a finite one would shift its window of copies)
+    double kk = repeatCopy(sp, *m, c, S);
+    if (kk != 0) { V4 t{0, 0, 0, 0}; t[m->axis] = kk * m->spacing * S; return cs::translation(sp, t); }
+  }
+  return identity();
+}
+
+const Modifier* exactRepeat(const Node& n) {
+  if (!n.isLeaf() || n.isPolytope() || n.mods.empty()) return nullptr;
+  const Modifier& m = n.mods.back();
+  return m.type == MOD_REPEAT && m.spacing > 0 && m.axis >= 0 && m.axis < 3 ? &m : nullptr;
+}
+
+double repeatCopy(const Space& sp, const Modifier& m, const V4& q, double S) {
+  // where q's foot lies along the geodesic of copies (the local axis), in units of the spacing
+  int a = m.axis;
+  double o2 = 0;
+  for (int i = 0; i < 3; i++) if (i != a) o2 += q[i] * q[i];
+  double rho = std::sqrt(std::max(1 - sp.k() * o2, 1e-30));
+  double t = sp.k() < 0 ? std::asinh(q[a] / rho) : std::atan2(q[a], q[3]);
+  double kk = std::round(t * sp.R() / (m.spacing * S));
+  if (m.count > 0) kk = clampd(kk, -m.count, m.count);
+  return kk;
+}
+
+V4 toSymmetrySlice(const Space& sp, const std::vector<int>& axes, const V4& q) {
+  // the transvection that takes q's foot on the geodesic subspace (spanned by the axes) to the
+  // origin, in closed form: it keeps the components off the subspace and zeroes those along it
+  V4 r = q;
+  for (int a : axes) r[a] = 0;
+  double o2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+  r[3] = std::sqrt(std::max(1 - sp.k() * o2, 0.0));
+  return r;
+}
+
+double anchoredRadiusAny(const Node& n, const PrimitiveRegistry& reg) {
+  Node c = n;
+  if (exactRepeat(c)) c.mods.pop_back();
+  c.xf = Transform{};
+  c.xf.scale = n.xf.scale;
+  auto b = computeBounds(c, reg);
+  auto it = b.find(c.id);
+  return it == b.end() ? INFINITY : it->second.r;
+}
+
+double anchoredRadius(const Node& n, const PrimitiveRegistry& reg) {
+  // the node with what the anchoring makes irrelevant removed: the outermost infinite repeat, and
+  // the infinite extrusions along its symmetry axes
+  Node c = n;
+  c.xf = Transform{};
+  c.xf.scale = n.xf.scale;
+  if (const Modifier* m = exactRepeat(c); m && m->count == 0) c.mods.pop_back();
+  auto ax = modifierAxes(c, reg);
+  for (size_t i = 0; i < c.mods.size(); i++)
+    if (ax[i].valid && c.mods[i].type == MOD_EXTRUDE && c.mods[i].mode == ExtrudeMode::Infinite) { c.mods[i].mode = ExtrudeMode::Finite; c.mods[i].length = 0; }
+  auto b = computeBounds(c, reg);
+  auto it = b.find(c.id);
+  return it == b.end() ? INFINITY : it->second.r;
 }
 
 Sample SceneEvaluator::evalCurved(const V4& p) const { return evalCurvedNode(root_, p); }
@@ -237,8 +341,26 @@ Sample SceneEvaluator::evalCurvedNode(const Node& n, const V4& p) const {
     return {d, par && n.poly.alternate && n.isHoneycomb() ? n.mat.color2 : n.color, &n};
   }
   if (n.isLeaf()) {
+    // planes, rods, infinite repeats: evaluated from the copy / foot point nearest to p (exact for
+    // planes, and keeps the numbers small far from the object's origin)
+    // exact in curved space: infinite extrusions are measured from the point's foot on their plane /
+    // line (true equidistant slabs and tubes), a repeat uses the nearest exact copy along its line
+    if (!pr.symAxes.empty()) q = toSymmetrySlice(space, pr.symAxes, q);
+    const Node* shape = &n;
+    if (const Modifier* m = exactRepeat(n)) {
+      // the nearest copy moved to the origin (closed form, as in the shader)
+      int a = m->axis;
+      double kk = repeatCopy(space, *m, q, pr.S);
+      double o2 = 0;
+  for (int i = 0; i < 3; i++) if (i != a) o2 += q[i] * q[i];
+      double rho = std::sqrt(std::max(1 - space.k() * o2, 1e-30));
+      double t = (space.k() < 0 ? std::asinh(q[a] / rho) : std::atan2(q[a], q[3])) - kk * m->spacing * pr.S / space.R();
+      q[a] = rho * cs::S(space.k(), t);
+      q[3] = rho * cs::C(space.k(), t);
+      shape = pr.noRepeat.get();
+    }
     V4 u = cs::logO(space, q) * (1.0 / pr.S);  // local coordinates (normal coordinates at the node)
-    double d = leafShape(n, pr, u);
+    double d = shape == &n ? leafShape(n, pr, u) : leafShape(*shape, pr.noRepeatPrep ? *pr.noRepeatPrep : pr, u);
     if (d >= INF * 0.5) return {};
     return {d * pr.S * pr.factor, n.color, &n};
   }

@@ -264,6 +264,33 @@ float cS(float t) { return KAPPA > 0.0 ? sin(t) : 0.5 * (exp(t) - exp(-t)); }
 float cAngO(vec4 q) { float l = length(q.xyz); return KAPPA > 0.0 ? atan(l, q.w) : log(l + sqrt(l * l + 1.0)); }
 float cdistO(vec4 q) { return u_curvR * cAngO(q); }
 float asinK(float x) { return KAPPA > 0.0 ? asin(clamp(x, -1.0, 1.0)) : sign(x) * log(abs(x) + sqrt(x * x + 1.0)); }
+float cmdot(vec4 a, vec4 b) { return dot(a.xyz, b.xyz) + KAPPA * a.w * b.w; }
+// q moved so its foot on the geodesic subspace through the origin spanned by the axes in mask
+// (1 = keep that coordinate) becomes the origin: a translation along the subspace
+vec4 toSlice(vec4 q, vec3 mask) {
+  // closed form (no cancellation of large coordinates far away): the translation along the
+  // subspace keeps the components off it and zeroes those along it; w follows from the model
+  vec3 off = q.xyz * (1.0 - mask);
+  return vec4(off, sqrt(max(1.0 - KAPPA * dot(off, off), 0.0)));
+}
+// exact repeat along a local axis: the nearest copy (within +-count, 0 = infinite) moved to the origin.
+// In the (axis, w) plane the point is rho (sinK t, cosK t) with rho^2 = 1 - KAPPA |other components|^2.
+vec4 repeatExact(vec4 q, int a, float spacing, float count) {
+  vec3 msk = vec3(1.0);
+  msk[a] = 0.0;
+  vec3 oth = q.xyz * msk;  // the other two components (summed directly: no cancellation)
+  float o2 = dot(oth, oth);
+  float rho = sqrt(max(1.0 - KAPPA * o2, 1e-12));
+  float t = KAPPA < 0.0 ? asinK(q[a] / rho) : atan(q[a], q.w);
+  float kc = floor(t * u_curvR / spacing + 0.5);
+  if (count > 0.0) kc = clamp(kc, -count, count);
+  float t2 = t - kc * spacing / u_curvR;
+  q[a] = rho * cS(t2);
+  q.w = rho * cC(t2);
+  return q;
+}
+// distance from q to the geodesic line along local axis a (well conditioned far away)
+float lineDist(vec4 q, int a) { vec3 msk = vec3(1.0); msk[a] = 0.0; return u_curvR * asinK(length(q.xyz * msk)); }
 vec4 crenormC(vec4 p) { float l = dot(p.xyz, p.xyz) + KAPPA * p.w * p.w; return p * inversesqrt(max(l * KAPPA, 1e-30)); }
 vec4 clogO(vec4 q) {  // normal coordinates (world units) of q
   float l = length(q.xyz);
@@ -323,8 +350,16 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       return;
     }
     if (n.isLeaf() && n.mat.emissive > 0) L << "  if (g_noEmissive && " << D(i, 9) << ".x > 0.0) { m = MAT(0.0); return INF; }\n";
-    L << "  vec4 par = " << D(i, 5) << ";\n  vec4 qm = " << ROT(i) << " * " << (absolute ? "pc" : "p") << ";\n";
-    if (n.id != root.id) L << "  float bd = cdistO(qm) - " << D(i, 8) << ".x;\n  if (bd > par.w && !g_exact) { m = MAT(0.0); return bd; }\n";
+    L << "  vec4 par = " << D(i, 5) << ";\n";
+    const Modifier* rep = n.isLeaf() ? exactRepeat(n) : nullptr;
+    if (n.id != root.id) L << "  float br = " << D(i, 8) << ".x;\n  if (br < 0.0) { m = MAT(0.0); return INF; }\n";  // out of reach (packNodes)
+    L << "  vec4 qm = " << ROT(i) << " * " << (absolute ? "pc" : "p") << ";\n";
+    if (n.id != root.id) {
+      // (a repeat: br = one copy's radius, bounded by the distance to the line of copies)
+      if (rep) L << "  float bd = lineDist(qm, " << rep->axis << ") - br;\n";
+      else L << "  float bd = cdistO(qm) - br;\n";
+      L << "  if (bd > par.w && !g_exact) { m = MAT(0.0); return bd; }\n";
+    }
     L << "  float s = par.x;\n";
     auto ax = modifierAxes(n, reg);
     if (n.isPolytope()) {
@@ -341,11 +376,25 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
       L << "  return d;\n}\n";
     } else if (n.isLeaf()) {
+      // exact in curved space (as the CPU evaluator): infinite extrusions measured from the point's
+      // foot on their plane / line, the outermost repeat by exact copies along its line
+      auto sym = symmetryAxes(n, reg);
+      if (!sym.empty()) {
+        double mk[3] = {0, 0, 0};
+        for (int a : sym) mk[a] = 1;
+        L << "  qm = toSlice(qm, vec3(" << glslFloat(mk[0]) << ", " << glslFloat(mk[1]) << ", " << glslFloat(mk[2]) << "));\n";
+      }
+      Node shape = n;
+      if (const Modifier* rm = exactRepeat(n)) {
+        L << "  qm = repeatExact(qm, " << rm->axis << ", " << glslFloat(rm->spacing) << " * s, " << glslFloat(rm->count) << ");\n";
+        shape.mods.pop_back();
+        ax = modifierAxes(shape, reg);
+      }
       L << "  vec4 q = clogO(qm) / s;\n  vec4 q0 = q;\n";
-      L << modifierCoordsGLSL(n, ax, "q", "");
+      L << modifierCoordsGLSL(shape, ax, "q", "");
       if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
-      L << extrudeGLSL(n, ax, "");
+      L << extrudeGLSL(shape, ax, "");
       double shell = n.shell.value_or(0.0), round = n.round.value_or(0.0);
       if (shell > 0) L << "  d = abs(d) - " << glslFloat(shell) << ";\n";
       if (round != 0) L << "  d -= " << glslFloat(round) << ";\n";
@@ -601,6 +650,7 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       if (it != idx.end()) {
         float* v = &d[it->second * S_PER];
         M4 iso = cs::nodeIso(*space, n.xf, sAnc);
+        double anchoredR = -1;  // infinite objects re-anchored near the camera: their near part's size
         if (n.isHoneycomb() && camIso) {
           // anchor the tiling at the cell the camera is in (one of its own symmetries, found in
           // double precision): the shader then folds small coordinates near the eye
@@ -610,7 +660,14 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
           if (par && n.poly.alternate)
             for (int q = 0; q < 3; q++) std::swap(v[6 * 4 + q], v[10 * 4 + q]);  // that cell's colour
         }
-        if (n.isHoneycomb() && camIso) world = mul(parentWorld, iso);  // re-anchored
+        else if (camIso && n.isLeaf()) {
+          // planes, rods and infinite repeats: re-anchored next to the camera as well, so their
+          // matrix stays small however far from the scene's origin you are
+          M4 A = anchorNear(*space, n, reg, mul(cs::inverse(k, world), col(*camIso, 3)), S);
+          iso = mul(iso, A);
+          anchoredR = anchoredRadius(n, reg);  // one copy / the extent across the symmetric axes
+        }
+        world = mul(parentWorld, iso);  // (re-anchored)
         // absolute: camera-relative point -> node frame, in one matrix (double precision here)
         M4 inv = absolute ? cs::inverse(k, mul(camInv, world)) : cs::inverse(k, iso);
         for (int q = 0; q < 16; q++) v[q] = (float)inv[q];
@@ -621,6 +678,17 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
         double r = b != bounds.end() && std::isfinite(b->second.r) ? b->second.r * sAnc : INFINITY;
         v[8 * 4 + 0] = std::isfinite(r) ? (float)r : 1e9f;
         v[8 * 4 + 3] = (float)curvedFactor(*space, r);
+        // hyperbolic: objects beyond the rays' reach (12 R) are left out (decided here in double
+        // precision; on the GPU their huge coordinates would only produce noise). Marked by r < 0.
+        if (const Modifier* rp = exactRepeat(n)) {  // the shader bounds it by its line of copies
+          double rc = anchoredRadiusAny(n, reg);
+          if (std::isfinite(rc)) v[8 * 4 + 0] = (float)(rc * sAnc);
+        }
+        if (anchoredR >= 0 && std::isfinite(anchoredR)) r = anchoredR * sAnc;
+        if (space->kind == SpaceKind::Hyperbolic && std::isfinite(r) && &n != &root) {
+          V4 eye = camIso ? col(*camIso, 3) : cs::origin();
+          if (cs::distance(*space, eye, col(world, 3)) - r > 13 * space->R()) v[8 * 4 + 0] = -1;
+        }
       }
       for (auto& c : n.children) visit(c, S, world, absolute && n.mods.empty());
     };
