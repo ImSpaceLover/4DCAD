@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
       if (!app.startRender(renderAnim, rerr)) { std::fprintf(stderr, "render: %s\n", rerr.c_str()); break; }
       renderStarted = true;
     }
-    app.renderStep(0.05);  // offline render (Render window): a slice of work per frame
+    app.renderStep(app.renderBudget());  // offline render (Render window): a slice of work per frame (priority)
     ui->frame(dt);
     app.renderFrame();  // records / draws the scene into the offscreen targets
     app.autosaveTick();
@@ -300,6 +300,10 @@ int main(int argc, char** argv) {
       break;
     }
     if (!useVulkan) glfwSwapBuffers(win);
+    if (app.quality.frameLimit > 0 && screenshot.empty()) {  // Settings > Rendering > Frame rate limit
+      double left = 1.0 / app.quality.frameLimit - (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - t);
+      if (left > 0.001) glfwWaitEventsTimeout(left);
+    }
   }
   if (!renderOut.empty()) app.renderSet = savedRenderSet;
   app.saveSettings();

@@ -1849,6 +1849,7 @@ RenderProfile App::mainProfile() const {
 
 void App::renderFrame() {
   if (!renderer) return;
+  if (job.active) return;  // an image / video is rendering: the viewport keeps its last picture
   View v = currentView();
   bool interacting = drag_ != Drag::None && drag_ != Drag::Click;
   bool moving = (now - lastChange_) < 0.25 || interacting || modal != Modal::None || mode == Mode::Explore;
@@ -2003,7 +2004,7 @@ nlohmann::json qualityToJson(const QualitySettings& q) {
                       {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}, {"sunIntensity", q.sunIntensity},
                       {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
                       {"relaxedMarching", q.relaxedMarching}, {"fastWhileMovingInEdit", q.fastWhileMovingInEdit},
-                      {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius}};
+                      {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"frameLimit", q.frameLimit}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius}};
   const RenderProfile& f = q.fast;
   r["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
                {"specular", f.specular}, {"pointLights", f.pointLights}, {"shadows", f.shadows}, {"pointShadows", f.pointShadows},
@@ -2023,6 +2024,7 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
   getKey(r, "sunIntensity", q.sunIntensity); getKey(r, "pointShadows", q.pointShadows); getKey(r, "emissiveLights", q.emissiveLights);
   getKey(r, "transparentLayers", q.transparentLayers); getKey(r, "relaxedMarching", q.relaxedMarching);
   getKey(r, "fastWhileMovingInEdit", q.fastWhileMovingInEdit);
+  getKey(r, "frameLimit", q.frameLimit);
   getKey(r, "stochastic", q.stochastic); getKey(r, "viewportSamples", q.viewportSamples); getKey(r, "sunSize", q.sunSize); getKey(r, "lightRadius", q.lightRadius);
   auto& f = q.fast;
   if (r.contains("fast") && r["fast"].is_object()) {
@@ -2044,7 +2046,7 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
 nlohmann::json outputToJson(const App::RenderSettings& o, bool paths) {
   nlohmann::json j = {{"width", o.width}, {"height", o.height}, {"aa", o.aa}, {"samples", o.samples}, {"stillFormat", o.stillFormat},
                       {"animFormat", o.animFormat}, {"sceneRange", o.sceneRange}, {"start", o.start}, {"end", o.end}, {"fps", o.fps},
-                      {"jpegQuality", o.jpegQuality}};
+                      {"jpegQuality", o.jpegQuality}, {"priority", o.priority}};
   if (paths) { j["stillPath"] = o.stillPath; j["animPath"] = o.animPath; j["ffmpeg"] = o.ffmpeg; }
   return j;
 }
@@ -2055,6 +2057,8 @@ void outputFromJson(const nlohmann::json& r, App::RenderSettings& o) {
   getKey(r, "stillFormat", o.stillFormat); getKey(r, "animFormat", o.animFormat); getKey(r, "stillPath", o.stillPath);
   getKey(r, "animPath", o.animPath); getKey(r, "sceneRange", o.sceneRange); getKey(r, "start", o.start); getKey(r, "end", o.end);
   getKey(r, "fps", o.fps); getKey(r, "jpegQuality", o.jpegQuality); getKey(r, "ffmpeg", o.ffmpeg);
+  getKey(r, "priority", o.priority);
+  o.priority = std::clamp(o.priority, 0, 2);
   o.stillFormat = std::clamp(o.stillFormat, 0, 1);
   o.animFormat = std::clamp(o.animFormat, 0, 4);
   o.aa = std::clamp(o.aa, 1, 3);

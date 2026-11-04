@@ -10,6 +10,7 @@
 namespace fd {
 
 namespace {
+constexpr int TILE = 256;
 double wallClock() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 const char* STILL_EXT[2] = {".png", ".jpg"};
 const char* ANIM_EXT[5] = {".gif", ".avi", ".png", ".mp4", ".webm"};
@@ -40,7 +41,8 @@ std::string App::renderPath(bool animation) const {
 double App::renderProgress() const {
   if (!job.active) return job.finished ? 1.0 : 0.0;
   double frames = job.last - job.first + 1;
-  double done = (job.frame - job.first) + (double)job.sample / std::max(1, job.samples);
+  int tx = (job.w + TILE - 1) / TILE, ty = (job.h + TILE - 1) / TILE;
+  double done = (job.frame - job.first) + (job.sample + (double)job.tile / std::max(1, tx * ty)) / std::max(1, job.samples);
   return std::clamp(done / std::max(1.0, frames), 0.0, 1.0);
 }
 
@@ -90,6 +92,7 @@ bool App::startRender(bool animation, std::string& err) {
   j.quality = quality;
   j.frame = j.first;
   j.sample = 0;
+  j.tile = 0;
   j.prepared = false;
   j.started = wallClock();
   j.active = true;
@@ -209,13 +212,20 @@ void App::renderStep(double budget) {
   RenderJob& j = job;
   double t0 = wallClock();
   renderer->setImmediate(true);
+  int tx = (j.w + TILE - 1) / TILE, ty = (j.h + TILE - 1) / TILE;
   while (j.active) {
     if (!j.prepared) prepareJobFrame();
     FrameParams& fp = j.fp;
     fp.stochastic = j.samples > 1;
     fp.sample = j.sample;
     fp.blend = 1.0f / (j.sample + 1);
-    if (!renderer->render(j.rt, j.w, j.h, j.frameRoot, reg, j.world, {}, fp)) {
+    // one tile per draw: short GPU jobs keep the PC responsive (and below the driver's watchdog)
+    fp.tile[0] = (j.tile % tx) * TILE;
+    fp.tile[1] = (j.tile / tx) * TILE;
+    fp.tile[2] = fp.tile[3] = TILE;
+    bool ok = renderer->render(j.rt, j.w, j.h, j.frameRoot, reg, j.world, {}, fp);
+    fp.tile[2] = 0;
+    if (!ok) {
       j.error = "Shader error: " + renderer->lastError;
       if (j.writer) j.writer->close();
       j.writer.reset();
@@ -224,7 +234,10 @@ void App::renderStep(double budget) {
       break;
     }
     renderer->finish();
-    if (++j.sample >= j.samples) finishJobFrame();
+    if (++j.tile >= tx * ty) {
+      j.tile = 0;
+      if (++j.sample >= j.samples) finishJobFrame();
+    }
     if (wallClock() - t0 > budget) break;
   }
   renderer->setImmediate(false);

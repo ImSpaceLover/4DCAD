@@ -63,6 +63,9 @@ struct FrameParams {
   Space space;
   M4 camIso = identity();
   bool honeycomb = false;  // set by render(): the scene has a honeycomb
+  // only this rectangle of the target is drawn (pixels, top-left origin; w = 0: everything).
+  // Offline renders draw in tiles so no single GPU job runs long on slow machines.
+  int tile[4] = {0, 0, 0, 0};
   bool ballView = false;   // curved: the Poincare ball / stereographic overview (view = outside camera in the ball)
 };
 
@@ -110,6 +113,7 @@ class Renderer {
   /** Compiles a fragment shader only (custom code check); returns the error or "". */
   virtual std::string compileCheck(const std::string& fragmentSource) = 0;
   virtual void draw(RenderTarget& rt, int w, int h, void* program, const FrameUniforms& u, const std::vector<float>& nodes, int nodeCount) = 0;
+  int scissor_[4] = {0, 0, 0, 0};  // the current draw's rectangle (x, y top-left, w, h; w = 0: all)
   /** Call from the backend destructor: frees all cached programs. */
   void clearPrograms();
 

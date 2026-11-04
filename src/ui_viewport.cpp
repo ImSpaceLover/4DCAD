@@ -145,6 +145,16 @@ void UI::thumbnail() {
 }
 
 void UI::overlays(ImDrawList* dl) {
+  if (app.job.active) {  // rendering: the viewport is paused
+    char b[160];
+    std::snprintf(b, sizeof b, "Rendering %s: %.0f%%  (viewport paused, Render window to cancel)", app.job.animation ? "animation" : "image",
+                  app.renderProgress() * 100);
+    ImVec2 ts = ImGui::CalcTextSize(b);
+    float cx = app.vpX + app.vpW / 2, cy = app.vpY + app.vpH / 2;
+    dl->AddRectFilled({cx - ts.x / 2 - 12, cy - ts.y / 2 - 10}, {cx + ts.x / 2 + 12, cy + ts.y / 2 + 10}, IM_COL32(0, 0, 0, 170), 6);
+    dl->AddText({cx - ts.x / 2, cy - ts.y / 2}, IM_COL32(255, 220, 140, 255), b);
+    return;
+  }
   View v = app.currentView();
   V4 right = col(v.frame, 0), up = col(v.frame, 1), fwd = col(v.frame, 2), ana = col(v.frame, 3);
   float x0 = app.vpX, y0 = app.vpY;

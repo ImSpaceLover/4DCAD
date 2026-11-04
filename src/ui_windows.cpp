@@ -66,6 +66,8 @@ void UI::qualityWindow() {
       ImGui::SeparatorText("Performance");
       Ff("Resolution", q.resolutionScale, 0.25f, 2.f, "%.2fx");
       Ff("While moving", q.motionScale, 0.2f, 1.f, "%.2fx", "Resolution factor while the camera or objects move");
+      ImGui::SliderInt("Frame rate limit", &q.frameLimit, 0, 144, q.frameLimit == 0 ? "display rate" : "%d fps");
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Caps how often the app draws: less GPU / CPU load (laptops, slower PCs).\nImage / video renders also have a priority in the Render window.");
       ImGui::SeparatorText("Ray marching");
       ImGui::SliderInt("Max steps", &q.maxSteps, 32, 1024);
       Ff("Max distance (4D)", q.maxDistFull, 5, 500, "%.0f", "Rays travelling further than this show the sky colour");

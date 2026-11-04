@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 namespace fd {
 
@@ -137,6 +138,11 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
     return false;
   }
   std::vector<float> nodes = packNodes(root, reg, p->cs, highlight, &fp.space, &fp.camIso);
+  for (int i = 0; i < 4; i++) scissor_[i] = fp.tile[i];
+  if (scissor_[2] > 0) {  // clamp to the target
+    scissor_[0] = std::clamp(scissor_[0], 0, rw); scissor_[1] = std::clamp(scissor_[1], 0, rh);
+    scissor_[2] = std::clamp(scissor_[2], 1, rw - scissor_[0]); scissor_[3] = std::clamp(scissor_[3], 1, rh - scissor_[1]);
+  }
   draw(rt, rw, rh, p->handle, u, nodes, (int)p->cs.nodeIds.size());
   return true;
 }

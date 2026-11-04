@@ -184,6 +184,7 @@ struct QualitySettings {
   // fast mode: used in Explore (keep it smooth) and optionally while moving in Edit mode
   RenderProfile fast = RenderProfile::preset(RenderProfile::Fast);
   bool fastWhileMovingInEdit = false;
+  int frameLimit = 0;             // frames per second at most (0 = the display's rate); lower = less GPU load
   float geoMaxStep = 0.25f;
   int geoProjectIters = 1;
 };

@@ -113,6 +113,7 @@ typedef std::ptrdiff_t GLsizeiptr;
   X(void, ReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*))                          \
   X(void, PixelStorei, (GLenum, GLint))                                                                 \
   X(void, Finish, (void))                                                                               \
+  X(void, Scissor, (GLint, GLint, GLsizei, GLsizei))                                                    \
   X(const GLubyte*, GetString, (GLenum))                                                                \
   X(void, BindBufferBase, (GLenum, GLuint, GLuint))                                                     \
   X(GLuint, GetUniformBlockIndex, (GLuint, const GLchar*))                                              \

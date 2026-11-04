@@ -150,8 +150,11 @@ class GLRenderer : public Renderer {
     gl::BindTexture(GL_TEXTURE_2D, nodeTex_);
     gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, NODE_VEC4S, std::max(1, nodeCount), 0, GL_RGBA, GL_FLOAT, nodes.data());
     gl::Uniform1i(p->nodesLoc, 1);
-    gl::Disable(GL_SCISSOR_TEST);
     gl::Disable(GL_DEPTH_TEST);
+    if (scissor_[2] > 0) {  // one tile (OpenGL rows are bottom-up)
+      gl::Enable(GL_SCISSOR_TEST);
+      gl::Scissor(scissor_[0], t.h - scissor_[1] - scissor_[3], scissor_[2], scissor_[3]);
+    } else gl::Disable(GL_SCISSOR_TEST);
     // progressive sampling: the new sample is blended into the running average (weight u.e[2])
     float weight = u.e[2];
     if (weight < 0.9999f) {
@@ -163,6 +166,7 @@ class GLRenderer : public Renderer {
     gl::DrawArrays(GL_TRIANGLES, 0, 3);
     gl::BindVertexArray(0);
     gl::Disable(GL_BLEND);
+    gl::Disable(GL_SCISSOR_TEST);
     gl::ActiveTexture(GL_TEXTURE0);
     gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
   }
