@@ -15,6 +15,15 @@ void UI::frame(double dt) {
   treePanel();
   propertiesPanel();
   viewport(dt);
+  timelinePanel();
+  // I: insert keyframes for the selected objects
+  if (app.keyMenuRequest) { ImGui::OpenPopup("Insert keyframe##menu"); app.keyMenuRequest = false; }
+  if (ImGui::BeginPopup("Insert keyframe##menu")) {
+    ImGui::TextDisabled("Insert keyframe");
+    if (ImGui::MenuItem("Position / rotation / scale")) app.insertKeys(true);
+    if (ImGui::MenuItem("All values")) app.insertKeys(false);
+    ImGui::EndPopup();
+  }
   if (showQuality_) qualityWindow();
   if (showHelp_) helpWindow();
   if (showSdf_) sdfWindow();
@@ -57,6 +66,13 @@ void UI::onKey(int key, int action, int mods) {
   ImGuiIO& io = ImGui::GetIO();
   if (io.WantTextInput && !app.mouseCaptured) return;
   auto P = [&](Action a) { return app.keys.pressed(a, key, ctrl, shift, alt); };
+  // keys over the timeline / graph editor act on keyframes
+  if ((timelineHovered_ || graphHovered_) && action == GLFW_PRESS) {
+    if (!ctrl && (key == GLFW_KEY_DELETE || key == GLFW_KEY_X)) { deleteSelectedKeys(); app.setFrame(app.anim.frame); app.commit(); return; }
+    if (ctrl && key == GLFW_KEY_C) { copySelectedKeys(); return; }
+    if (ctrl && key == GLFW_KEY_V) { pasteKeys(); return; }
+    if (key == GLFW_KEY_HOME) { graphFit_ = true; resetView_ = true; return; }
+  }
   if (action == GLFW_REPEAT && !(P(Action::Undo) || P(Action::Redo))) return;
   if (P(Action::Save)) { saveScene(); return; }
   if (P(Action::SaveAs)) { fileAction(2); return; }

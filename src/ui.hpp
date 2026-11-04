@@ -3,6 +3,8 @@
 #include "imgui.h"
 
 #include <functional>
+#include <set>
+#include <tuple>
 
 struct GLFWwindow;
 
@@ -17,7 +19,7 @@ class UI {
   void onScroll(double y) { wheel_ += y; }
   bool exitNow = false;  // set once quitting is confirmed
   void requestQuit();    // asks to save unsaved changes first
-  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
+  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
 
  private:
   App& app;
@@ -66,6 +68,28 @@ class UI {
   int captureAction_ = -1, captureSlot_ = 0;  // Settings > Keys: waiting for a key press
   void keysTab();
   void lightsWindow();
+  // timeline + graph editor (ui_timeline.cpp)
+  void timelinePanel();
+  void graphEditor(const std::vector<int>& trackIds, bool& changed, bool& commit);
+  float timelineHeight() const;
+  std::string targetName(const std::string& target);
+  std::string pathLabel(const std::string& target, const std::string& path);
+  void deleteSelectedKeys();
+  void copySelectedKeys();
+  void pasteKeys();
+  /** Per-value keying in Properties: a diamond next to the last widget, right-click menu. */
+  void keyable(const std::string& target, const std::vector<std::string>& paths);
+  bool showTimeline_ = true, showGraph_ = false, graphFit_ = true, resetView_ = true;
+  double tl0_ = 0, tl1_ = 0;           // visible frame range
+  bool scrub_ = false, keyDrag_ = false, timelineHovered_ = false, graphHovered_ = false;
+  float dragX0_ = 0;
+  struct DragKey { Key* key; double frame, value; };
+  std::vector<DragKey> dragOrig_;
+  double gx0_ = 0, gx1_ = 0, gy0_ = 0, gy1_ = 0, gx0Drag_ = 0, gy0Drag_ = 0;
+  int gDrag_ = 0;
+  Key* gHandleKey_ = nullptr;
+  std::set<std::string> graphHidden_;
+  std::vector<std::tuple<std::string, std::string, Key>> keyClipboard_;
 };
 
 }  // namespace fd

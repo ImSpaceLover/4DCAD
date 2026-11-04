@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "camera.hpp"
+#include "animation.hpp"
 #include "evaluator.hpp"
 #include "keybinds.hpp"
 #include "library.hpp"
@@ -98,7 +99,10 @@ class App {
   QualitySettings quality;  // rendering
   EditSettings editSet;
   ExploreSettings exploreSet;
-  double fov() const { return mode == Mode::Explore ? exploreSet.fov : editSet.fov; }
+  double fov() const;
+  /** Viewing through the active camera right now (Edit mode, camera view on and a valid camera). */
+  bool inCameraView() const;
+  bool keyMenuRequest = false;  // I pressed: the UI shows the insert-keyframe menu
   V4 light() const;
   double thumbYaw = 0.4, thumbPitch = -0.9, thumbZoom = 1;
   bool mouseCaptured = false, wantCapture = false, wantRelease = false;
@@ -161,6 +165,21 @@ class App {
   std::unordered_set<std::string> isolate;
   void toggleIsolate();
   std::vector<PointLight> lights;  // scene point lights (saved in the scene)
+  // --- animation ---
+  Animation anim;
+  bool playing = false;
+  bool autoKey = false;            // every change is keyed at the current frame
+  bool viewThroughCamera = false;  // the viewport shows the active camera (preview the animation)
+  /** Moves to a frame: every animated value takes its value there (no undo step). */
+  void setFrame(double frame);
+  /** Advances playback (called every frame by the main loop). */
+  void tickAnimation(double dt);
+  /** Keys the selected objects at the current frame (transform only, or every value). */
+  void insertKeys(bool transformOnly);
+  /** Removes the selected objects' keys at the current frame. */
+  void deleteKeys();
+  /** Per-value keying from Properties / the Lights window: key, or remove the key at this frame. */
+  void toggleValueKey(const std::string& target, const std::string& path);
   /** The point lights for a frame: enabled scene lights, then emissive objects (if enabled). */
   std::vector<LightParam> frameLights();
   // cameras are scene objects (NodeKind::Camera); the active one is used for rendering
@@ -246,6 +265,11 @@ class App {
   std::vector<std::string> history_, future_;
   std::string committed_, saved_, autosaved_;
   std::map<std::string, std::string> linkDefs_;  // last known definition of each linked group
+  Node evalRoot_;                                 // the scene as the animation left it (auto-key compares to it)
+  std::vector<PointLight> evalLights_;
+  /** Applies the animation at anim.frame and re-attaches surface objects to their world. */
+  void applyAnim();
+  void autoKeyChanges();
   Node viewRoot_;                                 // the tree as drawn while isolating
   double lastAutosave_ = 0;
   std::vector<std::string> selectionAtPress_;

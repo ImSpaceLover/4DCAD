@@ -96,15 +96,23 @@ void App::toast(const std::string& msg, bool error) {
 }
 
 // ============================================================ scene lifecycle
-// undo snapshot: world id, active camera, lights, scene tree (one line each)
-std::string App::snapshot() { return world + "\n" + activeCamera + "\n" + lightsToJson(lights) + "\n" + nodeToJson(root); }
+// undo snapshot: world id, active camera, lights, animation, scene tree (one line each)
+std::string App::snapshot() {
+  return world + "\n" + activeCamera + "\n" + lightsToJson(lights) + "\n" + animationToJson(anim) + "\n" + nodeToJson(root);
+}
 void App::restore(const std::string& s) {
-  auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1), nl3 = s.find('\n', nl2 + 1);
+  auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1), nl3 = s.find('\n', nl2 + 1), nl4 = s.find('\n', nl3 + 1);
   world = s.substr(0, nl);
   activeCamera = s.substr(nl + 1, nl2 - nl - 1);
   lights = lightsFromJson(s.substr(nl2 + 1, nl3 - nl2 - 1));
-  root = nodeFromJson(s.substr(nl3 + 1));
+  double frame = anim.frame;
+  anim = animationFromJson(s.substr(nl3 + 1, nl4 - nl3 - 1));
+  anim.frame = frame;  // undo does not move the time
+  root = nodeFromJson(s.substr(nl4 + 1));
   recordLinks(root, linkDefs_);
+  if (!anim.empty()) applyAnim();
+  evalRoot_ = root;
+  evalLights_ = lights;
 }
 
 void App::loadScene(SceneFile f) {
@@ -125,6 +133,8 @@ void App::loadScene(SceneFile f) {
     walk(root, [&](Node& n, Node*, int) { if (n.isCamera() && activeCamera.empty()) activeCamera = n.id; });
   }
   lights = std::move(f.lights);
+  anim = f.animation.empty() ? Animation{} : animationFromJson(f.animation);
+  playing = false;
   recordLinks(root, linkDefs_);
   isolate.clear();
   selection.clear();
@@ -136,8 +146,109 @@ void App::loadScene(SceneFile f) {
   history_.clear();
   future_.clear();
   rebuild();
+  if (!anim.empty()) applyAnim();
+  evalRoot_ = root;
+  evalLights_ = lights;
   committed_ = snapshot();
   saved_ = committed_;
+}
+
+// ============================================================ animation
+void App::applyAnim() {
+  applyAnimation(anim, root, lights, anim.frame);
+  rebuild();
+  // objects / cameras on a world surface: the interpolated point is put back on the surface and
+  // their frame re-aligned to it (so they travel along the surface between keys)
+  if (world.empty() || !ev) return;
+  std::unordered_set<std::string> moved;
+  for (auto& t : anim.tracks) if (t.path == "rot" || t.path.rfind("pos.", 0) == 0) moved.insert(t.target);
+  bool any = false;
+  auto f = field();
+  for (auto& id : moved) {
+    Node* n = findNode(root, id);
+    if (!n || !n->anchor || n->anchor->world != world) continue;
+    M4 F = nodeRotation(*n);
+    V4 p = projectToSurface(f, n->xf.pos, 20);
+    if (!std::isfinite(p[0])) continue;
+    M4 basis = tangentFrame(f, p, F);
+    n->xf.pos = p;
+    n->anchor->basis = basis;
+    n->xf.rot = orthonormalize(mul(transpose(basis), F));
+    any = true;
+  }
+  if (any) rebuild();
+}
+
+void App::setFrame(double frame) {
+  anim.frame = frame;
+  if (!anim.empty()) {
+    applyAnim();
+    evalRoot_ = root;
+    evalLights_ = lights;
+  }
+  lastChange_ = now;
+}
+
+void App::tickAnimation(double dt) {
+  if (!playing) return;
+  double f = anim.frame + dt * anim.fps;
+  if (f > anim.end + 0.999) f = anim.start + std::fmod(f - anim.start, std::max(1.0, anim.end - anim.start + 1.0));  // loop
+  setFrame(f);
+}
+
+void App::insertKeys(bool transformOnly) {
+  double fr = std::round(anim.frame);
+  int n = 0;
+  for (auto& id : selection) if (Node* nd = findNode(root, id); nd && id != root.id) { keyNode(anim, *nd, fr, transformOnly); n++; }
+  if (n) commit();
+  else toast("Select objects to key them", true);
+}
+
+void App::deleteKeys() {
+  double fr = std::round(anim.frame);
+  for (auto& id : selection)
+    for (auto& t : anim.tracks) if (t.target == id) deleteKey(anim, t.target, t.path, fr);
+  commit();
+}
+
+void App::toggleValueKey(const std::string& target, const std::string& path) {
+  double fr = std::round(anim.frame);
+  if (hasKeyAt(anim, target, path, fr)) { deleteKey(anim, target, path, fr); commit(); return; }
+  if (target.rfind("light:", 0) == 0) {
+    for (auto& l : lights) if ("light:" + l.id == target) { double v; if (getLightValue(l, path, v)) setKey(anim, target, path, fr, v); }
+  } else if (Node* n = findNode(root, target)) {
+    if (path == "rot") setRotKey(anim, target, fr, nodeRotation(*n));
+    else { double v; if (getValue(*n, path, v)) setKey(anim, target, path, fr, v); }
+  }
+  commit();
+}
+
+void App::autoKeyChanges() {
+  // key every value that differs from what the animation (or the last edit) left there
+  double fr = std::round(anim.frame);
+  walk(root, [&](Node& n, Node*, int) {
+    if (n.id == root.id) return;
+    Node* before = findNode(evalRoot_, n.id);
+    if (!before) return;
+    for (auto& v : animatableValues(n)) {
+      if (v.path == "rot") {
+        M4 a = nodeRotation(*before), b = nodeRotation(n);
+        double e = 0;
+        for (int k = 0; k < 16; k++) e = std::max(e, std::abs(a[k] - b[k]));
+        if (e > 1e-9) setRotKey(anim, n.id, fr, b);
+        continue;
+      }
+      double x, y;
+      if (getValue(*before, v.path, x) && getValue(n, v.path, y) && std::abs(x - y) > 1e-9) setKey(anim, n.id, v.path, fr, y);
+    }
+  });
+  for (auto& l : lights)
+    for (auto& b : evalLights_)
+      if (b.id == l.id)
+        for (auto& v : animatableLightValues()) {
+          double x, y;
+          if (getLightValue(b, v.path, x) && getLightValue(l, v.path, y) && std::abs(x - y) > 1e-9) setKey(anim, "light:" + l.id, v.path, fr, y);
+        }
 }
 
 void App::newScene() {
@@ -161,7 +272,8 @@ bool App::loadSceneFile(const std::string& path, std::string& err) {
 
 std::string App::serialize() {
   CameraState cs = editCam.save();
-  return sceneToJson(root, reg, world, &cs, nullptr, &lights, activeCamera);
+  std::string aj = anim.empty() ? std::string() : animationToJson(anim);
+  return sceneToJson(root, reg, world, &cs, nullptr, &lights, activeCamera, &aj);
 }
 
 bool App::saveSceneFile(const std::string& path, std::string& err) {
@@ -203,8 +315,12 @@ void App::rebuild() {
 void App::commit() {
   // a group whose last object was removed / moved out is deleted with it
   pruneEmptyGroups(root);
+  if (autoKey) autoKeyChanges();
+  pruneTracks(anim, root, lights);
   selection.erase(std::remove_if(selection.begin(), selection.end(), [&](auto& id) { return !findNode(root, id); }), selection.end());
   rebuild();
+  evalRoot_ = root;
+  evalLights_ = lights;
   std::string s = snapshot();
   if (s != committed_) {
     history_.push_back(committed_);
@@ -591,7 +707,20 @@ void App::setGeo(bool g) {
   lastChange_ = now;
 }
 
+bool App::inCameraView() const {
+  if (!viewThroughCamera || mode != Mode::Edit) return false;
+  const Node* c = findNode(const_cast<Node&>(root), activeCamera);
+  if (!c || !c->isCamera()) return false;
+  return !c->anchor || (!world.empty() && c->anchor->world == world);  // a surface camera needs its world
+}
+
+double App::fov() const {
+  if (inCameraView()) return findNode(const_cast<Node&>(root), activeCamera)->camFov;
+  return mode == Mode::Explore ? exploreSet.fov : editSet.fov;
+}
+
 View App::currentView() {
+  if (inCameraView()) return cameraView(activeCamera);
   if (geo && geoEdit.valid) return {geoEdit.pivot, geoEdit.frame};
   return editCam.view();
 }
@@ -1097,6 +1226,14 @@ void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
   else if (P(Action::ViewTop)) standardView(2);
   else if (P(Action::ViewAlongW)) standardView(3);
   else if (P(Action::Reset4D)) editCam.reset4();
+  else if (P(Action::PlayPause)) playing = !playing;
+  else if (P(Action::FrameStart)) { playing = false; setFrame(anim.start); }
+  else if (P(Action::FrameEnd)) { playing = false; setFrame(anim.end); }
+  else if (P(Action::FramePrev)) setFrame(std::round(anim.frame) - 1);
+  else if (P(Action::FrameNext)) setFrame(std::round(anim.frame) + 1);
+  else if (P(Action::InsertKey)) keyMenuRequest = true;
+  else if (P(Action::DeleteKey)) deleteKeys();
+  else if (P(Action::CameraView)) viewThroughCamera = !viewThroughCamera;
   else if (P(Action::LookThrough) || P(Action::CameraToView)) {
     // the selected camera, else the active one
     std::string id = selected() && selected()->isCamera() ? selected()->id : activeCamera;
@@ -1138,6 +1275,8 @@ void App::handleInput(const InputState& in, double dt) {
     if (!in.pressed[b] || !in.vpHovered || drag_ != Drag::None) continue;
     pressX_ = in.mx; pressY_ = in.my; dragMoved_ = false; dragButton_ = b;
     selectionAtPress_ = selection;
+    bool nav = (g && b == 1) || b == 1 || b == 2 || (b == 0 && in.alt);
+    if (nav && inCameraView()) { lookThrough(activeCamera); viewThroughCamera = false; g = geo && geoEdit.valid; }  // navigating leaves the camera view
     if (g && b == 1) { drag_ = Drag::Fly; wantCapture = true; continue; }
     if (b == 1 || b == 2 || (b == 0 && in.alt)) {
       drag_ = in.shift ? Drag::Pan : in.ctrl ? Drag::Zoom : (in.alt && b != 0) ? Drag::Rot4 : Drag::Orbit;
@@ -1170,6 +1309,7 @@ void App::handleInput(const InputState& in, double dt) {
       }
     }
   }
+  if (in.wheel != 0 && in.vpHovered && inCameraView()) { lookThrough(activeCamera); viewThroughCamera = false; g = geo && geoEdit.valid; }
   if (in.wheel != 0 && in.vpHovered) {
     if (g) editSet.flySpeed = clampd(editSet.flySpeed * std::exp(in.wheel * 0.15), 0.2, 30);
     else editCam.zoom(-in.wheel * editSet.zoomSpeed);
@@ -1404,6 +1544,7 @@ void App::renderFrame() {
   FrameParams fp;
   fp.view = v;
   fp.geo = geo && geoEdit.valid;
+  if (inCameraView()) { bool cg = false; cameraView(activeCamera, &cg); fp.geo = cg; }
   fp.grid = mode == Mode::Edit && q.grid;
   fp.fovDeg = fov();
   fp.quality = &quality;

@@ -43,6 +43,14 @@ static const ActionInfo INFO[(int)Action::Count] = {
     {"reset4D", "Reset 4D orientation", "Edit", false},
     {"lookThrough", "Look through camera", "Edit", false},
     {"cameraToView", "Camera to view", "Edit", false},
+    {"cameraView", "View through the active camera", "Edit", false},
+    {"playPause", "Play / pause", "Edit", false},
+    {"frameStart", "First frame", "Edit", false},
+    {"frameEnd", "Last frame", "Edit", false},
+    {"framePrev", "Previous frame", "Edit", false},
+    {"frameNext", "Next frame", "Edit", false},
+    {"insertKey", "Insert keyframe", "Edit", false},
+    {"deleteKey", "Delete keyframe", "Edit", false},
     {"axisX", "Constrain X", "Transform", false},
     {"axisY", "Constrain Y", "Transform", false},
     {"axisZ", "Constrain Z", "Transform", false},
@@ -98,7 +106,7 @@ void KeyBindings::resetDefaults() {
   set(Action::Delete, K(GLFW_KEY_X), K(GLFW_KEY_DELETE));
   set(Action::Duplicate, S(GLFW_KEY_D));
   set(Action::DuplicateLinked, KeyCombo{GLFW_KEY_D, false, false, true});
-  set(Action::Isolate, K(GLFW_KEY_I), K(GLFW_KEY_KP_DIVIDE));
+  set(Action::Isolate, K(GLFW_KEY_KP_DIVIDE), K(GLFW_KEY_SLASH));
   set(Action::Group, C(GLFW_KEY_G));
   set(Action::Focus, K(GLFW_KEY_F), K(GLFW_KEY_KP_DECIMAL));
   set(Action::Deselect, K(GLFW_KEY_ESCAPE));
@@ -110,6 +118,14 @@ void KeyBindings::resetDefaults() {
   set(Action::Reset4D, S(GLFW_KEY_W), K(GLFW_KEY_BACKSPACE));
   set(Action::LookThrough, K(GLFW_KEY_KP_0), K(GLFW_KEY_0));
   set(Action::CameraToView, KeyCombo{GLFW_KEY_KP_0, true, false, true}, KeyCombo{GLFW_KEY_0, true, false, true});
+  set(Action::CameraView, C(GLFW_KEY_KP_0), C(GLFW_KEY_0));
+  set(Action::PlayPause, K(GLFW_KEY_SPACE));
+  set(Action::FrameStart, S(GLFW_KEY_LEFT));
+  set(Action::FrameEnd, S(GLFW_KEY_RIGHT));
+  set(Action::FramePrev, K(GLFW_KEY_LEFT));
+  set(Action::FrameNext, K(GLFW_KEY_RIGHT));
+  set(Action::InsertKey, K(GLFW_KEY_I));
+  set(Action::DeleteKey, KeyCombo{GLFW_KEY_I, false, false, true});
   set(Action::AxisX, K(GLFW_KEY_X));
   set(Action::AxisY, K(GLFW_KEY_Y));
   set(Action::AxisZ, K(GLFW_KEY_Z));

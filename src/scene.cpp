@@ -558,7 +558,7 @@ std::vector<CameraBookmark> bookmarksFromJson(const std::string& text) {
 static json lightsJ(const std::vector<PointLight>& l) {
   json a = json::array();
   for (auto& x : l)
-    a.push_back({{"name", x.name}, {"pos", v4j(x.pos)}, {"color", {x.color[0], x.color[1], x.color[2]}}, {"intensity", x.intensity},
+    a.push_back({{"id", x.id}, {"name", x.name}, {"pos", v4j(x.pos)}, {"color", {x.color[0], x.color[1], x.color[2]}}, {"intensity", x.intensity},
                  {"range", x.range}, {"shadows", x.shadows}, {"enabled", x.enabled}});
   return a;
 }
@@ -568,6 +568,8 @@ static std::vector<PointLight> jLights(const json& a) {
   for (auto& o : a) {
     if (!o.is_object()) continue;
     PointLight l;
+    l.id = o.value("id", std::string());
+    if (l.id.empty()) l.id = newId("l");
     l.name = o.value("name", std::string("Light"));
     l.pos = jv4(o.value("pos", json::array()));
     if (o.contains("color") && o["color"].is_array() && o["color"].size() == 3) for (int i = 0; i < 3; i++) l.color[i] = o["color"][i].get<double>();
@@ -586,12 +588,15 @@ std::vector<PointLight> lightsFromJson(const std::string& text) {
 
 std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam,
                         const std::vector<CameraBookmark>* bookmarks, const std::vector<PointLight>* lights,
-                        const std::string& activeCamera) {
+                        const std::string& activeCamera, const std::string* animationJson) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   j["world"] = world.empty() ? json(nullptr) : json(world);
   if (cam) j["camera"] = camJ(*cam);
   if (bookmarks && !bookmarks->empty()) j["bookmarks"] = marksJ(*bookmarks);
   if (!activeCamera.empty()) j["activeCamera"] = activeCamera;
+  if (animationJson && !animationJson->empty()) {
+    try { j["animation"] = json::parse(*animationJson); } catch (...) {}
+  }
   if (lights && !lights->empty()) j["lights"] = lightsJ(*lights);
   return j.dump(2);
 }
@@ -703,6 +708,7 @@ SceneFile sceneFromJson(const std::string& text) {
   }
   if (j.contains("bookmarks")) f.bookmarks = jMarks(j["bookmarks"]);
   f.activeCamera = j.value("activeCamera", std::string());
+  if (j.contains("animation") && j["animation"].is_object()) f.animation = j["animation"].dump();
   if (j.contains("lights")) f.lights = jLights(j["lights"]);
   return f;
 }

@@ -156,6 +156,7 @@ void UI::lightsWindow() {
   auto track = [&] { if (ImGui::IsItemEdited()) live = true; if (ImGui::IsItemDeactivatedAfterEdit()) done = true; };
   if (ImGui::Button("+ Point light")) {
     PointLight l;
+    l.id = newId("l");
     l.name = "Light " + std::to_string(app.lights.size() + 1);
     l.pos = app.currentView().eye;  // where you are
     app.lights.push_back(l);
@@ -175,16 +176,24 @@ void UI::lightsWindow() {
       if (ImGui::SmallButton("To camera")) { l.pos = app.currentView().eye; done = true; }
       ImGui::SameLine();
       if (ImGui::SmallButton("Delete")) del = (int)i;
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Key")) { keyLight(app.anim, l, std::round(app.anim.frame)); done = true; }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Key every value of this light at the current frame");
+      std::string lt = "light:" + l.id;
       float p[4] = {(float)l.pos[0], (float)l.pos[1], (float)l.pos[2], (float)l.pos[3]};
       if (ImGui::DragFloat4("Position XYZW", p, 0.02f)) for (int k = 0; k < 4; k++) l.pos[k] = p[k];
+      keyable(lt, {"pos.x", "pos.y", "pos.z", "pos.w"});
       track();
       float c[3] = {(float)l.color[0], (float)l.color[1], (float)l.color[2]};
       if (ImGui::ColorEdit3("Colour", c)) for (int k = 0; k < 3; k++) l.color[k] = c[k];
+      keyable(lt, {"color.r", "color.g", "color.b"});
       track();
       float in = (float)l.intensity, rg = (float)l.range;
       if (ImGui::DragFloat("Intensity", &in, 0.02f, 0, 20)) l.intensity = std::max(0.f, in);
+      keyable(lt, {"intensity"});
       track();
       if (ImGui::DragFloat("Range", &rg, 0.05f, 0.1f, 500)) l.range = std::max(0.1f, rg);
+      keyable(lt, {"range"});
       track();
     }
     ImGui::PopID();

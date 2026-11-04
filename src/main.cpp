@@ -201,6 +201,7 @@ int main(int argc, char** argv) {
     if (!useVulkan) ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    app.tickAnimation(dt);
     ui->frame(dt);
     app.renderFrame();  // records / draws the scene into the offscreen targets
     app.autosaveTick();

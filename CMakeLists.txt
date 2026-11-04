@@ -23,7 +23,7 @@ FetchContent_MakeAvailable(json)
 # --- core (platform independent: no OpenGL / window) ------------------------------
 add_library(fdcore STATIC
   src/primitives.cpp src/scene.cpp src/evaluator.cpp src/geodesic.cpp src/camera.cpp
-  src/surface.cpp src/codegen.cpp src/examples.cpp src/library.cpp)
+  src/surface.cpp src/codegen.cpp src/examples.cpp src/library.cpp src/animation.cpp)
 target_include_directories(fdcore PUBLIC src)
 target_link_libraries(fdcore PUBLIC nlohmann_json::nlohmann_json)
 if(MINGW)
@@ -87,7 +87,7 @@ if(FD_BUILD_APP)
     target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
   endif()
 
-  set(APP_SOURCES src/main.cpp src/app.cpp src/ui.cpp src/ui_toolbar.cpp src/ui_library.cpp src/ui_tree.cpp src/ui_properties.cpp src/ui_viewport.cpp src/ui_windows.cpp src/keybinds.cpp src/renderer.cpp src/render_gl.cpp src/gl.cpp src/filedialog.cpp)
+  set(APP_SOURCES src/main.cpp src/app.cpp src/ui.cpp src/ui_toolbar.cpp src/ui_library.cpp src/ui_tree.cpp src/ui_properties.cpp src/ui_viewport.cpp src/ui_windows.cpp src/ui_timeline.cpp src/keybinds.cpp src/renderer.cpp src/render_gl.cpp src/gl.cpp src/filedialog.cpp)
   if(WIN32)
     add_executable(4DCAD WIN32 ${APP_SOURCES})
     target_link_libraries(4DCAD PRIVATE comdlg32)

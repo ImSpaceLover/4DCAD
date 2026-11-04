@@ -108,7 +108,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
   * **Group origin:** a new group's origin (its centre of rotation and scaling) is its **first object**, which then sits at 0,0,0,0. The other objects get coordinates relative to it. Grouping, ungrouping and dragging objects into or out of groups convert between group-local and global coordinates, so nothing moves in the world. **Recentre origin on first object** (Properties of a group) moves the origin again, e.g. after reordering.
   * A group whose last object is deleted or moved out is deleted too.
   * Each row has an **eye** (show / hide) and a **padlock** (locked objects cannot be clicked or moved in the viewport; they stay editable in Properties). A **search** box filters the tree by name, and **- / +** collapse or expand everything.
-  * **Isolate** (I, or right-click > Isolate): only the selected objects (and the world) are drawn and clickable until you press I again. It is a view setting: nothing is hidden in the saved scene.
+  * **Isolate** (Numpad / or /, or right-click > Isolate): only the selected objects (and the world) are drawn and clickable until you press it again. It is a view setting: nothing is hidden in the saved scene.
   * **Duplicate linked** (Alt+D): the copies share their shape, material, modifiers and contents, so editing any of them (including objects inside a linked group) edits all; each keeps its own position, rotation and scale. Properties shows "Linked (N copies)" with an **Unlink** button.
   * **Copy / paste** (Ctrl+C / Ctrl+V) uses the system clipboard, so objects can be moved between scenes (or between two running copies of 4DCAD). Pasted objects go to the scene root at the same place in the world.
 * **Cameras** are scene objects (View > Cameras > Add camera at the view): they appear in the scene tree, are drawn in the viewport as small frustums and move / rotate like any object. Each has a field of view and (Full 4D) a slider axis; one added in the Geodesic view is attached to the world surface and moves along it. The **active camera** (orange) is the one used for rendering. **Numpad 0** looks through the selected (or active) camera, **Ctrl+Alt+Numpad 0** moves it to your view. Camera bookmarks from older files become camera objects.
@@ -124,6 +124,16 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
   * Set **Bound** so the shape fits inside it. The renderer uses it to skip far-away work, and on the CPU clicking, collisions and placement treat the shape as that box.
   * Custom SDFs combine with booleans and modifiers like any other object.
 * **Geodesic sky:** a ray that hits nothing shows the colour (including the texture) of the world surface at the point it travelled to, so a multi-coloured or textured world gives a matching sky. The Full 4D sky is unchanged. An outside thumbnail shows the world from the outside with your position.
+
+## Animation
+
+* **Timeline** (bottom of the viewport): play / pause (**Space**), step (**Left / Right**), jump to the first / last frame (**Shift+Left / Right**), current frame, frame range and frames per second (default 24 fps, frames 1–120). Drag on the ruler to scrub.
+* **Keyframes:** **I** keys the selected objects (position / rotation / scale, or all values); **Alt+I** removes their keys at this frame. In Properties (and the Lights window) right-click any value to key just that value; a diamond next to it shows it is animated (filled: keyed on this frame). **Auto-key** keys every change you make. Everything numeric can be animated: transforms, material values and colours, modifier values (copies and axes step), smoothness, visibility, point lights and cameras (position, orientation, field of view).
+* The timeline shows the selected objects' keys (a summary row plus one row per value): click / Shift+click to select, drag to move, right-click for interpolation or delete, **X / Del** deletes, **Ctrl+C / Ctrl+V** copy and paste at the current frame, wheel zooms, middle-drag pans, **Home** frames everything.
+* **Interpolation** (per key, to the next key): constant, linear, bezier (smooth), ease in / out / in-out. **4D rotations** take the shortest 4D rotation path (both rotation planes turn together at constant speed). Objects and cameras on a world surface travel along the surface between keys.
+* **Graph editor** (Graph button): every value's curve; drag keys (frame and value) and bezier handles (handles you move stop being automatic); wheel zooms time (Ctrl: values), middle-drag pans, "Frame all" / Home fits the curves.
+* **Camera view** (timeline button, or **Ctrl+Numpad 0**): the viewport shows the active camera, to preview the animation; navigating leaves it.
+* Animation is saved in the scene, and its changes can be undone.
 
 ## Saving and settings
 

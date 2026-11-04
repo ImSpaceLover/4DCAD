@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "animation.hpp"
 #include "camera.hpp"
 #include "codegen.hpp"
 #include "evaluator.hpp"
@@ -353,6 +354,112 @@ int main() {
       }
     }
     CHECK(found > 0, "another sheet along the normal");
+  }
+
+  // ---- animation ----
+  {
+    // 4D rotation interpolation: ends exact, shortest path at constant speed (both planes)
+    std::srand(7);
+    auto rnd = [] { return std::rand() / (double)RAND_MAX * 2 - 1; };
+    auto randRot = [&] {
+      double d[6];
+      for (auto& x : d) x = rnd() * 170;
+      return rotationFromAngles(d);
+    };
+    auto angleBetween = [](const M4& a, const M4& b) {  // sum of the two plane angles of a^T b
+      M4 q = mul(transpose(a), b);
+      double tr = q[0] + q[5] + q[10] + q[15];  // = 2 cos t1 + 2 cos t2
+      return tr;
+    };
+    int bad = 0;
+    for (int i = 0; i < 40; i++) {
+      M4 A = randRot(), B = randRot();
+      M4 r0 = interpolateRotation(A, B, 0), r1 = interpolateRotation(A, B, 1);
+      M4 h = interpolateRotation(A, B, 0.5);
+      // the midpoint is halfway: from A to h and from h to B are the same rotation
+      double e = 0;
+      M4 d1 = mul(transpose(A), h), d2 = mul(transpose(h), B);
+      for (int k = 0; k < 16; k++) e = std::max(e, std::abs(d1[k] - d2[k]));
+      double e1 = 0;
+      M4 hb = interpolateRotation(A, B, 0.999999);
+      for (int k = 0; k < 16; k++) e1 = std::max(e1, std::abs(hb[k] - B[k]));
+      if (e > 1e-6 || e1 > 1e-4 || r0 != A || r1 != B) bad++;
+      (void)angleBetween;
+    }
+    CHECK(bad == 0, "rotation interpolation: %d of 40 random pairs wrong", bad);
+    // a single-plane 90 degree turn passes 45 degrees halfway
+    M4 q = interpolateRotation(identity(), planeRotation(0, 3, PI / 2), 0.5);
+    CLOSE(q[0], std::cos(PI / 4), 1e-9);
+    // 180 degrees in one plane (degenerate case) stays in that plane
+    M4 q2 = interpolateRotation(identity(), planeRotation(1, 2, PI), 0.5);
+    CLOSE(q2[0], 1, 1e-9);
+    CLOSE(q2[15], 1, 1e-9);
+    CLOSE(q2[5], 0, 1e-9);
+
+    // scalar tracks: constant / linear / bezier / ease, holds outside the keys
+    Animation an;
+    setKey(an, "n1", "pos.x", 1, 0, Interp::Linear);
+    setKey(an, "n1", "pos.x", 11, 10, Interp::Linear);
+    Track* t = findTrack(an, "n1", "pos.x");
+    CLOSE(evalTrack(*t, 6), 5, 1e-9);
+    CLOSE(evalTrack(*t, -5), 0, 1e-12);
+    CLOSE(evalTrack(*t, 50), 10, 1e-12);
+    t->keys[0].interp = Interp::Constant;
+    CLOSE(evalTrack(*t, 10.9), 0, 1e-12);
+    t->keys[0].interp = Interp::EaseIn;
+    CHECK(evalTrack(*t, 6) < 5, "ease in starts slow");
+    t->keys[0].interp = Interp::Bezier;
+    double prev = -1;
+    bool mono = true;
+    for (double f = 1; f <= 11; f += 0.25) { double v = evalTrack(*t, f); if (v < prev - 1e-9) mono = false; prev = v; }
+    CHECK(mono && std::abs(evalTrack(*t, 6) - 5) < 1e-6, "bezier: smooth, symmetric, monotonic between two keys");
+    setKey(an, "n1", "pos.x", 21, 0);
+    sortKeys(*findTrack(an, "n1", "pos.x"));
+    double peak = 0;
+    for (double f = 1; f <= 21; f += 0.1) peak = std::max(peak, evalTrack(*findTrack(an, "n1", "pos.x"), f));
+    CHECK(peak <= 10 + 1e-6, "auto handles do not overshoot a peak (%.3f)", peak);
+    // stepped values (counts, visibility) jump
+    setKey(an, "n1", "hidden", 1, 0);
+    setKey(an, "n1", "hidden", 5, 1);
+    CLOSE(evalTrack(*findTrack(an, "n1", "hidden"), 4.9), 0, 1e-12);
+
+    // every listed value can be read and written
+    Node L = makeShape("cube", "c");
+    Modifier rm; rm.type = MOD_RADIAL; L.mods.push_back(rm);
+    int failsV = 0;
+    for (auto& v : animatableValues(L)) {
+      if (v.path == "rot") continue;
+      double x;
+      if (!getValue(L, v.path, x) || !setValue(L, v.path, x + (v.stepped ? 1 : 0.25))) failsV++;
+      double y;
+      getValue(L, v.path, y);
+      if (std::abs(y - (x + (v.stepped ? 1 : 0.25))) > 1e-9) failsV++;
+    }
+    CHECK(failsV == 0, "value access (%d failures)", failsV);
+    Node cam = makeCamera("c", {0, 0, 0, 0}, identity(), 60, 3);
+    double fv;
+    CHECK(getValue(cam, "cam.fov", fv) && fv == 60, "camera fov");
+
+    // apply + JSON round trip
+    Node root = makeGroup(BoolOp::Union, {L});
+    std::vector<PointLight> lights(1);
+    lights[0].id = "L1";
+    Animation a2;
+    setKey(a2, L.id, "pos.y", 1, 0, Interp::Linear);
+    setKey(a2, L.id, "pos.y", 9, 4, Interp::Linear);
+    setRotKey(a2, L.id, 1, identity());
+    setRotKey(a2, L.id, 9, planeRotation(0, 1, 1.0));
+    setKey(a2, "light:L1", "intensity", 1, 1, Interp::Linear);
+    setKey(a2, "light:L1", "intensity", 9, 3, Interp::Linear);
+    findTrack(a2, L.id, "pos.y")->keys[1].autoHandles = false;
+    Animation rt = animationFromJson(animationToJson(a2));
+    CHECK(rt.tracks.size() == 3 && !findTrack(rt, L.id, "pos.y")->keys[1].autoHandles, "animation JSON round trip");
+    applyAnimation(rt, root, lights, 5);
+    CLOSE(root.children[0].xf.pos[1], 2, 1e-9);
+    CLOSE(root.children[0].xf.rot[0], std::cos(0.5), 1e-6);
+    CLOSE(lights[0].intensity, 2, 1e-9);
+    pruneTracks(rt, makeGroup(BoolOp::Union, {}), lights);
+    CHECK(rt.tracks.size() == 1, "tracks of deleted objects removed");
   }
 
   // frame conversions: compose / relative round trip

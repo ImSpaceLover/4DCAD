@@ -253,6 +253,7 @@ Node nodeFromPrimitive(const PrimitiveDef& p, const std::string& name);
 
 /** A point light (a 4D position; light falls off to 0 at `range`). */
 struct PointLight {
+  std::string id;  // stable id (animation tracks refer to it); given when created / loaded
   std::string name = "Light";
   V4 pos{0, 3, 0, 0};
   std::array<double, 3> color{1, 0.95, 0.85};
@@ -274,6 +275,7 @@ struct CameraBookmark {
 struct SceneFile {
   std::vector<CameraBookmark> bookmarks;  // old files only: converted to camera objects when loaded
   std::string activeCamera;               // id of the camera used for rendering
+  std::string animation;                  // animation (JSON, see animation.hpp); empty = none
   std::vector<PointLight> lights;
   Node root;
   std::vector<PrimitiveDef> primitives;
@@ -298,7 +300,7 @@ std::vector<LibraryFolder> builtinFolders();
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
 std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
                         const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr,
-                        const std::string& activeCamera = "");
+                        const std::string& activeCamera = "", const std::string* animationJson = nullptr);
 std::string lightsToJson(const std::vector<PointLight>& l);
 std::vector<PointLight> lightsFromJson(const std::string& text);
 std::string bookmarksToJson(const std::vector<CameraBookmark>& b);

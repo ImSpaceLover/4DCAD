@@ -8,7 +8,7 @@ void UI::viewport(double dt) {
   ImGuiIO& io = ImGui::GetIO();
   float top = ImGui::GetFrameHeight() + TOOLBAR_H;
   ImGui::SetNextWindowPos({LEFT_W, top});
-  ImGui::SetNextWindowSize({io.DisplaySize.x - LEFT_W - RIGHT_W, io.DisplaySize.y - top});
+  ImGui::SetNextWindowSize({io.DisplaySize.x - LEFT_W - RIGHT_W, io.DisplaySize.y - top - timelineHeight()});
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
   ImGui::Begin("##viewport", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                           ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse);

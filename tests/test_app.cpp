@@ -599,6 +599,52 @@ int main() {
     app.quality.emissiveLights = true;
   }
 
+  // --- animation: keys, interpolation, auto-key, undo, save, playback ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string ob = app.selection[0];
+    findNode(app.root, ob)->xf.pos = {0, 1, 0, 0};
+    app.commit();
+    app.setFrame(1);
+    app.insertKeys(true);
+    app.setFrame(21);
+    findNode(app.root, ob)->xf.pos = {4, 1, 0, 2};
+    findNode(app.root, ob)->xf.rot = planeRotation(0, 3, 1.0);
+    app.commit();
+    app.insertKeys(true);
+    Track* tx = findTrack(app.anim, ob, "pos.x");
+    CHECK(tx && tx->keys.size() == 2, "two keys on pos.x");
+    for (auto& t : app.anim.tracks) for (auto& k : t.keys) k.interp = Interp::Linear;
+    app.setFrame(11);
+    Node* nn = findNode(app.root, ob);
+    CHECK(std::abs(nn->xf.pos[0] - 2) < 1e-9 && std::abs(nn->xf.pos[3] - 1) < 1e-9, "interpolated position");
+    CHECK(std::abs(nn->xf.rot[0] - std::cos(0.5)) < 1e-6, "interpolated rotation (half of 1 rad in XW)");
+    // auto-key: a change at another frame becomes a key there
+    app.autoKey = true;
+    app.setFrame(31);
+    findNode(app.root, ob)->xf.pos[1] = 3;
+    app.commit();
+    CHECK(hasKeyAt(app.anim, ob, "pos.y", 31) && !hasKeyAt(app.anim, ob, "pos.x", 31), "auto-key keys only the changed value");
+    app.autoKey = false;
+    app.undo();
+    CHECK(!hasKeyAt(app.anim, ob, "pos.y", 31) && std::abs(app.anim.frame - 31) < 1e-9, "undo removes the key, keeps the frame");
+    // saved with the scene
+    SceneFile f = sceneFromJson(app.serialize());
+    Animation la = animationFromJson(f.animation);
+    CHECK(findTrack(la, ob, "rot") && findTrack(la, ob, "rot")->keys.size() == 2, "animation saved");
+    // playback advances by fps and loops
+    app.anim.start = 1; app.anim.end = 24; app.anim.fps = 24;
+    app.setFrame(23);
+    app.playing = true;
+    app.tickAnimation(1.0 / 24);
+    CHECK(std::abs(app.anim.frame - 24) < 1e-9, "one frame per 1/fps (%.3f)", app.anim.frame);
+    app.tickAnimation(2.0 / 24);
+    CHECK(app.anim.frame >= 1 && app.anim.frame < 3, "loops to the start (%.3f)", app.anim.frame);
+    app.playing = false;
+  }
+
   // --- render profiles: what the shader is told to do ---
   {
     FrameParams fp;
@@ -661,6 +707,20 @@ int main() {
     double maxDev = 0;
     for (auto& p : d.pts) maxDev = std::max(maxDev, std::abs(p[0]) + std::abs(p[2]) + std::abs(p[3] - 7));
     CHECK(maxDev < 1e-12, "Full 4D ray is straight");
+  }
+  // animated object on the world surface: stays on the surface between keys
+  {
+    std::string red = app.root.children[1].id;
+    Node* rn = findNode(app.root, red);
+    V4 p0 = rn->xf.pos;
+    keyNode(app.anim, *rn, 1, true);
+    app.translateNodes({red}, col(rn->anchor->basis, 0) * 2.5);
+    keyNode(app.anim, *findNode(app.root, red), 21, true);
+    V4 p1 = findNode(app.root, red)->xf.pos;
+    app.setFrame(11);
+    V4 pm = findNode(app.root, red)->xf.pos;
+    CHECK(std::abs(length(pm) - 3) < 1e-3 && length(pm - p0) > 0.3 && length(pm - p1) > 0.3, "in between, on the surface (|p| = %.4f)", length(pm));
+    app.anim = Animation{};
   }
   // Geodesic camera: attached to the world surface, slides along it
   {
