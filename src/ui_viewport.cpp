@@ -163,7 +163,8 @@ void UI::overlays(ImDrawList* dl) {
   if (app.mode == Mode::Explore) {
     if (!app.mouseCaptured) lines.push_back("Click the viewport to capture the mouse");
     if (!app.anim.empty()) {
-      std::snprintf(buf, sizeof buf, "Animation: frame %d / %d %s (%s: play / pause, %s: from the start)", (int)std::round(app.anim.frame), app.anim.end,
+      std::snprintf(buf, sizeof buf, "Animation: frame %d / %d %s (%s: play / pause, %s: from the start)", (int)std::round(app.anim.frame),
+                    (int)std::round(app.playbackEnd()),
                     app.playing ? "playing" : "paused", app.keys.text(Action::ExplorePlay).c_str(), app.keys.text(Action::ExploreRestart).c_str());
       lines.push_back(buf);
     }

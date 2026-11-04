@@ -642,6 +642,15 @@ int main() {
     CHECK(std::abs(app.anim.frame - 24) < 1e-9, "one frame per 1/fps (%.3f)", app.anim.frame);
     app.tickAnimation(2.0 / 24);
     CHECK(app.anim.frame >= 1 && app.anim.frame < 3, "loops to the start (%.3f)", app.anim.frame);
+    // Explore: loops at the last keyframe (here 21 with the range ending at 24), indefinitely
+    app.setMode(Mode::Explore);
+    CHECK(std::abs(app.playbackEnd() - 21) < 1e-9, "Explore loops at the last keyframe (%.1f)", app.playbackEnd());
+    app.setFrame(20);
+    app.tickAnimation(2.0 / 24);  // 20 -> 22: past the last key
+    CHECK(std::abs(app.anim.frame - 2) < 1e-9, "back to the start, carrying the overshoot (%.3f)", app.anim.frame);
+    for (int i = 0; i < 24 * 30; i++) app.tickAnimation(1.0 / 24);  // 30 seconds
+    CHECK(app.playing && app.anim.frame >= 1 && app.anim.frame <= 21, "keeps repeating (%.3f)", app.anim.frame);
+    app.setMode(Mode::Edit);
     app.playing = false;
   }
 

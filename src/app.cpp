@@ -189,10 +189,23 @@ void App::setFrame(double frame) {
   lastChange_ = now;
 }
 
+double App::playbackEnd() const {
+  // Explore: the animation repeats from its last keyframe; Edit: from the end of the frame range
+  if (mode == Mode::Explore) {
+    double last = -1e18;
+    for (auto& t : anim.tracks) if (!t.keys.empty()) last = std::max(last, t.keys.back().frame);
+    if (last > -1e17) return std::max(last, anim.start + 1.0);
+  }
+  return anim.end + 0.999;
+}
+
 void App::tickAnimation(double dt) {
   if (!playing) return;
-  double f = anim.frame + dt * anim.fps;
-  if (f > anim.end + 0.999) f = anim.start + std::fmod(f - anim.start, std::max(1.0, anim.end - anim.start + 1.0));  // loop
+  double f = anim.frame + dt * anim.fps, end = playbackEnd();
+  if (f > end) {  // loop: back to the first frame, carrying the overshoot (repeats indefinitely)
+    double len = std::max(1e-6, end - anim.start);
+    f = anim.start + std::fmod(f - end, len);
+  }
   setFrame(f);
 }
 

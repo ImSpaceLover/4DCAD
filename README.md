@@ -133,6 +133,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 * The timeline shows the selected objects' keys (a summary row plus one row per value): click / Shift+click to select, drag to move, right-click for interpolation or delete, **X / Del** deletes, **Ctrl+C / Ctrl+V** copy and paste at the current frame, wheel zooms, middle-drag pans, **Home** frames everything.
 * **Interpolation** (per key, to the next key): constant, linear, bezier (smooth), ease in / out / in-out. **4D rotations** take the shortest 4D rotation path (both rotation planes turn together at constant speed). Objects and cameras on a world surface travel along the surface between keys.
 * **Graph editor** (Graph button): every value's curve; drag keys (frame and value) and bezier handles (handles you move stop being automatic); wheel zooms time (Ctrl: values), middle-drag pans, "Frame all" / Home fits the curves.
+* **In Explore**, **P** plays / pauses the animation while you walk around and **Shift+P** plays it from the first frame; it repeats indefinitely, starting over when it reaches the last keyframe.
 * **Camera view** (timeline button, or **Ctrl+Numpad 0**): the viewport shows the active camera, to preview the animation; navigating leaves it.
 * Animation is saved in the scene, and its changes can be undone.
 

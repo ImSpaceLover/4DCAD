@@ -175,6 +175,8 @@ class App {
   void setFrame(double frame);
   /** Advances playback (called every frame by the main loop). */
   void tickAnimation(double dt);
+  /** Where playback loops back to the first frame (Explore: the last keyframe; Edit: the end of the range). */
+  double playbackEnd() const;
   /** Keys the selected objects at the current frame (transform only, or every value). */
   void insertKeys(bool transformOnly);
   /** Removes the selected objects' keys at the current frame. */
