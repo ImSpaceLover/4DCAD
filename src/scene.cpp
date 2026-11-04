@@ -411,7 +411,7 @@ static json nodeJ(const Node& n) {
                      {"metallic", m.metallic}};
     if (n.isCustom()) { j["code"] = n.code; j["codeBound"] = n.codeBound; }
   } else if (n.isCamera()) {
-    j["camera"] = {{"fov", n.camFov}, {"slider", n.camSlider}};
+    j["camera"] = {{"fov", n.camFov}, {"slider", n.camSlider}, {"aperture", n.camAperture}, {"focus", n.camFocus}};
   } else {
     j["op"] = BOOL_OP_NAMES[(int)n.op];
     j["k"] = n.k;
@@ -501,6 +501,8 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
     auto c = j.value("camera", json::object());
     n.camFov = std::clamp(c.value("fov", 60.0), 5.0, 170.0);
     n.camSlider = std::clamp(c.value("slider", 3), 0, 3);
+    n.camAperture = std::max(0.0, c.value("aperture", 0.0));
+    n.camFocus = std::max(0.01, c.value("focus", 5.0));
   } else {
     std::string op = j.value("op", std::string("union"));
     for (int i = 0; i < 6; i++) if (op == BOOL_OP_NAMES[i]) n.op = (BoolOp)i;

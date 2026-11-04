@@ -42,6 +42,8 @@ std::vector<AnimValue> animatableValues(const Node& n) {
   if (n.isCamera()) {
     v.push_back({"cam.fov", "Field of view"});
     v.push_back({"cam.slider", "Slider axis", true});
+    v.push_back({"cam.aperture", "Aperture"});
+    v.push_back({"cam.focus", "Focus distance"});
     return v;
   }
   v.push_back({"scale", "Scale"});
@@ -106,6 +108,8 @@ static bool access(Node& n, const std::string& p, double& v, bool put) {
   if (p == "hidden") return B(n.hidden);
   if (p == "cam.fov") return n.isCamera() && D(n.camFov);
   if (p == "cam.slider") return n.isCamera() && I(n.camSlider);
+  if (p == "cam.aperture") return n.isCamera() && D(n.camAperture);
+  if (p == "cam.focus") return n.isCamera() && D(n.camFocus);
   if (p == "k") return n.isGroup() && D(n.k);
   if (p.rfind("mods.", 0) == 0) {
     size_t dot = p.find('.', 5);

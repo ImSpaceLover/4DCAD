@@ -81,7 +81,7 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   float a[4] = {(float)w, (float)h, (float)std::tan(fp.fovDeg * PI / 360), fp.geo ? q.maxDistGeo : q.maxDistFull};
   float b[4] = {q.eps, q.stepScale, q.shadowK, q.shadowMax};
   float c[4] = {q.aoStrength, q.fog, q.ambient, q.geoMaxStep};
-  float d[4] = {fp.markerSkip, q.sunIntensity, 0, 0};
+  float d[4] = {fp.markerSkip, q.sunIntensity, q.sunSize, q.lightRadius};
   std::memcpy(u.a, a, sizeof a);
   std::memcpy(u.b, b, sizeof b);
   std::memcpy(u.c, c, sizeof c);
@@ -106,7 +106,9 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   int32_t ii[4] = {std::max(8, p.maxSteps), p.shadows ? 1 : 0, p.ao ? 1 : 0, fp.grid ? 1 : 0};
   int32_t jj[4] = {q.geoProjectIters, n >= 2 ? n : 0, nl, p.textures ? 1 : 0};
   int32_t kk[4] = {mask, std::clamp(p.bounces, 0, 8), q.relaxedMarching ? 1 : 0, std::clamp(p.aoSamples, 1, 5)};
-  int32_t ll[4] = {std::clamp(p.shadowSteps, 4, 256), p.specular ? 1 : 0, 0, 0};
+  int32_t ll[4] = {std::clamp(p.shadowSteps, 4, 256), p.specular ? 1 : 0, fp.stochastic ? 1 : 0, fp.sample};
+  float ee[4] = {fp.stochastic ? fp.aperture : 0.f, std::max(0.01f, fp.focus), std::clamp(fp.blend, 0.f, 1.f), 0};
+  std::memcpy(u.e, ee, sizeof ee);
   std::memcpy(u.i, ii, sizeof ii);
   std::memcpy(u.j, jj, sizeof jj);
   std::memcpy(u.k, kk, sizeof kk);

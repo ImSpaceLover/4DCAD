@@ -101,6 +101,8 @@ struct Node {
   // attached to the world surface (anchor) = a Geodesic camera
   double camFov = 60;      // degrees
   int camSlider = 3;       // Full 4D: world axis on the slice slider
+  double camAperture = 0;  // depth of field: lens radius (0 = everything sharp)
+  double camFocus = 5;     // distance in focus
   double codeBound = 1.5;  // custom SDF: half size of its bounding box (used for picking / collisions)
   bool isCustom() const { return kind == NodeKind::Leaf && prim == "custom"; }
   // group
@@ -167,6 +169,11 @@ struct QualitySettings {
   bool emissiveLights = true;     // emissive objects light their surroundings (as point lights)
   int transparentLayers = 3;      // reflections / refractions followed per pixel (0 = mirrors and glass off)
   bool relaxedMarching = true;    // over-relaxed sphere tracing (fewer steps)
+  // stochastic sampling (random per sample, averaged): viewport refinement when idle, renders
+  bool stochastic = true;         // refine the viewport while nothing changes
+  int viewportSamples = 64;       // samples per pixel the viewport refines to
+  float sunSize = 0.04f;          // radians: soft sun shadows
+  float lightRadius = 0.15f;      // point lights are balls of this radius: soft shadows
   // fast mode: used in Explore (keep it smooth) and optionally while moving in Edit mode
   RenderProfile fast = RenderProfile::preset(RenderProfile::Fast);
   bool fastWhileMovingInEdit = false;

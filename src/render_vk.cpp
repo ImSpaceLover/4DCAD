@@ -94,13 +94,13 @@ class VKRenderer : public Renderer {
     if (vkCreatePipelineLayout(d, &pli, nullptr, &pipeLayout_) != VK_SUCCESS) { err = "pipeline layout"; return false; }
     // offscreen pass: the target is fully overwritten, then sampled by the UI
     VkAttachmentDescription att{};
-    att.format = VK_FORMAT_R8G8B8A8_UNORM;
+    att.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     att.samples = VK_SAMPLE_COUNT_1_BIT;
-    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;  // progressive sampling blends into what is there
     att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    att.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // images are created in this layout
     att.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sub{};
@@ -216,12 +216,17 @@ class VKRenderer : public Renderer {
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     VkPipelineColorBlendAttachmentState cba{};
     cba.colorWriteMask = 0xF;
+    // new sample = src * w + previous * (1 - w); w = 1 replaces (blend constant alpha, per draw)
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_CONSTANT_ALPHA;
+    cba.dstColorBlendFactor = cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+    cba.colorBlendOp = cba.alphaBlendOp = VK_BLEND_OP_ADD;
     VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
     cb.pAttachments = &cba;
-    VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkDynamicState dyn[3] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS};
     VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    ds.dynamicStateCount = 2;
+    ds.dynamicStateCount = 3;
     ds.pDynamicStates = dyn;
     VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pi.stageCount = 2;
@@ -296,7 +301,14 @@ class VKRenderer : public Renderer {
       }
     }
     vkCmdBeginRenderPass(cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    if (!prog || !set) {  // shader failed: an error colour (the pass keeps old contents, so clear explicitly)
+      VkClearAttachment ca{VK_IMAGE_ASPECT_COLOR_BIT, 0, clear};
+      VkClearRect cr{{{0, 0}, {(uint32_t)img.w, (uint32_t)img.h}}, 0, 1};
+      vkCmdClearAttachments(cmd, 1, &ca, 1, &cr);
+    }
     if (prog && set) {
+      float bc[4] = {0, 0, 0, u.e[2]};
+      vkCmdSetBlendConstants(cmd, bc);
       VkViewport vpt{0, 0, (float)img.w, (float)img.h, 0, 1};
       VkRect2D sc{{0, 0}, {(uint32_t)img.w, (uint32_t)img.h}};
       vkCmdSetViewport(cmd, 0, 1, &vpt);
@@ -376,7 +388,7 @@ class VKRenderer : public Renderer {
     VkDevice d = ctx_.device;
     VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ii.imageType = VK_IMAGE_TYPE_2D;
-    ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ii.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     ii.extent = {(uint32_t)w, (uint32_t)h, 1};
     ii.mipLevels = 1;
     ii.arrayLayers = 1;
@@ -396,7 +408,7 @@ class VKRenderer : public Renderer {
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image = v.image;
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCreateImageView(d, &vi, nullptr, &v.view);
     VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};

@@ -87,6 +87,16 @@ void UI::qualityWindow() {
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflections / refractions followed per pixel (0 = mirrors and glass off)");
       ImGui::Checkbox("Over-relaxed marching", &q.relaxedMarching);
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Longer steps with a safety check: usually faster (Full 4D)");
+      ImGui::SeparatorText("Stochastic sampling");
+      ImGui::Checkbox("Refine the view when still", &q.stochastic);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("While nothing moves, random samples are averaged: soft shadows, glass that reflects and refracts by\n"
+                          "Fresnel, blurry reflections of rough mirrors, anti-aliasing, depth of field (cameras)");
+      ImGui::BeginDisabled(!q.stochastic);
+      ImGui::SliderInt("Samples##vp", &q.viewportSamples, 2, 1024);
+      ImGui::EndDisabled();
+      Ff("Sun size", q.sunSize, 0, 0.3f, "%.3f rad", "Angular size of the sun: softer shadows");
+      Ff("Light radius", q.lightRadius, 0, 2, "%.2f", "Point lights are balls of this size: softer shadows");
       ImGui::SeparatorText("Fast mode (Explore)");
       {
         auto& f = q.fast;

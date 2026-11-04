@@ -1531,6 +1531,8 @@ void App::renderFrame() {
     prof.shadowSteps = 64;
   }
   float scale = std::clamp(prof.resolution, 0.1f, 2.0f);
+  // progressive stochastic refinement while nothing changes (Edit mode, main settings)
+  bool refine = q.stochastic && !moving && !fast && mode == Mode::Edit && q.viewportSamples > 1;
   std::ostringstream key;
   key.precision(9);
   for (double x : v.eye) key << x << ',';
@@ -1554,7 +1556,13 @@ void App::renderFrame() {
   fp.prof = prof;
   for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows; }
   key << prof.maxSteps << prof.bounces << prof.textures << prof.specular << prof.pointLights << prof.shadows << prof.pointShadows << prof.ao
-      << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching;
+      << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching << refine << q.sunSize << q.lightRadius;
+  if (inCameraView()) {  // depth of field of the camera looked through (stochastic only)
+    Node* c = findNode(root, activeCamera);
+    fp.aperture = (float)c->camAperture;
+    fp.focus = (float)c->camFocus;
+    key << fp.aperture << ',' << fp.focus;
+  }
   // debug ray: re-traced from the view every frame unless frozen
   if (debugRay && ev) {
     if (!debugFrozen) debugTrace = traceRay(*ev, fp.geo, v.eye, col(v.frame, 2), quality);
@@ -1579,11 +1587,22 @@ void App::renderFrame() {
     fp.markerSkip = r * 3;  // the primary ray starts inside the body
   }
   std::string k = key.str();
+  fp.scale = scale;
   if (k != lastKey_) {
     if (k.substr(0, k.find('|')) != lastKey_.substr(0, lastKey_.find('|'))) lastChange_ = now;
     lastKey_ = k;
-    fp.scale = scale;
+    fp.stochastic = refine;  // a new image: the first sample replaces what was there
+    fp.sample = 0;
+    fp.blend = 1;
     renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+    accumSamples = refine ? 1 : 0;
+  } else if (refine && accumSamples < q.viewportSamples) {
+    // the same view: add one more random sample to the running average
+    fp.stochastic = true;
+    fp.sample = accumSamples;
+    fp.blend = 1.0f / (accumSamples + 1);
+    renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+    accumSamples++;
   }
   if (fp.geo && editSet.showThumbnail) {
     thumbW = editSet.thumbSize;
@@ -1624,6 +1643,7 @@ void App::saveSettings() {
                  {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}, {"sunIntensity", q.sunIntensity},
                  {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
                  {"relaxedMarching", q.relaxedMarching}, {"fastWhileMovingInEdit", q.fastWhileMovingInEdit},
+                 {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius},
                  {"backend", BACKEND_NAMES[(int)backendPref]}};
   const RenderProfile& f = q.fast;
   j["render"]["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
@@ -1675,6 +1695,7 @@ void App::loadSettings() {
       get(r, "sunIntensity", q.sunIntensity); get(r, "pointShadows", q.pointShadows); get(r, "emissiveLights", q.emissiveLights);
       get(r, "transparentLayers", q.transparentLayers); get(r, "relaxedMarching", q.relaxedMarching);
       get(r, "fastWhileMovingInEdit", q.fastWhileMovingInEdit);
+      get(r, "stochastic", q.stochastic); get(r, "viewportSamples", q.viewportSamples); get(r, "sunSize", q.sunSize); get(r, "lightRadius", q.lightRadius);
       auto& f = q.fast;
       if (r.contains("fast") && r["fast"].is_object()) {
         auto& o = r["fast"];

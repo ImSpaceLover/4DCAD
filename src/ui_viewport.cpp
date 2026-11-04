@@ -152,6 +152,10 @@ void UI::overlays(ImDrawList* dl) {
                 v.eye[0], v.eye[1], v.eye[2], v.eye[3]);
   lines.push_back(buf);
   int highlight = -1;
+  if (app.accumSamples > 0 && app.accumSamples < app.quality.viewportSamples && app.mode == Mode::Edit) {
+    std::snprintf(buf, sizeof buf, "Refining %d / %d", app.accumSamples, app.quality.viewportSamples);
+    lines.push_back(buf);
+  }
   if (!app.isolate.empty()) {
     std::snprintf(buf, sizeof buf, "Isolated: %d object(s) (%s: show all)", (int)app.isolate.size(), app.keys.text(Action::Isolate).c_str());
     lines.push_back(buf);

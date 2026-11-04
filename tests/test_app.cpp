@@ -660,6 +660,16 @@ int main() {
     fp.prof.specular = false;
     u = frameUniforms(fp, 100, 80);
     CHECK(u.j[2] == 0 && u.l[1] == 0, "point lights / highlights off");
+    fp.stochastic = true;
+    fp.sample = 7;
+    fp.blend = 0.125f;
+    fp.aperture = 0.2f;
+    fp.focus = 6;
+    u = frameUniforms(fp, 100, 80);
+    CHECK(u.l[2] == 1 && u.l[3] == 7 && std::abs(u.e[2] - 0.125f) < 1e-7 && std::abs(u.e[0] - 0.2f) < 1e-7 && u.e[1] == 6, "stochastic sample, weight, lens");
+    fp.stochastic = false;
+    u = frameUniforms(fp, 100, 80);
+    CHECK(u.l[2] == 0 && u.e[0] == 0, "deterministic: no lens blur");
   }
 
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---

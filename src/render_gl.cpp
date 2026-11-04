@@ -135,11 +135,18 @@ class GLRenderer : public Renderer {
     gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, NODE_VEC4S, std::max(1, nodeCount), 0, GL_RGBA, GL_FLOAT, nodes.data());
     gl::Uniform1i(p->nodesLoc, 1);
     gl::Disable(GL_SCISSOR_TEST);
-    gl::Disable(GL_BLEND);
     gl::Disable(GL_DEPTH_TEST);
+    // progressive sampling: the new sample is blended into the running average (weight u.e[2])
+    float weight = u.e[2];
+    if (weight < 0.9999f) {
+      gl::Enable(GL_BLEND);
+      gl::BlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+      gl::BlendColor(0, 0, 0, weight);
+    } else gl::Disable(GL_BLEND);
     gl::BindVertexArray(vao_);
     gl::DrawArrays(GL_TRIANGLES, 0, 3);
     gl::BindVertexArray(0);
+    gl::Disable(GL_BLEND);
     gl::ActiveTexture(GL_TEXTURE0);
     gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
   }
@@ -156,7 +163,7 @@ class GLRenderer : public Renderer {
     t.w = w; t.h = h;
     rt.w = w; rt.h = h;
     gl::BindTexture(GL_TEXTURE_2D, t.tex);
-    gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);  // float: averages many samples
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);

@@ -52,6 +52,11 @@ struct FrameParams {
   int debugReason = 0;
   std::vector<LightParam> lights;  // point lights (at most MAX_LIGHTS are used)
   RenderProfile prof;  // what to draw and how hard to work (main settings or the fast profile)
+  // stochastic sampling (progressive): sample index, weight of this sample in the running average
+  bool stochastic = false;
+  int sample = 0;
+  float blend = 1;  // 1 = replace the image, 1/(n+1) = add the (n+1)-th sample
+  float aperture = 0, focus = 5;  // depth of field (stochastic only; cameras)
 };
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */
@@ -61,6 +66,7 @@ struct FrameUniforms {
   float skyTop[4], skyBottom[4], skyCol[4], dbgEndCol[4];
   float a[4], b[4], c[4], d[4];
   int32_t i[4], j[4], k[4], l[4];
+  float e[4];  // aperture, focus distance, accumulation weight (backend blend), 0
   float lpos[MAX_LIGHTS][4], lcol[MAX_LIGHTS][4];
   float dbg[MAX_DEBUG_PTS][4];
 };

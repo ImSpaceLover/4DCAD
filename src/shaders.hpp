@@ -35,7 +35,8 @@ inline const char* FRAME_BLOCK = R"(
   ivec4 f_i;         // maxSteps, shadows, ao, grid
   ivec4 f_j;         // geoIters, debug points, point lights, textures on
   ivec4 f_k;         // point light shadow mask, bounces, over-relaxation, AO samples
-  ivec4 f_l;         // shadow ray steps, specular on, 0, 0
+  ivec4 f_l;         // shadow ray steps, specular on, stochastic on, sample index
+  vec4 f_e;          // lens aperture, focus distance, (accumulation weight: used by the renderer), 0
   vec4 u_lpos[8];    // point lights: 4D position
   vec4 u_lcol[8];    // rgb * intensity, range
   vec4 u_dbg[48];    // debug ray polyline (Explore)
@@ -66,6 +67,12 @@ inline const char* FRAME_DEFINES = R"(
 #define u_aoSamples f_k.w
 #define u_shadowSteps f_l.x
 #define u_specular f_l.y
+#define u_stochastic f_l.z
+#define u_sample f_l.w
+#define u_sunSize f_d.z
+#define u_lightRadius f_d.w
+#define u_aperture f_e.x
+#define u_focus f_e.y
 #define u_lightShadowMask f_k.x
 #define u_maxLayers f_k.y
 #define u_relax f_k.z
@@ -180,14 +187,28 @@ float gridLine(float x) {
   return 1.0 - smoothstep(0.0, fwidth(x), f);
 }
 
+// ---- stochastic sampling: one random path per pixel and sample, averaged over many samples ----
+uint g_seed = 1u;
+uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+float rnd() { g_seed = pcg(g_seed); return float(g_seed) * (1.0 / 4294967296.0); }
+// random direction in 4D (approximately uniform: normalised near-gaussian components)
+vec4 rndDir4() {
+  vec4 v = vec4(rnd() + rnd() + rnd(), rnd() + rnd() + rnd(), rnd() + rnd() + rnd(), rnd() + rnd() + rnd()) - 1.5;
+  return v * inversesqrt(max(dot(v, v), 1e-8));
+}
+
 // light li (0 = sun, 1.. = point lights) seen from hp: direction, colour, distance to it
 void lightAt(int li, vec4 hp, vec4 wn, vec4 dir, out vec4 L, out vec3 lc, out float lmax) {
+  bool stoch = u_stochastic == 1;
   if (li == 0) {
     L = normalize(u_light);
+    if (stoch) L = normalize(L + rndDir4() * u_sunSize);  // a sun of some size: soft shadows
     lc = vec3(u_sunI);
     lmax = u_shadowMax;
   } else {
-    vec4 d = u_lpos[li - 1] - hp;
+    vec4 lp = u_lpos[li - 1];
+    if (stoch) lp += rndDir4() * (u_lightRadius * rnd());  // a light ball, not a point
+    vec4 d = lp - hp;
     float dist = length(d);
     L = d / max(dist, 1e-6);
     float a = clamp(1.0 - dist / max(u_lcol[li - 1].w, 1e-3), 0.0, 1.0);
@@ -203,9 +224,21 @@ void lightAt(int li, vec4 hp, vec4 wn, vec4 dir, out vec4 L, out vec3 lc, out fl
 const int MARCH = 0, NORMAL = 1, AO = 2, SHADOW = 3, DONE = 4;
 
 void main() {
-  vec2 uv = v_uv * vec2(u_res.x / u_res.y, 1.0);
+  bool stoch = u_stochastic == 1;
+  g_seed = pcg(uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(u_sample) * 26699u) | 1u;
+  // stochastic: a random point inside the pixel (anti-aliasing as the samples add up)
+  vec2 jit = stoch ? (vec2(rnd(), rnd()) - 0.5) * 2.0 / u_res.y : vec2(0.0);
+  vec2 uv = v_uv * vec2(u_res.x / u_res.y, 1.0) + jit;
   vec4 ro = u_eye;
   vec4 rd = normalize(u_frame * vec4(uv * u_tanHalf, 1.0, 0.0));
+#ifndef VIEW_GEO
+  if (stoch && u_aperture > 0.0) {  // depth of field: rays from a lens disc, sharp at the focus distance
+    vec4 fp = ro + rd * (u_focus / max(dot(rd, u_frame[2]), 1e-3));
+    float a = 6.2831853 * rnd(), r = u_aperture * sqrt(rnd());
+    ro += (u_frame[0] * cos(a) + u_frame[1] * sin(a)) * r;
+    rd = normalize(fp - ro);
+  }
+#endif
 
   vec4 p = ro, dir = rd;
   float t = 0.0;
@@ -238,7 +271,18 @@ void main() {
     if (phase == DONE) break;
     vec4 q = p;
     if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3; }
-    else if (phase == AO) q = hp + n * (0.03 + 0.12 * float(k + 1));
+    else if (phase == AO) {
+      vec4 ad = n;
+      if (stoch) {  // sampled ambient occlusion: random directions around the normal
+        ad = n + rndDir4() * 0.8;
+#ifdef VIEW_GEO
+        ad -= dot(ad, wn) * wn;
+#endif
+        ad = normalize(ad);
+        if (dot(ad, n) < 0.0) ad = reflect(ad, n);
+      }
+      q = hp + ad * (0.03 + 0.12 * float(k + 1));
+    }
     else if (phase == SHADOW) q = sp;
 
     MAT mm;
@@ -323,7 +367,7 @@ void main() {
       occ += (hh - d) * aow; aow *= 0.7; k++;
       if (k >= u_aoSamples) startLights = true;
     } else {  // SHADOW toward light li
-      sh = min(sh, u_shadowK * d / st);
+      sh = stoch ? (d < 0.002 ? 0.0 : sh) : min(sh, u_shadowK * d / st);  // stochastic: hard per sample, soft on average
       sSteps++;
       if (sh < 0.02 || st > shMax || sSteps > u_shadowSteps) {
         // this light is done: add its contribution
@@ -385,19 +429,43 @@ void main() {
         float transp = canBounce ? clamp(hm[1].w, 0.0, 1.0) : 0.0;
         float metal = canBounce ? clamp(hm[2].x, 0.0, 1.0) : 0.0;
         float wSurf = (1.0 - transp) * (1.0 - metal);  // the surface's own colour
-        accum += thr * wSurf * c;
-        float cont = 1.0 - wSurf;                      // what continues as a reflected / refracted ray
-        if (cont > 0.01 && layers < u_maxLayers && max(thr.r, max(thr.g, thr.b)) * cont > 0.02) {
+        int path = 0;                                   // 0: stop here, 1: reflect, 2: refract
+        vec3 tint = vec3(1.0);
+        if (stoch) {
+          // one path per sample, chosen by its share: the surface, a mirror reflection, or (glass)
+          // a Fresnel reflection / refraction; the average over samples mixes them correctly
+          float ior = max(hm[2].y, 1.0), f0 = (ior - 1.0) / (ior + 1.0);
+          float F = f0 * f0 + (1.0 - f0 * f0) * pow(1.0 - abs(dot(dir, n)), 5.0);
+          float wM = metal * (1.0 - transp), wR = transp * F, r = rnd();
+          if (r < wSurf) accum += thr * c;
+          else if (r < wSurf + wM) { path = 1; tint = mix(vec3(1.0), base, 0.6); }
+          else if (r < wSurf + wM + wR) path = 1;
+          else { path = 2; tint = mix(vec3(1.0), base, 0.25); }
+        } else {
+          accum += thr * wSurf * c;
+          float cont = 1.0 - wSurf;  // what continues as a reflected / refracted ray
+          if (cont > 0.01 && max(thr.r, max(thr.g, thr.b)) * cont > 0.02) {
+            path = metal >= transp ? 1 : 2;
+            tint = cont * mix(vec3(1.0), base, path == 1 ? 0.6 : 0.25);
+          }
+        }
+        if (path != 0 && layers < u_maxLayers) {
           layers++;
           phase = MARCH; hit = false;
-          if (metal >= transp) {
-            // mirror: reflect, tinted by the surface colour (like a metal)
-            thr *= cont * mix(vec3(1.0), base, 0.6);
+          thr *= tint;
+          if (path == 1) {
+            // mirror: reflect (stochastic: rough surfaces scatter the reflection)
             dir = reflect(dir, n);
+            if (stoch && hm[1].y > 0.02) {
+              dir = normalize(dir + rndDir4() * hm[1].y * hm[1].y);
+#ifdef VIEW_GEO
+              dir = normalize(dir - dot(dir, wn) * wn);
+#endif
+              if (dot(dir, n) < 0.0) dir = reflect(dir, n);
+            }
             p = hp + n * (u_eps * 4.0);
           } else {
             // glass: bend into the object by its index of refraction
-            thr *= cont * mix(vec3(1.0), base, 0.25);
             vec4 nd2 = refract(dir, n, 1.0 / max(hm[2].y, 1.0));
             dir = dot(nd2, nd2) < 1e-6 ? reflect(dir, n) : normalize(nd2);
             inside = dot(nd2, nd2) >= 1e-6;

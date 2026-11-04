@@ -57,6 +57,14 @@ void UI::cameraProperties(Node& n, bool& live, bool& done) {
   keyable(id, {"cam.fov"});
   track();
   if (!geoCam) {
+    float ap = (float)n.camAperture, fo = (float)n.camFocus;
+    if (ImGui::DragFloat("Aperture", &ap, 0.002f, 0, 2, "%.3f")) n.camAperture = std::max(0.f, ap);
+    keyable(id, {"cam.aperture"});
+    track();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Depth of field: lens radius (0 = all sharp). Seen with stochastic sampling");
+    if (ImGui::DragFloat("Focus distance", &fo, 0.02f, 0.05f, 500)) n.camFocus = std::max(0.05f, fo);
+    keyable(id, {"cam.focus"});
+    track();
     const char* ax[4] = {"X", "Y", "Z", "W"};
     if (ImGui::Combo("Slider axis", &n.camSlider, ax, 4)) done = true;
     keyable(id, {"cam.slider"});
