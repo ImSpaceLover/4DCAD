@@ -118,6 +118,32 @@ void UI::timelinePanel() {
     ImGui::EndCombo();
   }
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("How the selected keys go over to the next key");
+  {  // extrapolation of the tracks with selected keys
+    int ex = -1;
+    for (auto& t : A.tracks) {
+      bool any = false;
+      for (auto& k : t.keys) any |= k.selected;
+      if (any) ex = ex == -1 || ex == (int)t.linearExtrap ? (int)t.linearExtrap : -2;
+    }
+    ImGui::SameLine(0, 2);
+    ImGui::SetNextItemWidth(118);
+    const char* exNames[2] = {"Hold", "Linear"};
+    const char* cur2 = ex >= 0 ? exNames[ex] : selKeys ? "(mixed)" : "Extrapolation";
+    if (ImGui::BeginCombo("##extrap", cur2)) {
+      for (int e = 0; e < 2; e++)
+        if (ImGui::Selectable(exNames[e], e == ex)) {
+          for (auto& t : A.tracks) {
+            bool any = false;
+            for (auto& k : t.keys) any |= k.selected;
+            if (any) { t.linearExtrap = e == 1; autoHandles(t); }
+          }
+          animCommit = true;
+        }
+      ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Before the first / after the last key of the selected keys' values:\nHold = stay at the key, Linear = keep moving at the same speed\n(rotations keep turning)");
+  }
   ImGui::EndDisabled();
   ImGui::SameLine(0, 14);
   if (toggleButton("Camera view", app.viewThroughCamera)) app.viewThroughCamera = !app.viewThroughCamera;
@@ -254,6 +280,18 @@ void UI::timelinePanel() {
     ImGui::TextDisabled("Interpolation");
     for (int i = 0; i < (int)Interp::Count; i++)
       if (ImGui::MenuItem(INTERP_NAMES[i])) { for (auto& t : A.tracks) for (auto& k : t.keys) if (k.selected) k.interp = (Interp)i; animCommit = true; }
+    ImGui::Separator();
+    ImGui::TextDisabled("Extrapolation (before / after the keys)");
+    auto setEx = [&](bool lin) {
+      for (auto& t : A.tracks) {
+        bool any = false;
+        for (auto& k : t.keys) any |= k.selected;
+        if (any) { t.linearExtrap = lin; autoHandles(t); }
+      }
+      animCommit = true;
+    };
+    if (ImGui::MenuItem("Constant (hold the value)")) setEx(false);
+    if (ImGui::MenuItem("Linear (keep moving)")) setEx(true);
     ImGui::Separator();
     if (ImGui::MenuItem("Delete keys", "X / Del")) { deleteSelectedKeys(); animCommit = true; }
     ImGui::EndPopup();

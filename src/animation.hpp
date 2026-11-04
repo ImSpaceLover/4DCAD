@@ -27,6 +27,9 @@ struct Key {
 struct Track {
   std::string target, path;
   std::vector<Key> keys;  // sorted by frame
+  // before the first / after the last key: hold the value (false), or carry on with the curve's
+  // slope there (true, Blender's linear extrapolation; rotations keep turning)
+  bool linearExtrap = false;
   bool rotation() const { return path == "rot"; }
 };
 

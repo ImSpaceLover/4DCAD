@@ -657,6 +657,42 @@ int main() {
     CHECK(back.root.children.size() == 2 && back.root.children[0].poly == h.poly && back.root.children[1].poly == pl.poly, "polytopes saved");
     CHECK(nodeDim(back.root.children[0], reg) == 3, "polytopes are 3D");
   }
+  {  // ---- linear extrapolation ----
+    Animation an;
+    Track& t = setKey(an, "n1", "pos.x", 1, 0, Interp::Linear);
+    setKey(an, "n1", "pos.x", 11, 10, Interp::Linear);
+    Track* tr = findTrack(an, "n1", "pos.x");
+    CLOSE(evalTrack(*tr, 21), 10.0, 1e-12);  // hold by default
+    tr->linearExtrap = true;
+    CLOSE(evalTrack(*tr, 21), 20.0, 1e-6);
+    CLOSE(evalTrack(*tr, -9), -10.0, 1e-6);
+    (void)t;
+    // bezier keys: the end handles follow the segment, so the motion carries on at its speed
+    Track* tb = &setKey(an, "n1", "pos.y", 1, 0);
+    setKey(an, "n1", "pos.y", 11, 5);
+    tb = findTrack(an, "n1", "pos.y");
+    tb->linearExtrap = true;
+    autoHandles(*tb);
+    CLOSE(evalTrack(*tb, 21), 10.0, 1e-3);
+    // rotations keep turning past 180 degrees (90 per 10 frames -> 270 at frame 31)
+    setRotKey(an, "n1", 1, identity(), Interp::Linear);
+    setRotKey(an, "n1", 11, planeRotation(0, 1, PI / 2), Interp::Linear);
+    Track* trr = findTrack(an, "n1", "rot");
+    trr->linearExtrap = true;
+    M4 r = evalRotation(*trr, 31), e = planeRotation(0, 1, 1.5 * PI);
+    double err = 0;
+    for (int i = 0; i < 16; i++) err = std::max(err, std::abs(r[i] - e[i]));
+    CHECK(err < 1e-6, "rotation keeps turning (err %g)", err);
+    // stepped values (e.g. visibility) always hold
+    Track& th = setKey(an, "n1", "hidden", 1, 0, Interp::Linear);
+    setKey(an, "n1", "hidden", 11, 1, Interp::Linear);
+    findTrack(an, "n1", "hidden")->linearExtrap = true;
+    CLOSE(evalTrack(*findTrack(an, "n1", "hidden"), 30), 1.0, 1e-12);
+    (void)th;
+    // saved
+    Animation back = animationFromJson(animationToJson(an));
+    CHECK(findTrack(back, "n1", "pos.x")->linearExtrap && !findTrack(back, "n1", "scale"), "extrapolation saved");
+  }
   {  // flat scenes do not write a space
     PrimitiveRegistry reg;
     Node root = makeGroup(BoolOp::Union, {}, "Scene");
