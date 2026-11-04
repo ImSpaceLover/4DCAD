@@ -10,6 +10,101 @@ void UI::startRender(bool animation) {
   else app.saveSettings();
 }
 
+void UI::presetsWidget() {
+  auto presets = app.renderPresets();
+  if (presetSel_.empty()) presetSel_ = app.activePreset.empty() ? "Balanced" : app.activePreset;
+  const App::RenderPreset* sel = nullptr;
+  for (auto& p : presets) if (p.name == presetSel_) sel = &p;
+  ImGui::PushID("presets");
+  ImGui::SetNextItemWidth(220);
+  std::string shown = sel ? presetSel_ + (sel->builtin ? "  (built-in)" : "") : std::string("(none)");
+  if (ImGui::BeginCombo("##preset", shown.c_str())) {
+    bool sep = false;
+    for (auto& p : presets) {
+      if (!p.builtin && !sep) { ImGui::Separator(); sep = true; }
+      std::string label = p.name + (p.name == app.activePreset ? "  *" : "");
+      if (ImGui::Selectable(label.c_str(), p.name == presetSel_)) presetSel_ = p.name;
+      if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+        std::string err;
+        if (app.applyPreset(p.json, err)) { app.activePreset = p.name; app.toast("Loaded preset " + p.name); } else app.toast(err, true);
+      }
+    }
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render presets: all rendering settings (quality, lighting, fast mode, samples,\n"
+                                                "the Render window's resolution / anti-aliasing / formats). * = loaded");
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!sel);
+  if (ImGui::Button("Load")) {
+    std::string err;
+    if (app.applyPreset(sel->json, err)) { app.activePreset = sel->name; app.toast("Loaded preset " + sel->name); } else app.toast(err, true);
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Save as...")) {
+    std::snprintf(presetName_, sizeof presetName_, "%s", sel && !sel->builtin ? presetSel_.c_str() : "My preset");
+    ImGui::OpenPopup("Save preset");
+  }
+  bool user = sel && !sel->builtin;
+  ImGui::BeginDisabled(!user);
+  if (ImGui::Button("Rename")) { std::snprintf(presetName_, sizeof presetName_, "%s", presetSel_.c_str()); ImGui::OpenPopup("Rename preset"); }
+  ImGui::SameLine();
+  if (ImGui::Button("Delete")) ImGui::OpenPopup("Delete preset");
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Import...")) fileAction(7);
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!sel);
+  if (ImGui::Button("Export...")) fileAction(8);
+  ImGui::EndDisabled();
+  if (sel && sel->builtin) { ImGui::SameLine(); ImGui::TextDisabled("(built-in: read-only)"); }
+
+  auto namePopup = [&](const char* id, const char* button, auto&& action) {
+    if (!ImGui::BeginPopup(id)) return;
+    ImGui::TextUnformatted(id);
+    ImGui::SetNextItemWidth(260);
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    bool enter = ImGui::InputText("##name", presetName_, sizeof presetName_, ImGuiInputTextFlags_EnterReturnsTrue);
+    bool exists = false;
+    for (auto& p : presets) if (p.name == presetName_) exists = true;
+    if (exists && std::string(presetName_) != presetSel_) ImGui::TextDisabled("Replaces the preset of this name");
+    if (ImGui::Button(button) || enter) { if (action()) ImGui::CloseCurrentPopup(); }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  };
+  namePopup("Save preset", "Save", [&] {
+    std::string err, name = presetName_;
+    if (!app.savePreset(name, err)) { app.toast(err, true); return false; }
+    presetSel_ = app.activePreset = name;
+    app.saveSettings();
+    app.toast("Saved preset " + name);
+    return true;
+  });
+  namePopup("Rename preset", "Rename", [&] {
+    std::string err, name = presetName_;
+    if (!app.renamePreset(presetSel_, name, err)) { app.toast(err, true); return false; }
+    if (app.activePreset == presetSel_) app.activePreset = name;
+    presetSel_ = name;
+    app.saveSettings();
+    return true;
+  });
+  if (ImGui::BeginPopup("Delete preset")) {
+    ImGui::Text("Delete the preset \"%s\"?", presetSel_.c_str());
+    if (ImGui::Button("Delete")) {
+      app.deletePreset(presetSel_);
+      if (app.activePreset == presetSel_) app.activePreset.clear();
+      presetSel_.clear();
+      app.saveSettings();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+  ImGui::PopID();
+}
+
 void UI::renderWindow() {
   ImGui::SetNextWindowSize({460, 640}, ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Render", &showRender_)) { ImGui::End(); return; }
@@ -23,6 +118,8 @@ void UI::renderWindow() {
   else ImGui::TextColored({1, 0.7f, 0.3f, 1}, "No active camera: the current view is rendered");
 
   ImGui::BeginDisabled(busy);
+  ImGui::SeparatorText("Preset");
+  presetsWidget();
   // --- image
   ImGui::SeparatorText("Image");
   int wh[2] = {r.width, r.height};
@@ -51,13 +148,15 @@ void UI::renderWindow() {
   auto pathField = [&](const char* id, std::string& path, bool animation) {
     char buf[1024];
     std::snprintf(buf, sizeof buf, "%s", path.c_str());
-    ImGui::SetNextItemWidth(-90);
+    bool native = nativeDialogsAvailable();
+    ImGui::SetNextItemWidth(native ? -90 : -1);
     std::string hint = app.renderPath(animation);
     if (ImGui::InputTextWithHint(id, hint.c_str(), buf, sizeof buf)) { path = buf; changed = true; }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", app.renderPath(animation).c_str());
+    if (!native) return;
     ImGui::SameLine();
     ImGui::PushID(id);
-    if (ImGui::Button("Browse") && nativeDialogsAvailable()) {
+    if (ImGui::Button("Browse")) {
       std::string p = saveFileDialog(animation ? "Save animation" : "Save image", app.renderPath(animation));
       if (!p.empty()) { path = p; changed = true; }
     }

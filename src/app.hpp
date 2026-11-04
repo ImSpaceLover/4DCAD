@@ -161,6 +161,22 @@ class App {
   double renderProgress() const;
   /** The output path a render would use (the chosen one, or next to the scene file; extension = format). */
   std::string renderPath(bool animation) const;
+  // --- render presets (all rendering settings; JSON files in <data>/presets) ---
+  struct RenderPreset {
+    std::string name;
+    bool builtin = false;  // Fast / Balanced / Full: read-only
+    std::string json;
+  };
+  static std::vector<RenderPreset> builtinPresets();
+  std::vector<RenderPreset> renderPresets() const;  // built-in first, then the user's (by name)
+  std::string currentPresetJson(const std::string& name) const;
+  bool applyPreset(const std::string& json, std::string& err);
+  bool savePreset(const std::string& name, std::string& err);  // the current settings (overwrites)
+  bool deletePreset(const std::string& name);
+  bool renamePreset(const std::string& from, const std::string& to, std::string& err);
+  bool importPreset(const std::string& path, std::string& err, std::string* name = nullptr);
+  bool exportPreset(const std::string& name, const std::string& path, std::string& err);
+  std::string activePreset;  // last loaded / saved (shown in the preset list)
   /** The main settings as a render profile (what the viewport draws when idle). */
   RenderProfile mainProfile() const;
 

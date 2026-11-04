@@ -1,4 +1,9 @@
 // App-level tests (no window / GL context needed): editing tools, slices, thumbnail.
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+#include <algorithm>
+#include <filesystem>
 #include <cstdio>
 #include <cstdlib>
 
@@ -757,6 +762,50 @@ int main() {
   V4 cam = app.currentView().eye;
   CHECK(std::abs(dot(cam - tv.eye, col(tv.frame, 3))) < 1e-6, "thumbnail slice contains camera");
   CHECK(std::abs(dot(V4{0, 0, 0, 0} - tv.eye, col(tv.frame, 3))) < 1e-6, "thumbnail slice contains world centre");
+
+#ifndef _WIN32
+  {  // --- render presets: save / load / rename / delete / export / import (in a temporary settings folder) ---
+    namespace fs = std::filesystem;
+    fs::path tmp = fs::temp_directory_path() / ("4dcad-test-" + std::to_string(::getpid()));
+    fs::remove_all(tmp);
+    setenv("XDG_CONFIG_HOME", tmp.string().c_str(), 1);
+    auto names = [&] { std::vector<std::string> n; for (auto& p : app.renderPresets()) n.push_back(p.name); return n; };
+    auto has = [&](const std::string& n) { auto v = names(); return std::find(v.begin(), v.end(), n) != v.end(); };
+    CHECK(names().size() == 3 && has("Fast") && has("Balanced") && has("Full"), "built-in presets");
+    std::string err;
+    CHECK(!app.savePreset("Full", err), "built-in presets are read-only");
+    app.quality.maxSteps = 333;
+    app.quality.viewportSamples = 77;
+    app.quality.fast.bounces = 2;
+    app.renderSet.width = 999;
+    app.renderSet.samples = 55;
+    app.renderSet.stillPath = "/somewhere/x.png";
+    CHECK(app.savePreset("Mine", err), "save: %s", err.c_str());
+    CHECK(has("Mine"), "saved preset listed");
+    std::string fastJson;
+    for (auto& p : app.renderPresets()) if (p.name == "Fast") fastJson = p.json;
+    CHECK(app.applyPreset(fastJson, err), "load Fast");
+    CHECK(app.quality.maxSteps != 333 && app.renderSet.width == 640 && app.renderSet.samples == 1, "Fast applied (%d, %d)", app.quality.maxSteps, app.renderSet.width);
+    CHECK(app.renderSet.stillPath == "/somewhere/x.png", "presets keep output paths");
+    CHECK(app.renamePreset("Mine", "Ours", err) && has("Ours") && !has("Mine"), "rename");
+    fs::path ex = tmp / "exported.json";
+    CHECK(app.exportPreset("Ours", ex.string(), err) && fs::exists(ex), "export");
+    std::string imported;
+    CHECK(app.importPreset(ex.string(), err, &imported) && imported == "Ours 2", "import gets a free name: %s", imported.c_str());
+    for (auto& p : app.renderPresets()) if (p.name == "Ours 2") CHECK(app.applyPreset(p.json, err), "load imported");
+    CHECK(app.quality.maxSteps == 333 && app.quality.viewportSamples == 77 && app.quality.fast.bounces == 2, "quality restored");
+    CHECK(app.renderSet.width == 999 && app.renderSet.samples == 55, "output settings restored");
+    CHECK(app.deletePreset("Ours") && !has("Ours") && has("Ours 2"), "delete");
+    CHECK(!app.applyPreset("{\"x\": 1}", err), "not a preset");
+    // output paths: the extension follows the format
+    app.renderSet.stillFormat = 1;
+    CHECK(app.renderPath(false) == "/somewhere/x.jpg", "still path %s", app.renderPath(false).c_str());
+    app.renderSet.animPath = "";
+    app.renderSet.animFormat = 3;
+    CHECK(fs::path(app.renderPath(true)).extension() == ".mp4", "default animation path %s", app.renderPath(true).c_str());
+    fs::remove_all(tmp);
+  }
+#endif
 
   std::printf("%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

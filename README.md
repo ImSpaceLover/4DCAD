@@ -53,6 +53,9 @@ cmake --build build-win
 ```
 
 Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo] [--explore]`.
+Rendering from the command line (renders like the Render window, from the active camera, then quits):
+`4DCAD scene.4dscene.json --render out.png|.jpg|.gif|.avi|.mp4|.webm [--animation] [--render-size 1920x1080] [--samples 64] [--aa 2]`
+(`--animation` with `.png` writes a numbered PNG sequence).
 
 ## Modes and controls
 
@@ -137,6 +140,33 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
 * **Camera view** (timeline button, or **Ctrl+Numpad 0**): the viewport shows the active camera, to preview the animation; navigating leaves it.
 * Animation is saved in the scene, and its changes can be undone.
 
+## Rendering images and videos
+
+* **Render window** (Render menu): renders from the **active camera**, or from the current view
+  when the scene has no camera. The camera's depth of field is used.
+  * **F12**: render an image of the current frame. **Ctrl+F12**: render the animation.
+  * **Resolution** (with common sizes under "..."), **anti-aliasing** (renders 2× / 3× larger and
+    averages down), and **samples**. Samples are stochastic samples per pixel: soft shadows, rough
+    reflections, glass that reflects or refracts at random, and depth of field. 1 gives the plain image.
+  * Quality (march steps, bounces, shadows, AO, lighting) comes from Settings > Rendering, or from a preset.
+  * **Still image:** PNG or JPEG.
+  * **Animation:** GIF, AVI (Motion JPEG; plays without extra codecs), PNG sequence (`name_0001.png`, ...),
+    or MP4 (H.264) / WebM (VP9) through **ffmpeg** if it is installed. Set the ffmpeg command or path in
+    the window, where "found / not found" shows whether it runs.
+  * Frame range and fps come from the timeline, or can be set in the window.
+  * The output file defaults to the scene's folder (`scene_render.png`, `scene_animation.gif`). The
+    extension follows the chosen format.
+* Rendering runs in the background: the app stays usable, with a progress bar, a preview of the
+  image being refined, and **Cancel**. A cancelled animation keeps the frames rendered so far. The
+  render uses the scene as it was when it started, so editing meanwhile does not change it.
+* **Render presets** (in the Render window and Settings > Rendering): named sets of all rendering
+  settings. That covers quality, lighting, sky, fast mode and viewport samples, plus the Render
+  window's resolution, anti-aliasing, samples, formats and frame range. Output paths are not
+  included.
+  * **Load** (or double-click in the list), **Save as**, **Rename**, **Delete**, and **Export / Import** as `.json` files to share.
+  * User presets are stored in the settings folder (`presets/`).
+  * **Fast / Balanced / Full** are built in and read-only. They set quality and image size, and leave the look (light, sky, fog) and the output format as they are.
+
 ## Saving and settings
 
 * Nothing is written to your scene file unless you save (**Ctrl+S**; **Ctrl+Shift+S** = save as). The toolbar shows "unsaved" when there are changes. Quitting, New, Open and loading an example ask whether to save first.
@@ -150,6 +180,7 @@ Optional command line: `4DCAD [scene.json] [--example playground|planet] [--geo]
     * Lighting: soft shadows (sharpness, distance), ambient occlusion (strength), ambient light, light direction including its W component.
     * Sky and fog: sky colours and fog amount.
     * Geodesic rays: max step size and projections.
+    * Presets: load / save / rename / delete / import / export render presets (see Rendering images and videos).
   * **Keys**: every shortcut and movement key can be rebound (two keys per action). Click a key and press the new one; right-click clears it. A red "!" marks keys that clash with another action in the same mode. "Reset all to defaults" restores the keys listed in this README.
 
 ## Performance
@@ -179,10 +210,12 @@ src/evaluator.*               reference CPU SDF + bounding hyperspheres
 src/geodesic.*, surface.*     surface projection, frame transport, picking, anchoring
 src/camera.*                  Full-4D orbit/fly camera, surface-bound geodesic camera
 src/codegen.*, shaders.hpp    scene → GLSL, ray-marching shader
-src/renderer.*, gl.*          OpenGL renderer and function loader
+src/renderer.*, gl.*          renderer (shared part), OpenGL / Vulkan backends, function loader
+src/media.*                   PNG / JPEG / GIF / AVI writers, ffmpeg pipe
+src/render_job.cpp            offline renders (Render window)
 src/app.*                     state, tools, undo, explore movement, thumbnail
 src/ui*.cpp, ui_common.hpp    ImGui interface (ui.cpp core, ui_toolbar / ui_library / ui_tree /
-                              ui_properties / ui_viewport / ui_windows panels)
+                              ui_properties / ui_viewport / ui_windows / ui_timeline / ui_render panels)
 src/filedialog.*, main.cpp    native file dialogs, window
 tests/                        core and app-level unit tests (ctest)
 ```

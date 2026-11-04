@@ -71,6 +71,10 @@ class UI {
   void renderWindow();
   void startRender(bool animation);
   bool showRender_ = false;
+  void presetsWidget();       // render presets (Settings > Rendering and the Render window)
+  std::string presetSel_;     // preset chosen in the list
+  char presetName_[128] = {};  // Save as / Rename
+  bool openPathPrompt_ = false;
   int ffmpegOk_ = -1;  // -1 = not checked, 0 / 1
   std::string ffmpegChecked_;
   // timeline + graph editor (ui_timeline.cpp)

@@ -87,19 +87,21 @@ void UI::onKey(int key, int action, int mods) {
 
 // ============================================================ file actions
 void UI::fileAction(int action) {
-  const char* titles[] = {"", "Open scene", "Save scene", "Import library item", "Export library", "Export object", "Export library object"};
+  const char* titles[] = {"", "Open scene", "Save scene", "Import library item", "Export library", "Export object", "Export library object",
+                          "Import render preset", "Export render preset"};
   std::string def;
   if (action == 2) def = app.currentFile.empty() ? "scene.4dscene.json" : app.currentFile;
   if (action == 4) def = "4dcad-library.json";
   if (action == 5) def = (app.selected() ? app.selected()->name : std::string("object")) + ".4dobj.json";
   if (action == 6) { auto* o = app.lib.find(exportPrimId_); def = (o ? o->name : std::string("object")) + ".4dobj.json"; }
+  if (action == 8) def = presetSel_ + ".4dpreset.json";
   if (!nativeDialogsAvailable()) {
     pendingAction_ = action;
     std::snprintf(pathBuf_, sizeof pathBuf_, "%s", def.c_str());
-    ImGui::OpenPopup("File path");
+    openPathPrompt_ = true;  // opened at the top level (pathPrompt), whichever window asked
     return;
   }
-  std::string path = (action == 1 || action == 3) ? openFileDialog(titles[action]) : saveFileDialog(titles[action], def);
+  std::string path = (action == 1 || action == 3 || action == 7) ? openFileDialog(titles[action]) : saveFileDialog(titles[action], def);
   if (!path.empty()) doFileAction(action, path);
 }
 
@@ -121,6 +123,12 @@ void UI::doFileAction(int action, const std::string& path) {
       writeFile(path, libraryObjectToJson(makeLibraryObject(*n, app.reg, n->name))) ? app.toast("Exported object") : app.toast("Cannot write", true);
       break;
     }
+    case 7: {
+      std::string name;
+      if (app.importPreset(path, err, &name)) { presetSel_ = name; app.toast("Imported preset " + name); } else app.toast(err, true);
+      break;
+    }
+    case 8: if (app.exportPreset(presetSel_, path, err)) app.toast("Exported preset " + presetSel_); else app.toast(err, true); break;
     case 6: {
       if (auto* o = app.lib.find(exportPrimId_)) writeFile(path, libraryObjectToJson(*o)) ? app.toast("Exported " + o->name) : app.toast("Cannot write", true);
       break;
@@ -129,6 +137,7 @@ void UI::doFileAction(int action, const std::string& path) {
 }
 
 void UI::pathPrompt() {
+  if (openPathPrompt_) { ImGui::OpenPopup("File path"); openPathPrompt_ = false; }
   if (ImGui::BeginPopupModal("File path", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("Enter a file path:");
     ImGui::SetNextItemWidth(500);

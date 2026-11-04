@@ -61,6 +61,8 @@ void UI::qualityWindow() {
     }
     if (ImGui::BeginTabItem("Rendering")) {
       auto& q = app.quality;
+      ImGui::SeparatorText("Presets");
+      presetsWidget();
       ImGui::SeparatorText("Performance");
       Ff("Resolution", q.resolutionScale, 0.25f, 2.f, "%.2fx");
       Ff("While moving", q.motionScale, 0.2f, 1.f, "%.2fx", "Resolution factor while the camera or objects move");
