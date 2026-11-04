@@ -204,6 +204,14 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
 * **Keyframes:** **I** keys the selected objects (position / rotation / scale, or all values); **Alt+I** removes their keys at this frame. In Properties (and the Lights window) right-click any value to key just that value; a diamond next to it shows it is animated (filled: keyed on this frame). **Auto-key** keys every change you make. Everything numeric can be animated: transforms, material values and colours, modifier values (copies and axes step), smoothness, visibility, point lights and cameras (position, orientation, field of view).
 * The timeline shows the selected objects' keys (a summary row plus one row per value): click / Shift+click to select, drag to move, right-click for interpolation or delete, **X / Del** deletes, **Ctrl+C / Ctrl+V** copy and paste at the current frame, wheel zooms, middle-drag pans, **Home** frames everything.
 * **Interpolation** (per key, to the next key): constant, linear, bezier (smooth), ease in / out / in-out. **4D rotations** take the shortest 4D rotation path (both rotation planes turn together at constant speed). Objects and cameras on a world surface travel along the surface between keys.
+* **Objects on a world surface** (attached; Properties > World surface):
+  * **Follow surface** bends the object's X axis along the surface: along the geodesic through its anchor, with its frame carried along.
+    * A long rod lies along a curved world and goes through a wormhole's throat instead of sticking out straight.
+  * **Surface motion**: **Travel** (distance walked along the surface, along the object's X axis), **Heading** (turn about its Y axis first) and **Spin** (roll about its X axis), measured from a rest pose.
+    * Keying any of them (right-click, or the diamonds) switches the object to surface motion; from then on **I** keys these instead of position and rotation.
+    * The motion follows the surface exactly (also through a throat) and doesn't distort the object.
+    * Moving the object by hand moves its rest pose, i.e. the whole motion.
+  * Example: `examples/rod_through_wormhole.4dscene.json`, a rod travelling through the double wormhole (Render > Render animation).
 * **Extrapolation** (timeline combo next to Interpolation, or right-click keys): what a value does before its first and after its last key.
   * **Hold** stays at the key.
   * **Linear** keeps moving at the speed the curve has there, like Blender's linear extrapolation: a spin keeps turning, a move keeps going.

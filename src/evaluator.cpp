@@ -383,7 +383,34 @@ Sample SceneEvaluator::evalCurvedNode(const Node& n, const V4& p) const {
   return r;
 }
 
+bool followLocal(const Node& n, const V4& p, V4& q) {
+  // the nearest piece of the path (the ends extend straight on), then: x = arc length, y / z / w =
+  // the offset in the path's carried frame there (the shader does the same, see FOLLOW_GLSL)
+  if (!n.anchor || !n.anchor->follow || n.anchor->path.size() != (size_t)NPATH + 1) return false;
+  const auto& P = n.anchor->path;
+  double best = 1e300, bh = 0;
+  int bk = 0;
+  for (int k = 0; k < NPATH; k++) {
+    V4 ab = P[k + 1].pos - P[k].pos;
+    double h = dot(p - P[k].pos, ab) / std::max(dot(ab, ab), 1e-24);
+    if (k > 0) h = std::max(h, 0.0);
+    if (k < NPATH - 1) h = std::min(h, 1.0);
+    V4 c = P[k].pos + ab * h;
+    double d2 = dot(p - c, p - c);
+    if (d2 < best) { best = d2; bh = h; bk = k; }
+  }
+  const auto &A = P[bk], &B = P[bk + 1];
+  double t = clampd(bh, 0, 1);
+  V4 c = A.pos + (B.pos - A.pos) * bh, o = p - c;
+  V4 Y = normalize(A.y + (B.y - A.y) * t), Z = normalize(A.z + (B.z - A.z) * t), Nn = normalize(A.n + (B.n - A.n) * t);
+  double ds = 2 * n.anchor->pathLen / NPATH;
+  q = V4{-n.anchor->pathLen + (bk + bh) * ds, dot(o, Y), dot(o, Z), dot(o, Nn)} * (1.0 / n.xf.scale);
+  return true;
+}
+
 V4 SceneEvaluator::toLocal(const Node& n, const V4& p) const {
+  V4 bent;
+  if (followLocal(n, p, bent)) return bent;
   V4 q = mul(prep_.at(n.id).inv, p - n.xf.pos);
   return q * (1.0 / n.xf.scale);
 }

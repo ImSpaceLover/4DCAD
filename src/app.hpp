@@ -103,6 +103,16 @@ class App {
   void setCurvatureRadius(double r);
   /** The point reached from p along tangent vector v (its length = distance): p + v in flat space, a geodesic in curved. */
   V4 along(const V4& p, const V4& v) const;
+  // --- objects attached to a world surface: surface motion (Travel / Heading / Spin from a rest
+  // pose) and Follow surface (bent along the surface geodesic through the anchor) ---
+  /** Makes the current pose the rest pose (travel / heading / spin 0) if there is none yet. */
+  void ensureRest(Node& n);
+  /** Places the object from its rest pose and its travel / heading / spin. */
+  void applySurfacePose(Node& n);
+  /** After a manual move: the rest pose that gives the current pose with the current values. */
+  void setRestFromPose(Node& n);
+  /** Recomputes the follow-surface paths (called by rebuild). */
+  void updateFollowPaths();
   /** Curved overview: the outside camera looking at the ball, and a point's place in the ball
    *  (Poincare ball / stereographic projection: p.xyz / (1 + p.w)). */
   View ballView() const;

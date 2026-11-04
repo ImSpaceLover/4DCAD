@@ -39,6 +39,11 @@ std::vector<AnimValue> animatableValues(const Node& n) {
   std::vector<AnimValue> v;
   for (int i = 0; i < 4; i++) v.push_back({std::string("pos.") + AX[i], std::string("Position ") + (char)std::toupper(AX[i])});
   v.push_back({"rot", "Rotation"});
+  if (n.anchor) {  // attached to a world surface: motion along the surface (opt-in, see keyNode)
+    v.push_back({"surf.travel", "Travel (along the surface)"});
+    v.push_back({"surf.heading", "Heading"});
+    v.push_back({"surf.spin", "Spin"});
+  }
   if (n.isCamera()) {
     v.push_back({"cam.fov", "Field of view"});
     v.push_back({"cam.slider", "Slider axis", true});
@@ -106,6 +111,13 @@ static bool access(Node& n, const std::string& p, double& v, bool put) {
   if (p.rfind("pos.", 0) == 0) { int a = axisOf(p, 4); return a >= 0 && D(n.xf.pos[a]); }
   if (p == "scale") { if (put) n.xf.scale = std::max(1e-3, v); else v = n.xf.scale; return true; }
   if (p == "hidden") return B(n.hidden);
+  if (p.rfind("surf.", 0) == 0) {  // surface motion of attached objects
+    if (!n.anchor) return false;
+    if (p == "surf.travel") return D(n.anchor->travel);
+    if (p == "surf.heading") return D(n.anchor->heading);
+    if (p == "surf.spin") return D(n.anchor->spin);
+    return false;
+  }
   if (p == "cam.fov") return n.isCamera() && D(n.camFov);
   if (p == "cam.slider") return n.isCamera() && I(n.camSlider);
   if (p == "cam.aperture") return n.isCamera() && D(n.camAperture);
@@ -391,10 +403,18 @@ Track& setRotKey(Animation& a, const std::string& target, double frame, const M4
 
 void keyNode(Animation& a, const Node& n, double frame, bool transformOnly) {
   std::vector<AnimValue> vals;
-  if (transformOnly) {
+  bool surf = n.anchor && (isAnimated(a, n.id, "surf.travel") || isAnimated(a, n.id, "surf.heading") || isAnimated(a, n.id, "surf.spin"));
+  if (transformOnly && surf) {  // attached and moving along the surface: its surface motion and scale
+    for (const char* p : {"surf.travel", "surf.heading", "surf.spin"}) vals.push_back({p, p});
+    if (!n.isCamera()) vals.push_back({"scale", "scale"});
+  } else if (transformOnly) {
     for (auto& p : transformPaths()) if (!(n.isCamera() && p == "scale")) vals.push_back({p, p});
     if (n.isCamera()) vals.push_back({"cam.fov", ""});
-  } else vals = animatableValues(n);
+  } else {
+    vals = animatableValues(n);
+    if (!surf) vals.erase(std::remove_if(vals.begin(), vals.end(), [](const AnimValue& v) { return v.path.rfind("surf.", 0) == 0; }), vals.end());
+    else vals.erase(std::remove_if(vals.begin(), vals.end(), [](const AnimValue& v) { return v.path == "rot" || v.path.rfind("pos.", 0) == 0; }), vals.end());
+  }
   for (auto& v : vals) {
     if (v.path == "rot") { setRotKey(a, n.id, frame, nodeRotation(n)); continue; }
     double x;

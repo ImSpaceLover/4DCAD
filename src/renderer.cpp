@@ -144,7 +144,7 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
     scissor_[0] = std::clamp(scissor_[0], 0, rw); scissor_[1] = std::clamp(scissor_[1], 0, rh);
     scissor_[2] = std::clamp(scissor_[2], 1, rw - scissor_[0]); scissor_[3] = std::clamp(scissor_[3], 1, rh - scissor_[1]);
   }
-  draw(rt, rw, rh, p->handle, u, nodes, (int)p->cs.nodeIds.size());
+  draw(rt, rw, rh, p->handle, u, nodes, (int)(nodes.size() / (NODE_VEC4S * 4)));  // (+ extra rows: follow paths)
   return true;
 }
 

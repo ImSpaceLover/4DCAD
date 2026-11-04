@@ -41,6 +41,35 @@ vec2 opRadial(vec2 v, float r, float n, float s, float st) {
 float sS(float a, float b, float k) { if (b >= INF * 0.5 || a >= INF * 0.5) return a; float h = clamp(0.5 - 0.5 * (a + b) / k, 0.0, 1.0); return mix(a, -b, h) + k * h * (1.0 - h); }
 )";
 
+// Follow surface: the bent object's local coordinates from its path (extra node-data rows from
+// row `base`: (half length, sample spacing), then per sample: position, Y, Z, normal); the CPU
+// evaluator's followLocal is the same
+static_assert(NPATH == 32, "FOLLOW_GLSL assumes 32 path segments");
+static const char* FOLLOW_GLSL = R"(
+vec4 ndatx(int base, int k) { return ndat(base + k / 12, k - (k / 12) * 12); }
+vec4 followLocal(vec4 p, int base) {
+  vec4 hdr = ndatx(base, 0);
+  float bestD = 1e30, bh = 0.0;
+  int bk = 0;
+  for (int k = 0; k < 32; k++) {
+    vec4 a = ndatx(base, 1 + 4 * k), ab = ndatx(base, 5 + 4 * k) - a;
+    float h = dot(p - a, ab) / max(dot(ab, ab), 1e-12);
+    if (k > 0) h = max(h, 0.0);
+    if (k < 31) h = min(h, 1.0);
+    vec4 c = a + ab * h;
+    float d2 = dot(p - c, p - c);
+    if (d2 < bestD) { bestD = d2; bh = h; bk = k; }
+  }
+  int ia = 1 + 4 * bk, ib = ia + 4;
+  float t = clamp(bh, 0.0, 1.0);
+  vec4 a = ndatx(base, ia), c = a + (ndatx(base, ib) - a) * bh, o = p - c;
+  vec4 Y = normalize(mix(ndatx(base, ia + 1), ndatx(base, ib + 1), t));
+  vec4 Z = normalize(mix(ndatx(base, ia + 2), ndatx(base, ib + 2), t));
+  vec4 N = normalize(mix(ndatx(base, ia + 3), ndatx(base, ib + 3), t));
+  return vec4(-hdr.x + (float(bk) + bh) * hdr.y, dot(o, Y), dot(o, Z), dot(o, N));
+}
+)";
+
 // Material = mat3x4: column 0 (rgb, selection highlight), column 1 (emissive, roughness, specular,
 // transparency), column 2 (metallic, index of refraction, 0, 0).
 static const char* SCENE_HELPERS = R"(
@@ -443,7 +472,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
   std::ostringstream o;
   // per-node data comes from the node buffer (see packNodes): ndat(node, slot)
   (void)N;
-  o << SDF_HELPERS << SCENE_HELPERS;
+  o << SDF_HELPERS << SCENE_HELPERS << FOLLOW_GLSL;
 
   // primitives
   std::map<std::string, std::string> primFn;
@@ -503,7 +532,10 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     // bounding-sphere early out (threshold covers the parent's smooth blend radius)
     if (n.id != root.id) L << "  vec4 par = " << D(i, 5) << ";\n  float bd = length(p - " << D(i, 7) << ") - " << D(i, 8) << ".x;\n  if (bd > par.w && !g_exact) { m = MAT(0.0); return bd; }\n";
     else L << "  vec4 par = " << D(i, 5) << ";\n";
-    L << "  float s = par.x;\n  vec4 q = (" << ROT(i) << " * (p - " << D(i, 4) << ")) / s;\n  vec4 q0 = q;\n";
+      bool follow = n.anchor && n.anchor->follow && (role == Role::Tangent || role == Role::Hug);
+    if (follow)  // bent along the surface (packNodes stores the path; 8.w = its first row)
+      L << "  float s = par.x;\n  vec4 q = followLocal(p, int(" << D(i, 8) << ".w)) / s;\n  vec4 q0 = q;\n";
+    else L << "  float s = par.x;\n  vec4 q = (" << ROT(i) << " * (p - " << D(i, 4) << ")) / s;\n  vec4 q0 = q;\n";
     bool anchored = role == Role::Tangent || role == Role::Hug;
     if (anchored) L << "  float nd = q.w;\n";
     if (role == Role::Tangent) L << "  q.w = 0.0;\n";
@@ -635,6 +667,24 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
     // attached objects: how far from the tangent space they may reach (see attachCut)
     slot(8)[2] = (float)attachCut(reach, b != bounds.end() ? b->second.r : INFINITY);
   }
+  // follow-surface paths: extra rows after the nodes (12 rows = header + 33 samples x 4 vec4)
+  for (size_t i = 0; i < N; i++) {
+    auto it = byId.find(cs.nodeIds[i]);
+    if (it == byId.end() || !it->second->anchor) continue;
+    const Anchor& a = *it->second->anchor;
+    if (!a.follow || a.path.size() != (size_t)NPATH + 1) continue;
+    size_t base = d.size() / S;
+    d.resize(d.size() + 12 * S, 0.f);
+    float* x = &d[base * S];
+    x[0] = (float)a.pathLen;
+    x[1] = (float)(2 * a.pathLen / NPATH);
+    for (int k = 0; k <= NPATH; k++) {
+      const V4* v[4] = {&a.path[k].pos, &a.path[k].y, &a.path[k].z, &a.path[k].n};
+      for (int c = 0; c < 4; c++)
+        for (int e = 0; e < 4; e++) x[(1 + 4 * k + c) * 4 + e] = (float)(*v[c])[e];
+    }
+    d[i * S + 8 * 4 + 3] = (float)base;  // slot 8.w: first row of the path
+  }
   if (space && space->curved()) {
     // curved: inverse isometries relative to the parent (the root's also undoes the camera: the
     // shader works in camera-relative coordinates, which keeps float precision near the eye),
@@ -702,6 +752,7 @@ std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const s
   o << world << "|" << geo << "|" << (int)space << "|";
   walkc(root, [&](const Node& n, const Node*, int depth) {
     o << depth << n.id << (n.isLeaf() ? "L" + n.prim : n.isCamera() ? std::string("C") : "G" + std::to_string((int)n.op)) << (n.hidden ? "h" : "") << (n.anchor ? "a" + n.anchor->world : "");
+    if (n.anchor && n.anchor->follow) o << "F";
     for (auto& m : n.mods) o << "m" << m.type << m.axis << m.spacing << ":" << m.count << ":" << (int)m.mode << m.length << ":" << m.radius << ":" << m.i << m.j << m.angle;
     if (n.round) o << "r" << *n.round;
     if (n.shell) o << "s" << *n.shell;

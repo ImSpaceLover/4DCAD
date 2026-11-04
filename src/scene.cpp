@@ -398,7 +398,14 @@ static json nodeJ(const Node& n) {
   if (n.hidden) j["hidden"] = true;
   if (n.locked) j["locked"] = true;
   if (!n.linkId.empty()) j["link"] = n.linkId;
-  if (n.anchor) j["anchor"] = {{"world", n.anchor->world}, {"basis", m4j(n.anchor->basis)}, {"reach", n.anchor->reach}};
+  if (n.anchor) {
+    const Anchor& a = *n.anchor;
+    j["anchor"] = {{"world", a.world}, {"basis", m4j(a.basis)}, {"reach", a.reach}};
+    if (a.follow) j["anchor"]["follow"] = true;
+    if (a.hasRest)
+      j["anchor"]["rest"] = {{"pos", {a.restPos[0], a.restPos[1], a.restPos[2], a.restPos[3]}}, {"frame", m4j(a.restFrame)},
+                             {"travel", a.travel}, {"heading", a.heading}, {"spin", a.spin}};
+  }
   if (n.isLeaf()) {
     j["prim"] = n.prim;
     j["color"] = {n.color[0], n.color[1], n.color[2]};
@@ -465,6 +472,16 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
     a.world = j["anchor"].value("world", std::string());
     a.basis = jm4(j["anchor"].value("basis", json::array()));
     a.reach = j["anchor"].value("reach", 1e4);
+    a.follow = j["anchor"].value("follow", false);
+    if (j["anchor"].contains("rest") && j["anchor"]["rest"].is_object()) {
+      auto& r = j["anchor"]["rest"];
+      a.hasRest = true;
+      a.restPos = jv4(r.value("pos", json::array()));
+      a.restFrame = jm4(r.value("frame", json::array()));
+      a.travel = r.value("travel", 0.0);
+      a.heading = r.value("heading", 0.0);
+      a.spin = r.value("spin", 0.0);
+    }
     n.anchor = a;
   }
   if (n.isLeaf()) {
