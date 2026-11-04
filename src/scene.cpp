@@ -590,7 +590,8 @@ std::vector<PointLight> lightsFromJson(const std::string& text) {
 
 std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam,
                         const std::vector<CameraBookmark>* bookmarks, const std::vector<PointLight>* lights,
-                        const std::string& activeCamera, const std::string* animationJson) {
+                        const std::string& activeCamera, const std::string* animationJson, const Space* space,
+                        const CurvedCamState* curvedCam) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   j["world"] = world.empty() ? json(nullptr) : json(world);
   if (cam) j["camera"] = camJ(*cam);
@@ -600,6 +601,8 @@ std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::s
     try { j["animation"] = json::parse(*animationJson); } catch (...) {}
   }
   if (lights && !lights->empty()) j["lights"] = lightsJ(*lights);
+  if (space && space->curved()) j["space"] = {{"type", SPACE_IDS[(int)space->kind]}, {"radius", space->radius}};
+  if (space && space->curved() && curvedCam) j["curvedCamera"] = {{"iso", std::vector<double>(curvedCam->iso.begin(), curvedCam->iso.end())}, {"distance", curvedCam->distance}};
   return j.dump(2);
 }
 
@@ -712,6 +715,19 @@ SceneFile sceneFromJson(const std::string& text) {
   f.activeCamera = j.value("activeCamera", std::string());
   if (j.contains("animation") && j["animation"].is_object()) f.animation = j["animation"].dump();
   if (j.contains("lights")) f.lights = jLights(j["lights"]);
+  if (j.contains("space") && j["space"].is_object()) {
+    std::string t = j["space"].value("type", std::string("flat"));
+    for (int i = 0; i < 3; i++) if (t == SPACE_IDS[i]) f.space.kind = (SpaceKind)i;
+    f.space.radius = std::max(0.05, j["space"].value("radius", 8.0));
+  }
+  if (f.space.curved() && j.contains("curvedCamera") && j["curvedCamera"].is_object()) {
+    CurvedCamState c;
+    auto& o = j["curvedCamera"];
+    c.iso = jm4(o.value("iso", json::array()));
+    c.distance = o.value("distance", 8.0);
+    c.iso = cs::renorm(f.space.k(), c.iso);
+    f.curvedCam = c;
+  }
   return f;
 }
 

@@ -2,6 +2,7 @@
 // placement, gizmo / transform tools, explore movement, frame rendering.
 #pragma once
 #include <functional>
+#include <sstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -88,6 +89,19 @@ class App {
   std::vector<std::string> selection;
   std::unique_ptr<SceneEvaluator> ev;
   std::string currentFile;
+
+  // --- space: Flat 4D, or a curved 3D space (Hyperbolic / Spherical), chosen for a new scene ---
+  Space space;
+  bool curved() const { return space.curved(); }
+  CurvedCamera curvCam;  // editor / Explore camera of curved scenes
+  /** World isometry of a node in a curved scene (columns: its axes at its position, the position). */
+  M4 nodeWorldIso(const std::string& id, double* sAncOut = nullptr);
+  /** Where a light is in the world (curved scenes: its position is normal coordinates at the origin). */
+  V4 lightWorldPos(const PointLight& l) const;
+  /** Changes the curvature radius (curved scenes; objects keep their coordinates). */
+  void setCurvatureRadius(double r);
+  /** The point reached from p along tangent vector v (its length = distance): p + v in flat space, a geodesic in curved. */
+  V4 along(const V4& p, const V4& v) const;
 
   // --- modes / cameras ---
   Mode mode = Mode::Edit;
@@ -186,7 +200,7 @@ class App {
   bool loadSceneFile(const std::string& path, std::string& err);
   bool saveSceneFile(const std::string& path, std::string& err);
   std::string serialize();
-  void newScene();
+  void newScene(SpaceKind kind = SpaceKind::Flat, double radius = 8);
   void rebuild();
   void commit();
   void undo();
@@ -318,6 +332,7 @@ class App {
   bool debugFrozen = false;  // keep the current debug ray instead of re-tracing it from the view
   RayTrace debugTrace;       // the debug ray (traced from the eye along the view direction)
   void renderFrame();
+  void curvedParams(FrameParams& fp, const View& v, std::ostringstream& key);
   void prepareJobFrame();
   void finishJobFrame();
   View thumbnailView();

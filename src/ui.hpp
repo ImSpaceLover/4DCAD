@@ -19,7 +19,7 @@ class UI {
   void onScroll(double y) { wheel_ += y; }
   bool exitNow = false;  // set once quitting is confirmed
   void requestQuit();    // asks to save unsaved changes first
-  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
+  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "new") openNewScene_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
 
  private:
   App& app;
@@ -75,6 +75,10 @@ class UI {
   std::string presetSel_;     // preset chosen in the list
   char presetName_[128] = {};  // Save as / Rename
   bool openPathPrompt_ = false;
+  void newSceneDialog();
+  bool openNewScene_ = false;
+  int newKind_ = 1;
+  float newRadius_ = 8;
   int ffmpegOk_ = -1;  // -1 = not checked, 0 / 1
   std::string ffmpegChecked_;
   // timeline + graph editor (ui_timeline.cpp)

@@ -26,7 +26,7 @@ FetchContent_Populate(stb)
 # --- core (platform independent: no OpenGL / window) ------------------------------
 add_library(fdcore STATIC
   src/primitives.cpp src/scene.cpp src/evaluator.cpp src/geodesic.cpp src/camera.cpp
-  src/surface.cpp src/codegen.cpp src/examples.cpp src/library.cpp src/animation.cpp src/media.cpp)
+  src/surface.cpp src/codegen.cpp src/examples.cpp src/library.cpp src/animation.cpp src/space.cpp src/media.cpp)
 target_include_directories(fdcore PUBLIC src)
 target_include_directories(fdcore PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(fdcore PUBLIC nlohmann_json::nlohmann_json)

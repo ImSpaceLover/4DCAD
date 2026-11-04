@@ -153,6 +153,7 @@ void App::prepareJobFrame() {
   }
   fp.prof.resolution = 1;
   fp.scale = 1;
+  if (space.curved()) { std::ostringstream unused; curvedParams(fp, v, unused); }
   j.fp = fp;
   j.frameRoot = root;
 

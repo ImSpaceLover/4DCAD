@@ -30,6 +30,7 @@ void UI::frame(double dt) {
   if (app.showLights) lightsWindow();
   if (showRender_) renderWindow();
   pathPrompt();
+  newSceneDialog();
   unsavedPrompt();
   recoveryPrompt();
 
@@ -78,7 +79,7 @@ void UI::onKey(int key, int action, int mods) {
   if (P(Action::Save)) { saveScene(); return; }
   if (P(Action::SaveAs)) { fileAction(2); return; }
   if (P(Action::Open)) { guarded([this] { fileAction(1); }); return; }
-  if (P(Action::New)) { guarded([this] { app.newScene(); }); return; }
+  if (P(Action::New)) { guarded([this] { openNewScene_ = true; }); return; }
   if (P(Action::Copy)) { copy(); return; }
   if (P(Action::Paste)) { paste(); return; }
   if (P(Action::RenderImage) || P(Action::RenderAnimation)) { startRender(P(Action::RenderAnimation)); return; }
@@ -134,6 +135,42 @@ void UI::doFileAction(int action, const std::string& path) {
       break;
     }
   }
+}
+
+// File > New: the kind of space the scene lives in
+void UI::newSceneDialog() {
+  if (openNewScene_) { ImGui::OpenPopup("New scene"); openNewScene_ = false; }
+  ImGui::SetNextWindowSize({460, 0}, ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal("New scene", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+  static const char* desc[3] = {
+      "Four-dimensional Euclidean space. View 3D slices of it (Full 4D), or live on the 3D surface of a 4D "
+      "world object (Geodesic 3D: spheres, wormholes, any shape).",
+      "Three-dimensional space of constant negative curvature: parallel lines spread apart, triangles have "
+      "less than 180 degrees, and there is exponentially more room further away.",
+      "Three-dimensional space of constant positive curvature (a 3-sphere): straight lines close up into "
+      "circles, so looking far enough ahead you see the back of things."};
+  for (int i = 0; i < 3; i++) {
+    if (ImGui::RadioButton(SPACE_NAMES[i], newKind_ == i)) newKind_ = i;
+    ImGui::Indent();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 400);
+    ImGui::TextDisabled("%s", desc[i]);
+    ImGui::PopTextWrapPos();
+    ImGui::Unindent();
+  }
+  ImGui::BeginDisabled(newKind_ == 0);
+  ImGui::SetNextItemWidth(160);
+  ImGui::DragFloat("Curvature radius", &newRadius_, 0.05f, 0.5f, 200.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("R: curvature = -1/R^2 (hyperbolic) or +1/R^2 (spherical).\nCan be changed (and animated) later.");
+  if (newKind_ == 2) ImGui::TextDisabled("Distance around the whole space: %.1f", 2 * PI * newRadius_);
+  ImGui::EndDisabled();
+  ImGui::Separator();
+  if (ImGui::Button("Create", {120, 0})) {
+    app.newScene((SpaceKind)newKind_, newRadius_);
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", {120, 0})) ImGui::CloseCurrentPopup();
+  ImGui::EndPopup();
 }
 
 void UI::pathPrompt() {

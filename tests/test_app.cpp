@@ -763,6 +763,58 @@ int main() {
   CHECK(std::abs(dot(cam - tv.eye, col(tv.frame, 3))) < 1e-6, "thumbnail slice contains camera");
   CHECK(std::abs(dot(V4{0, 0, 0, 0} - tv.eye, col(tv.frame, 3))) < 1e-6, "thumbnail slice contains world centre");
 
+  for (SpaceKind kind : {SpaceKind::Hyperbolic, SpaceKind::Spherical}) {  // --- curved scenes ---
+    const char* nm = SPACE_NAMES[(int)kind];
+    App c;
+    c.vpX = 0; c.vpY = 0; c.vpW = 1000; c.vpH = 700;
+    c.newScene(kind, 5);
+    CHECK(c.curved() && c.space.kind == kind && c.ev->space.curved(), "%s: new scene", nm);
+    double k = c.space.k();
+    View v = c.currentView();
+    CHECK(std::abs(cs::mdot(k, v.eye, v.eye) - k) < 1e-9, "%s: the eye is a point of the space", nm);
+    // the view centre looks at the cube (orbit centre in front of it): a pick there hits something
+    auto hit = c.pick(500, 350);
+    CHECK(hit && hit->node, "%s: picking hits an object", nm);
+    // a picked point projects back to where it was clicked
+    if (hit) {
+      double sx, sy;
+      CHECK(c.project(hit->pos, v, sx, sy) && std::abs(sx - 500) < 0.5 && std::abs(sy - 350) < 0.5, "%s: project(pick) round trip", nm);
+    }
+    // nodes: world position of a child of the root = expO(its normal coordinates)
+    Node* cube = nullptr;
+    walk(c.root, [&](Node& n, Node*, int) { if (n.name == "Cube") cube = &n; });
+    CHECK(cube && cs::distance(c.space, c.nodeWorldPos(cube->id), cs::expO(c.space, cube->xf.pos)) < 1e-9, "%s: node world position", nm);
+    // Explore: walking forward moves the eye by the distance walked; collisions stop it at a wall
+    c.setMode(Mode::Explore);
+    V4 e0 = c.currentView().eye;
+    c.curvCam.move(c.space, {0, 0, 0.3, 0}, nullptr);
+    CHECK(std::abs(cs::distance(c.space, e0, c.currentView().eye) - 0.3) < 1e-9, "%s: walking", nm);
+    // walk straight at the cube (in hyperbolic space a line slanted toward the ground can stay
+    // above it forever, so aim at an object): collisions stop you in front of it
+    int blocked = 0;
+    for (int i = 0; i < 400; i++) {
+      View cv = c.currentView();
+      V4 to = mul(cs::inverse(k, cv.frame), cs::dirTo(c.space, cv.eye, c.nodeWorldPos(cube->id)));
+      V4 before = cv.eye;
+      c.curvCam.move(c.space, to * 0.1, [&](const V4& p) { return c.ev->evalCurved(p).d < 0.25; });
+      if (c.currentView().eye == before) blocked++;
+    }
+    double dEnd = c.ev->evalCurved(c.currentView().eye).d;
+    CHECK(blocked > 0 && dEnd >= 0.25 - 1e-9 && dEnd < 0.4, "%s: an object stops you (%d blocked, d = %.3f)", nm, blocked, dEnd);
+    c.setMode(Mode::Edit);
+    // curvature radius: changed, undone, saved and loaded
+    c.setCurvatureRadius(9);
+    c.commit();
+    CHECK(std::abs(c.space.radius - 9) < 1e-12, "%s: radius set", nm);
+    c.undo();
+    CHECK(std::abs(c.space.radius - 5) < 1e-12, "%s: radius undone", nm);
+    SceneFile f = sceneFromJson(c.serialize());
+    CHECK(f.space.kind == kind && f.curvedCam, "%s: saved with its space and camera", nm);
+    App d;
+    d.loadScene(f);
+    CHECK(d.curved() && length(d.currentView().eye - c.currentView().eye) < 1e-9, "%s: loaded at the same view", nm);
+  }
+
 #ifndef _WIN32
   {  // --- render presets: save / load / rename / delete / export / import (in a temporary settings folder) ---
     namespace fs = std::filesystem;

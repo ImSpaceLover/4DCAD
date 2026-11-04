@@ -58,6 +58,10 @@ struct FrameParams {
   int sample = 0;
   float blend = 1;  // 1 = replace the image, 1/(n+1) = add the (n+1)-th sample
   float aperture = 0, focus = 5;  // depth of field (stochastic only; cameras)
+  // curved spaces: the shader works camera-relative (view = origin + identity frame); camIso is the
+  // camera's isometry (world <- camera), light / marker positions are camera-relative model points
+  Space space;
+  M4 camIso = identity();
 };
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */
@@ -117,7 +121,7 @@ class Renderer {
   std::unordered_set<std::string> failed_;
   std::unordered_set<std::string> badCode_;
   std::unordered_map<std::string, std::string> codeErrors_;
-  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo);
+  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space);
 };
 
 /** OpenGL 3.3 backend (needs a current context with loaded functions). */

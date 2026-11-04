@@ -8,7 +8,7 @@ void UI::menuBar() {
   if (!ImGui::BeginMainMenuBar()) return;
   auto K = [this](Action a) { return app.keys.text(a); };  // current binding, shown in the menus
   if (ImGui::BeginMenu("File")) {
-    if (ImGui::MenuItem("New", K(Action::New).c_str())) guarded([this] { app.newScene(); });
+    if (ImGui::MenuItem("New...", K(Action::New).c_str())) guarded([this] { openNewScene_ = true; });
     if (ImGui::MenuItem("Open...", K(Action::Open).c_str())) guarded([this] { fileAction(1); });
     if (ImGui::MenuItem("Save", K(Action::Save).c_str())) saveScene();
     if (ImGui::MenuItem("Save as...", K(Action::SaveAs).c_str())) fileAction(2);
@@ -112,6 +112,19 @@ void UI::toolbar() {
   ImGui::SameLine(0, 2);
   if (toggleButton("Explore", app.mode == Mode::Explore, "Explore mode (Tab)")) app.setMode(Mode::Explore);
   ImGui::SameLine(0, 16);
+  if (app.curved()) {
+    // curved 3D space: its kind and curvature radius (the space bends around unchanged coordinates)
+    ImGui::TextUnformatted(SPACE_NAMES[(int)app.space.kind]);
+    ImGui::SameLine();
+    float r = (float)app.space.radius;
+    ImGui::SetNextItemWidth(120);
+    if (ImGui::DragFloat("##curvR", &r, 0.02f * std::max(1.f, r), 0.2f, 1000.f, "R = %.2f", ImGuiSliderFlags_Logarithmic)) app.setCurvatureRadius(r);
+    if (ImGui::IsItemDeactivatedAfterEdit()) app.commit();
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Curvature radius: curvature = %s1 / R^2 (%s).\nSmaller = more strongly curved; objects keep their coordinates.",
+                        app.space.kind == SpaceKind::Spherical ? "+" : "-", app.space.kind == SpaceKind::Spherical ? "spherical" : "hyperbolic");
+  }
+  if (!app.curved()) {
   if (toggleButton("Full 4D", !app.geo, "Full 4D view (V)")) app.setGeo(false);
   ImGui::SameLine(0, 2);
   if (toggleButton("Geodesic 3D", app.geo, "Geodesic 3D view (V): live on the world's surface")) app.setGeo(true);
@@ -131,6 +144,7 @@ void UI::toolbar() {
     ImGui::EndCombo();
   }
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("The 4D object whose 3D surface is the space of the Geodesic view");
+  }
   if (app.mode == Mode::Edit) {
     ImGui::SameLine(0, 16);
     ImGui::TextDisabled("Tool:");

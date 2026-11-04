@@ -21,7 +21,7 @@ struct CompiledScene {
 
 /** badCode: custom SDF sources known not to compile (replaced by their bounding box). */
 CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorld, bool geo,
-                           const std::unordered_set<std::string>* badCode = nullptr);
+                           const std::unordered_set<std::string>* badCode = nullptr, SpaceKind space = SpaceKind::Flat);
 /** Helper functions (opExtrude, sU, sI, sS, INF) that custom SDF code may use. */
 const char* sdfHelpersGLSL();
 /** Renames the functions defined in custom SDF code by appending a suffix (sdf -> sdf<suffix>). */
@@ -30,9 +30,10 @@ std::string renameCustomCode(const std::string& code, const std::string& suffix)
 std::string standaloneGLSL(const Node& n, const PrimitiveRegistry& reg);
 
 /** Node data buffer: 12 vec4 per node in CompiledScene::nodeIds order (read in shaders with ndat(node, slot)). */
-std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight);
+std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight,
+                             const Space* space = nullptr, const M4* camIso = nullptr);
 
 /** Signature of everything that requires recompiling (structure, recipes, world, view). */
-std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo);
+std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space = SpaceKind::Flat);
 
 }  // namespace fd

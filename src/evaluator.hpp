@@ -52,9 +52,15 @@ inline double attachCut(double reach, double radius) {
   return bend + 0.05;
 }
 
+/** Spherical scenes: factor applied to local distances of objects of this world radius (1 otherwise). */
+double curvedFactor(const Space& s, double radius);
+
 class SceneEvaluator {
  public:
-  SceneEvaluator(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorld);
+  SceneEvaluator(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorld, const Space& space = {});
+  /** Curved scenes: distance at a model point (world units). */
+  Sample evalCurved(const V4& p) const;
+  Space space;
   Sample evalFull(const V4& p) const;
   Sample evalGeo(const V4& p) const;
   Sample eval(const V4& p, bool geo) const { return geo ? evalGeo(p) : evalFull(p); }
@@ -67,13 +73,24 @@ class SceneEvaluator {
   std::string activeWorld;
 
  private:
-  struct Prep { M4 inv; const PrimitiveDef* prim = nullptr; int dim = 4; std::vector<ModAxis> axes; double radius = INFINITY; };
+  struct Prep {
+    M4 inv;
+    const PrimitiveDef* prim = nullptr;
+    int dim = 4;
+    std::vector<ModAxis> axes;
+    double radius = INFINITY;
+    // curved scenes: inverse isometry relative to the parent, total scale, distance factor (spherical)
+    M4 isoInv = identity();
+    double S = 1, factor = 1;
+  };
   Node& root_;
   const PrimitiveRegistry& reg_;
   std::unordered_map<std::string, Prep> prep_;
   mutable std::unordered_map<std::string, double> wcache_;
   V4 toLocal(const Node& n, const V4& p) const;
   Sample evalNode(const Node& n, const V4& p, const V4& g, double sAcc, EvalCtx ctx) const;
+  Sample evalCurvedNode(const Node& n, const V4& p) const;
+  double leafShape(const Node& n, const Prep& pr, V4& q) const;  // local distance of a leaf (local units)
 };
 
 }  // namespace fd

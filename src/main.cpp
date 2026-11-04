@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
   double turnDeg = 0, strafe = 0;
   Backend forceBackend = Backend::Auto;
   int frames = 30, W = 1600, H = 900;
-  std::string renderOut;
+  std::string renderOut, newSpace;
   bool renderAnim = false;
   int renderW = 0, renderH = 0, renderSamples = -1, renderAA = -1;
   for (int i = 1; i < argc; i++) {
@@ -84,6 +84,7 @@ int main(int argc, char** argv) {
     else if (a == "--screenshot" && i + 1 < argc) screenshot = argv[++i];
     else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
     else if (a == "--render" && i + 1 < argc) renderOut = argv[++i];
+    else if (a == "--new" && i + 1 < argc) newSpace = argv[++i];
     else if (a == "--animation") renderAnim = true;
     else if (a == "--render-size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &renderW, &renderH);
     else if (a == "--samples" && i + 1 < argc) renderSamples = std::atoi(argv[++i]);
@@ -174,6 +175,11 @@ int main(int argc, char** argv) {
   std::string err;
   if (!sceneArg.empty() && !app.loadSceneFile(sceneArg, err)) app.toast(err, true);
   for (auto& ex : EXAMPLES) if (example == ex.id) app.loadScene(ex.make());
+  if (!newSpace.empty()) {  // --new hyperbolic[:R] | spherical[:R] | flat
+    std::string kind = newSpace.substr(0, newSpace.find(':'));
+    double r = newSpace.find(':') != std::string::npos ? std::atof(newSpace.substr(newSpace.find(':') + 1).c_str()) : 8;
+    app.newScene(kind == "hyperbolic" ? SpaceKind::Hyperbolic : kind == "spherical" ? SpaceKind::Spherical : SpaceKind::Flat, r);
+  }
   if (startGeo) app.setGeo(true);
   if (!selectName.empty()) walk(app.root, [&](Node& n, Node*, int) { if (n.name == selectName && app.selection.empty()) app.selection = {n.id}; });
   if (toolName == "move") app.tool = Tool::Move;

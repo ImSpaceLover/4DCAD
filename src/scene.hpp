@@ -9,6 +9,7 @@
 
 #include "math4.hpp"
 #include "primitives.hpp"
+#include "space.hpp"
 
 namespace fd {
 
@@ -279,7 +280,16 @@ struct CameraBookmark {
   M4 geoFrame = identity();
 };
 
+/** Editor camera of a curved scene: its isometry (columns: right, up, forward at the eye; eye)
+ *  and the distance to the point it orbits. */
+struct CurvedCamState {
+  M4 iso = identity();
+  double distance = 8;
+};
+
 struct SceneFile {
+  Space space;                             // Flat 4D (default), Hyperbolic or Spherical 3D
+  std::optional<CurvedCamState> curvedCam;
   std::vector<CameraBookmark> bookmarks;  // old files only: converted to camera objects when loaded
   std::string activeCamera;               // id of the camera used for rendering
   std::string animation;                  // animation (JSON, see animation.hpp); empty = none
@@ -307,7 +317,8 @@ std::vector<LibraryFolder> builtinFolders();
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
 std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
                         const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr,
-                        const std::string& activeCamera = "", const std::string* animationJson = nullptr);
+                        const std::string& activeCamera = "", const std::string* animationJson = nullptr,
+                        const Space* space = nullptr, const CurvedCamState* curvedCam = nullptr);
 std::string lightsToJson(const std::vector<PointLight>& l);
 std::vector<PointLight> lightsFromJson(const std::string& text);
 std::string bookmarksToJson(const std::vector<CameraBookmark>& b);

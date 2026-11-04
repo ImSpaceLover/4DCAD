@@ -160,8 +160,10 @@ std::unordered_map<std::string, Bound> computeBounds(const Node& root, const Pri
   return out;
 }
 
-SceneEvaluator::SceneEvaluator(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorld) : root_(root), reg_(reg) {
+SceneEvaluator::SceneEvaluator(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorld, const Space& sp)
+    : space(sp), root_(root), reg_(reg) {
   this->activeWorld = (!activeWorld.empty() && findNode(root, activeWorld)) ? activeWorld : "";
+  if (space.curved()) this->activeWorld.clear();  // curved spaces have no world surfaces
   auto bounds = computeBounds(root, reg);
   walk(root, [&](Node& n, Node*, int) {
     Prep p;
@@ -172,6 +174,73 @@ SceneEvaluator::SceneEvaluator(Node& root, const PrimitiveRegistry& reg, const s
     p.axes = modifierAxes(n, reg);
     prep_[n.id] = p;
   });
+  if (space.curved()) {
+    std::function<void(Node&, double)> visit = [&](Node& n, double sAnc) {
+      Prep& p = prep_[n.id];
+      p.isoInv = cs::inverse(space.k(), cs::nodeIso(space, n.xf, sAnc));
+      p.S = sAnc * n.xf.scale;
+      p.factor = curvedFactor(space, std::isfinite(p.radius) ? p.radius * sAnc : INFINITY);
+      for (auto& c : n.children) visit(c, p.S);
+    };
+    visit(root, 1.0);
+  }
+}
+
+double curvedFactor(const Space& s, double radius) {
+  // spherical space: normal coordinates stretch distances by at most 1 / sinc(r / R) within radius r
+  // (the exponential map shrinks them), so local distances are scaled down to stay safe for marching
+  if (s.kind != SpaceKind::Spherical) return 1.0;
+  double t = std::min(std::isfinite(radius) ? radius + 0.5 : 1e9, PI * s.R() / 2) / s.R();
+  return t < 1e-6 ? 1.0 : std::max(std::sin(t) / t, 0.5);
+}
+
+Sample SceneEvaluator::evalCurved(const V4& p) const { return evalCurvedNode(root_, p); }
+
+double SceneEvaluator::leafShape(const Node& n, const Prep& pr, V4& q) const {
+  double t[64];
+  if (n.mods.size() > 64 || !pr.prim) return INF;
+  modifierCoords(n, pr.axes, q, t);
+  double d;
+  if (n.isCustom()) {
+    double o = 0, in = -1e9;
+    for (int a = 0; a < 4; a++) { double e = std::abs(q[a]) - n.codeBound; o += std::max(e, 0.0) * std::max(e, 0.0); in = std::max(in, e); }
+    d = std::sqrt(o) + std::min(in, 0.0);
+  } else d = evalPrimitive(*pr.prim, q);
+  d = modifierDistance(n, pr.axes, d, t);
+  double shell = n.shell.value_or(0.0);
+  if (shell > 0) d = std::abs(d) - shell;
+  d -= n.round.value_or(0.0);
+  for (int a = pr.dim; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
+  return d;
+}
+
+Sample SceneEvaluator::evalCurvedNode(const Node& n, const V4& p) const {
+  if (n.hidden || n.isCamera()) return {};
+  const Prep& pr = prep_.at(n.id);
+  V4 q = mul(pr.isoInv, p);  // the node's own frame
+  if (n.isLeaf()) {
+    V4 u = cs::logO(space, q) * (1.0 / pr.S);  // local coordinates (normal coordinates at the node)
+    double d = leafShape(n, pr, u);
+    if (d >= INF * 0.5) return {};
+    return {d * pr.S * pr.factor, n.color, &n};
+  }
+  double t[64];
+  bool mods = !n.mods.empty() && n.mods.size() <= 64;
+  if (mods) {  // group modifiers act on its normal coordinates
+    V4 u = cs::logO(space, q) * (1.0 / pr.S);
+    modifierCoords(n, pr.axes, u, t);
+    u[3] = 0;
+    q = cs::expO(space, u * pr.S);
+  }
+  Sample r;
+  bool first = true;
+  for (auto& c : n.children) {
+    Sample cs = evalCurvedNode(c, q);
+    if (first) { r = cs; first = false; continue; }
+    r = combine(n.op, std::max(n.k * pr.S, 1e-4), r, cs);
+  }
+  if (mods && r.d < INF * 0.5) r.d = modifierDistance(n, pr.axes, r.d / pr.S, t) * pr.S;
+  return r;
 }
 
 V4 SceneEvaluator::toLocal(const Node& n, const V4& p) const {

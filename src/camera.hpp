@@ -62,6 +62,35 @@ class FullCamera {
   void move(const V4& d, const std::function<bool(const V4&)>& blocked);
 };
 
+/** Camera of a curved (hyperbolic / spherical) scene: an isometry (world <- camera; columns:
+ *  right, up, forward at the eye, and the eye) plus the distance to the point it orbits.
+ *  "Up" for orbiting and looking is away from the geodesic plane y = 0 (the ground). */
+class CurvedCamera {
+ public:
+  M4 iso = identity();
+  double distance = 8;
+
+  void reset(const Space& s);
+  View view() const { return {col(iso, 3), iso}; }
+  CurvedCamState save() const { return {iso, distance}; }
+  void load(const Space& s, const CurvedCamState& c) { iso = cs::renorm(s.k(), c.iso); distance = c.distance; }
+  /** Frame at the orbit centre (straight ahead at `distance`), oriented like the camera. */
+  M4 centreFrame(const Space& s) const;
+  V4 centre(const Space& s) const { return col(centreFrame(s), 3); }
+  void orbit(const Space& s, double dx, double dy);
+  void pan(const Space& s, double dx, double dy);
+  void zoom(const Space& s, double delta);
+  /** Keeps the orientation, moves so `p` is the orbit centre at distance d. */
+  void focus(const Space& s, const V4& p, double d);
+  /** Front / right / top view of the current centre (0 / 1 / 2). */
+  void standard(const Space& s, int which);
+  // first person (Explore)
+  void look(const Space& s, double dx, double dy);
+  void roll(const Space& s, double a);
+  void move(const Space& s, const V4& local, const std::function<bool(const V4&)>& blocked);
+  void setDistance(const Space& s, double d);
+};
+
 class GeoCamera {
  public:
   V4 pivot{0, 0, 0, 0};

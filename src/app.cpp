@@ -98,9 +98,12 @@ void App::toast(const std::string& msg, bool error) {
 // ============================================================ scene lifecycle
 // undo snapshot: world id, active camera, lights, animation, scene tree (one line each)
 std::string App::snapshot() {
-  return world + "\n" + activeCamera + "\n" + lightsToJson(lights) + "\n" + animationToJson(anim) + "\n" + nodeToJson(root);
+  return std::to_string(space.radius) + "\n" + world + "\n" + activeCamera + "\n" + lightsToJson(lights) + "\n" + animationToJson(anim) + "\n" + nodeToJson(root);
 }
-void App::restore(const std::string& s) {
+void App::restore(const std::string& snap) {
+  auto nl0 = snap.find('\n');
+  space.radius = std::max(0.05, std::atof(snap.substr(0, nl0).c_str()));
+  std::string s = snap.substr(nl0 + 1);
   auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1), nl3 = s.find('\n', nl2 + 1), nl4 = s.find('\n', nl3 + 1);
   world = s.substr(0, nl);
   activeCamera = s.substr(nl + 1, nl2 - nl - 1);
@@ -117,6 +120,12 @@ void App::restore(const std::string& s) {
 
 void App::loadScene(SceneFile f) {
   root = std::move(f.root);
+  space = f.space;
+  if (space.curved()) {
+    f.world.clear();
+    walk(root, [](Node& n, Node*, int) { n.anchor.reset(); n.xf.pos[3] = 0; n.xf.rot = cs::rot3(n.xf.rot); });
+    if (f.curvedCam) curvCam.load(space, *f.curvedCam); else curvCam.reset(space);
+  }
   world = (!f.world.empty() && findNode(root, f.world)) ? f.world : "";
   // old camera bookmarks become camera objects
   for (auto& b : f.bookmarks) {
@@ -264,11 +273,37 @@ void App::autoKeyChanges() {
         }
 }
 
-void App::newScene() {
+void App::newScene(SpaceKind kind, double radius) {
   SceneFile f = playgroundScene();
   std::vector<Node> keep;
   for (auto& c : f.root.children) if (c.id == "ground") keep.push_back(c);
   f.root.children = keep;
+  if (kind != SpaceKind::Flat) {
+    // a curved 3D space: a ground plane, a few shapes and a row of pillars that shows the curvature
+    f.space.kind = kind;
+    f.space.radius = std::max(0.2, radius);
+    f.root.children[0].mat.texScale = 1;
+    Node cube = makeShape("cube", "Cube", {0, 0.8, 0, 0}, {0.85, 0.35, 0.3});
+    double ang[6] = {0, 25, 0, 0, 0, 0};
+    cube.xf.rot = rotationFromAngles(ang);
+    cube.xf.scale = 0.8;
+    Node ball = makeShape("sphere", "Sphere", {3, 1, 0.5, 0}, {0.95, 0.75, 0.3});
+    Node torus = makeShape("torus", "Torus", {-3, 0.6, 0.5, 0}, {0.3, 0.6, 0.9});
+    std::vector<Node> pillars;
+    for (int i = -3; i <= 3; i++) {
+      Node c = makeShape("cylinder", "Pillar " + std::to_string(i + 4), {i * 2.5, 1.5, -5, 0}, {0.75, 0.72, 0.65});
+      c.xf.scale = 0.4;
+      double up[6] = {0, 0, 0, 90, 0, 0};  // cylinder axis vertical
+      c.xf.rot = rotationFromAngles(up);
+      pillars.push_back(c);
+    }
+    Node row = makeGroup(BoolOp::Union, pillars, "Pillars");
+    f.root.children.push_back(cube);
+    f.root.children.push_back(ball);
+    f.root.children.push_back(torus);
+    f.root.children.push_back(row);
+    f.camera.reset();
+  }
   loadScene(f);
   currentFile.clear();
 }
@@ -285,8 +320,9 @@ bool App::loadSceneFile(const std::string& path, std::string& err) {
 
 std::string App::serialize() {
   CameraState cs = editCam.save();
+  CurvedCamState cc = curvCam.save();
   std::string aj = anim.empty() ? std::string() : animationToJson(anim);
-  return sceneToJson(root, reg, world, &cs, nullptr, &lights, activeCamera, &aj);
+  return sceneToJson(root, reg, world, &cs, nullptr, &lights, activeCamera, &aj, &space, &cc);
 }
 
 bool App::saveSceneFile(const std::string& path, std::string& err) {
@@ -322,7 +358,7 @@ void App::rebuild() {
     if (Node* w = world.empty() ? nullptr : findNode(root, world)) walk(*w, [&](Node& m, Node*, int) { keep.insert(m.id); });
     walk(viewRoot_, [&](Node& m, Node*, int) { if (!keep.count(m.id)) m.hidden = true; });
   }
-  ev = std::make_unique<SceneEvaluator>(isolate.empty() ? root : viewRoot_, reg, world);
+  ev = std::make_unique<SceneEvaluator>(isolate.empty() ? root : viewRoot_, reg, world, space);
 }
 
 void App::commit() {
@@ -672,7 +708,39 @@ void App::detach(const std::string& id) {
   if (Node* n = findNode(root, id)) { n->anchor.reset(); commit(); }
 }
 
+M4 App::nodeWorldIso(const std::string& id, double* sAncOut) {
+  M4 m = identity();
+  double s = 1;
+  for (Node* n : pathTo(root, id)) {
+    m = mul(m, cs::nodeIso(space, n->xf, s));
+    if (sAncOut) *sAncOut = s;
+    s *= n->xf.scale;
+  }
+  return cs::renorm(space.k(), m);
+}
+
+V4 App::along(const V4& p, const V4& v) const {
+  if (!space.curved()) return p + v;
+  double k = space.k();
+  V4 t = cs::tangent(k, p, v);
+  double l = std::sqrt(std::max(cs::mdot(k, t, t), 0.0));
+  if (l < 1e-12) return p;
+  V4 q = p, d = t * (1.0 / l);
+  cs::geodesic(space, q, d, l);
+  return q;
+}
+
+V4 App::lightWorldPos(const PointLight& l) const { return space.curved() ? cs::expO(space, l.pos) : l.pos; }
+
+void App::setCurvatureRadius(double r) {
+  if (!space.curved()) return;
+  space.radius = clampd(r, 0.2, 1e4);
+  curvCam.iso = cs::renorm(space.k(), curvCam.iso);
+  rebuild();
+}
+
 V4 App::nodeWorldPos(const std::string& id) {
+  if (space.curved()) return col(nodeWorldIso(id), 3);
   auto path = pathTo(root, id);
   if (path.empty()) return {0, 0, 0, 0};
   V4 p = path.back()->xf.pos;
@@ -681,6 +749,7 @@ V4 App::nodeWorldPos(const std::string& id) {
 }
 
 M4 App::nodeWorldFrame(const std::string& id) {
+  if (space.curved()) return nodeWorldIso(id);  // columns 0-2: the object's axes at its position
   M4 r = identity();
   for (Node* n : pathTo(root, id)) r = mul(r, nodeRotation(*n));
   return r;
@@ -692,7 +761,7 @@ void App::setMode(Mode m) {
   cancelModal();
   drag_ = Drag::None;
   // one shared camera: switching modes keeps the exact position and orientation
-  if (!geo) {
+  if (!geo && !space.curved()) {
     View v = editCam.view();
     double dist = editCam.distance;
     editCam.setFromView(v, dist);  // re-base yaw/pitch so first-person look starts level-free
@@ -706,6 +775,7 @@ void App::setMode(Mode m) {
 
 void App::setGeo(bool g) {
   if (g == geo) return;
+  if (g && space.curved()) { toast("Curved scenes are already a 3D space (no world surface view)", true); return; }
   if (g && world.empty()) { toast("Choose a world object first (World menu or Properties > Use as world)", true); return; }
   cancelModal();
   drag_ = Drag::None;
@@ -734,6 +804,7 @@ double App::fov() const {
 
 View App::currentView() {
   if (inCameraView()) return cameraView(activeCamera);
+  if (space.curved()) return curvCam.view();
   if (geo && geoEdit.valid) return {geoEdit.pivot, geoEdit.frame};
   return editCam.view();
 }
@@ -742,10 +813,23 @@ View App::playerView() { return currentView(); }
 
 V4 App::screenRay(double x, double y, const View& v) const {
   double sx = ((x - vpX) / vpW) * 2 - 1, sy = 1 - ((y - vpY) / vpH) * 2;
+  if (space.curved()) {  // a tangent direction at the eye (the frame is an isometry)
+    V4 l = normalize(V4{sx * (vpW / vpH) * tanHalf(), sy * tanHalf(), 1, 0});
+    return mul(v.frame, l);
+  }
   return rayDir(v, sx * (vpW / vpH), sy, tanHalf());
 }
 
 bool App::project(const V4& p, const View& v, double& sx, double& sy) const {
+  if (space.curved()) {
+    // the pixel of p is the direction of the geodesic from the eye to it (how rays travel)
+    V4 u = cs::logO(space, cs::renormPoint(space.k(), mul(cs::inverse(space.k(), v.frame), p)));
+    if (u[2] < 1e-3) return false;
+    double x = u[0] / (u[2] * tanHalf()), y = u[1] / (u[2] * tanHalf());
+    sx = vpX + (x / (vpW / vpH) + 1) * 0.5 * vpW;
+    sy = vpY + (1 - y) * 0.5 * vpH;
+    return true;
+  }
   V4 r = p - v.eye;
   double z = dot(r, col(v.frame, 2));
   if (z < 1e-3) return false;
@@ -770,6 +854,7 @@ bool App::isLocked(const std::string& id) {
 void App::focusSelection() {
   Node* n = selected();
   if (!n) return;
+  if (space.curved()) { curvCam.focus(space, nodeWorldPos(n->id), std::max(2.0, 4 * n->xf.scale)); return; }
   if (!geo) {
     editCam.target = nodeWorldPos(n->id);
     editCam.distance = std::max(2.0, 4 * n->xf.scale);
@@ -782,6 +867,7 @@ void App::focusSelection() {
 }
 
 void App::standardView(int which) {
+  if (space.curved()) { if (which < 3) curvCam.standard(space, which); return; }
   editCam.reset4();
   editCam.pivotSet = false;
   if (which == 0) { editCam.yaw = 0; editCam.pitch = 0; }
@@ -793,7 +879,7 @@ void App::standardView(int which) {
 std::array<float, 3> App::worldColor() {
   // colour of the world surface under the camera (e.g. a yellow plane gives a yellow sky)
   std::array<float, 3> c{0.35f, 0.4f, 0.55f};
-  if (world.empty() || !ev) return c;
+  if (world.empty() || !ev || space.curved()) return c;
   Sample s = ev->worldSample(currentView().eye, world);
   if (s.d >= INF * 0.5) return c;
   for (int i = 0; i < 3; i++) c[i] = (float)s.color[i];
@@ -832,7 +918,26 @@ void App::placeItem(const std::string& id, std::optional<std::pair<double, doubl
     hit = castRay(*ev, geo, v.eye, dir, quality.geoMaxStep, v.frame);
     if (hit && hit->t > 40) hit.reset();
   }
-  if (geo) {
+  if (space.curved()) {
+    // in front of the camera (or on the surface clicked), as a child of the root
+    V4 p;
+    if (hit) {
+      V4 q = hit->pos, d = cs::tnormalize(space.k(), cs::tangent(space.k(), hit->pos, -hit->dir));
+      cs::geodesic(space, q, d, 1.0);  // back toward the camera, off the surface
+      p = q;
+    } else {
+      V4 q = v.eye, d = dir;
+      cs::geodesic(space, q, d, screen ? curvCam.distance : curvCam.distance);
+      p = q;
+    }
+    double sRoot = root.xf.scale;
+    M4 rootIso = cs::nodeIso(space, root.xf, 1.0);
+    M4 local = mul(cs::inverse(space.k(), rootIso), cs::transvection(space.k(), cs::origin(), p));
+    Transform xf = node.xf;
+    cs::setFromIso(space, xf, mul(local, cs::rot3(node.xf.rot)), sRoot);
+    node.xf.pos = xf.pos;
+    node.xf.rot = xf.rot;
+  } else if (geo) {
     auto f = field();
     double dist = hit ? std::max(0.5, hit->t - 1) : 3;
     std::array<double, 3> local{dot(dir, col(v.frame, 0)), dot(dir, col(v.frame, 1)), dot(dir, col(v.frame, 2))};
@@ -1327,6 +1432,7 @@ void App::handleInput(const InputState& in, double dt) {
   if (in.wheel != 0 && in.vpHovered && inCameraView()) { lookThrough(activeCamera); viewThroughCamera = false; g = geo && geoEdit.valid; }
   if (in.wheel != 0 && in.vpHovered) {
     if (g) editSet.flySpeed = clampd(editSet.flySpeed * std::exp(in.wheel * 0.15), 0.2, 30);
+    else if (space.curved()) curvCam.zoom(space, -in.wheel * editSet.zoomSpeed);
     else editCam.zoom(-in.wheel * editSet.zoomSpeed);
   }
 
@@ -1334,11 +1440,25 @@ void App::handleInput(const InputState& in, double dt) {
   if (drag_ != Drag::None && dragButton_ >= 0 && in.down[dragButton_]) {
     if (std::abs(in.mx - pressX_) + std::abs(in.my - pressY_) > 3) dragMoved_ = true;
     const View& v = modalView_;
+    bool cv = space.curved();
     switch (drag_) {
-      case Drag::Orbit: if (dragMoved_) editCam.orbit(in.dx * editSet.orbitSpeed, in.dy * editSet.orbitSpeed); break;
-      case Drag::Pan: editCam.pan(in.dx * editSet.panSpeed, in.dy * editSet.panSpeed); break;
-      case Drag::Zoom: editCam.zoom(in.dy * 0.05 * editSet.zoomSpeed); break;
-      case Drag::Rot4: editCam.rotate4(0, 3, in.dx * 0.006 * editSet.rot4Speed); editCam.rotate4(1, 3, -in.dy * 0.006 * editSet.rot4Speed); break;
+      case Drag::Orbit:
+        if (!dragMoved_) break;
+        if (cv) curvCam.orbit(space, in.dx * editSet.orbitSpeed, in.dy * editSet.orbitSpeed);
+        else editCam.orbit(in.dx * editSet.orbitSpeed, in.dy * editSet.orbitSpeed);
+        break;
+      case Drag::Pan:
+        if (cv) curvCam.pan(space, in.dx * editSet.panSpeed, in.dy * editSet.panSpeed);
+        else editCam.pan(in.dx * editSet.panSpeed, in.dy * editSet.panSpeed);
+        break;
+      case Drag::Zoom:
+        if (cv) curvCam.zoom(space, in.dy * 0.05 * editSet.zoomSpeed);
+        else editCam.zoom(in.dy * 0.05 * editSet.zoomSpeed);
+        break;
+      case Drag::Rot4:
+        if (cv) curvCam.orbit(space, in.dx * editSet.orbitSpeed, in.dy * editSet.orbitSpeed);  // no 4th dimension here
+        else { editCam.rotate4(0, 3, in.dx * 0.006 * editSet.rot4Speed); editCam.rotate4(1, 3, -in.dy * 0.006 * editSet.rot4Speed); }
+        break;
       case Drag::Fly: flyGeoEdit(in, dt); break;
       case Drag::FreeMove: {
         if (in.dx == 0 && in.dy == 0 && snapWas == snapNow_) break;
@@ -1400,7 +1520,9 @@ void App::handleInput(const InputState& in, double dt) {
     if ((drag_ == Drag::FreeMove || drag_ == Drag::Gizmo) && dragMoved_) commit();
     if (drag_ == Drag::Fly) wantRelease = true;
     // MMB click (no drag) in the Full 4D view: set the centre of rotation
-    if (drag_ == Drag::Orbit && dragButton_ == 2 && !dragMoved_ && !g) {
+    if (drag_ == Drag::Orbit && dragButton_ == 2 && !dragMoved_ && space.curved()) {
+      if (auto hit = pick(in.mx, in.my)) { curvCam.focus(space, hit->pos, cs::distance(space, curvCam.view().eye, hit->pos)); toast("Centre of rotation set"); }
+    } else if (drag_ == Drag::Orbit && dragButton_ == 2 && !dragMoved_ && !g) {
       if (auto hit = pick(in.mx, in.my)) { editCam.setPivot(hit->pos); toast("Centre of rotation set"); }
       else { editCam.pivotSet = false; toast("Centre of rotation reset to the view centre"); }
     }
@@ -1430,7 +1552,8 @@ void App::handleInput(const InputState& in, double dt) {
 void App::updateExplore(const InputState& in, double dt) {
   const auto& X = exploreSet;
   if (mouseCaptured && (in.dx != 0 || in.dy != 0)) {
-    if (geo && geoEdit.valid) geoEdit.look(in.dx * X.lookSpeed, in.dy * X.lookSpeed);
+    if (space.curved()) curvCam.look(space, in.dx * X.lookSpeed, in.dy * X.lookSpeed);
+    else if (geo && geoEdit.valid) geoEdit.look(in.dx * X.lookSpeed, in.dy * X.lookSpeed);
     else editCam.look(in.dx * X.lookSpeed, in.dy * X.lookSpeed);
   }
   if (in.pressed[0] && in.vpHovered && !mouseCaptured) wantCapture = true;
@@ -1445,7 +1568,13 @@ void App::updateExplore(const InputState& in, double dt) {
   double mu = K(Action::MoveUp) - K(Action::MoveDown);
   double ma = K(Action::RollRight) - K(Action::RollLeft);
   double r = X.bodyRadius;
-  if (geo && geoEdit.valid) {
+  if (space.curved()) {
+    double sp = X.moveSpeed * dt;
+    if (ma != 0) curvCam.roll(space, ma * 1.2 * dt);
+    if (mr != 0 || mf != 0 || mu != 0)
+      curvCam.move(space, {mr * sp, mu * sp, mf * sp, 0},
+                   X.collide ? std::function<bool(const V4&)>([&](const V4& to) { return ev->evalCurved(to).d < r; }) : nullptr);
+  } else if (geo && geoEdit.valid) {
     double sp = X.geoMoveSpeed * dt;
     auto f = field();
     if (ma != 0) geoEdit.roll(ma * 1.2 * dt);
@@ -1471,7 +1600,7 @@ std::vector<LightParam> App::frameLights() {
   for (auto& l : lights) {
     if (!l.enabled || out.size() >= (size_t)MAX_LIGHTS) continue;
     LightParam p;
-    p.pos = l.pos;
+    p.pos = lightWorldPos(l);
     for (int i = 0; i < 3; i++) p.color[i] = (float)(l.color[i] * l.intensity);
     p.range = (float)l.range;
     p.shadows = l.shadows;
@@ -1522,6 +1651,27 @@ View App::thumbnailView() {
   cam.target = c;
   cam.distance = R * 3.2 * thumbZoom;
   return cam.view();
+}
+
+// Curved scenes: the shader works camera-relative (eye = origin, identity frame); positions are
+// given relative to the camera, the camera's isometry goes along for the sky and the grid.
+void App::curvedParams(FrameParams& fp, const View& v, std::ostringstream& key) {
+  double k = space.k();
+  M4 inv = cs::inverse(k, v.frame);
+  fp.space = space;
+  fp.camIso = v.frame;
+  fp.view = {cs::origin(), identity()};
+  fp.geo = false;
+  fp.axes = identity();
+  // the sun: a point at infinity (hyperbolic) / a point a quarter turn away (spherical) in its direction
+  V4 L = light();
+  V4 d3 = normalize(V4{L[0], L[1], L[2], 0});
+  V4 sun = mul(inv, V4{d3[0], d3[1], d3[2], k < 0 ? 1.0 : 0.0});
+  if (k < 0 && sun[3] > 1e-9) sun = sun * (1.0 / sun[3]);
+  fp.light = sun;
+  for (auto& l : fp.lights) l.pos = cs::renormPoint(k, mul(inv, l.pos));
+  if (fp.markerCol[3] > 0) { fp.marker = cs::origin(); fp.markerFwd = {0, 0, 1, 0}; }
+  key << "|c" << space.radius;
 }
 
 RenderProfile App::mainProfile() const {
@@ -1587,7 +1737,7 @@ void App::renderFrame() {
     key << fp.aperture << ',' << fp.focus;
   }
   // debug ray: re-traced from the view every frame unless frozen
-  if (debugRay && ev) {
+  if (debugRay && ev && !space.curved()) {
     if (!debugFrozen) debugTrace = traceRay(*ev, fp.geo, v.eye, col(v.frame, 2), quality);
     fp.debugPts = debugTrace.pts;
     {  // the start sits in (or next to) the eye: skip it, or it would cover the screen
@@ -1609,6 +1759,7 @@ void App::renderFrame() {
     fp.markerCol = {0.95f, 0.8f, 0.2f, r};
     fp.markerSkip = r * 3;  // the primary ray starts inside the body
   }
+  if (space.curved()) curvedParams(fp, v, key);
   std::string k = key.str();
   fp.scale = scale;
   if (k != lastKey_) {

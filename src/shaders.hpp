@@ -36,7 +36,7 @@ inline const char* FRAME_BLOCK = R"(
   ivec4 f_j;         // geoIters, debug points, point lights, textures on
   ivec4 f_k;         // point light shadow mask, bounces, over-relaxation, AO samples
   ivec4 f_l;         // shadow ray steps, specular on, stochastic on, sample index
-  vec4 f_e;          // lens aperture, focus distance, (accumulation weight: used by the renderer), 0
+  vec4 f_e;          // lens aperture, focus distance, (accumulation weight: used by the renderer), curvature radius
   vec4 u_lpos[8];    // point lights: 4D position
   vec4 u_lcol[8];    // rgb * intensity, range
   vec4 u_dbg[48];    // debug ray polyline (Explore)
@@ -73,6 +73,7 @@ inline const char* FRAME_DEFINES = R"(
 #define u_lightRadius f_d.w
 #define u_aperture f_e.x
 #define u_focus f_e.y
+#define u_curvR f_e.w
 #define u_lightShadowMask f_k.x
 #define u_maxLayers f_k.y
 #define u_relax f_k.z
@@ -82,11 +83,18 @@ inline const char* FRAME_DEFINES = R"(
 #define u_dbgEndCol f_dbgEndCol.rgb
 )";
 
-inline std::string shaderPrelude(ShaderTarget t, bool geo) {
+/** curved: 0 = flat, 1 = hyperbolic, 2 = spherical (SpaceKind). */
+inline std::string curvedDefines(int curved) {
+  if (curved == 0) return "";
+  return std::string("#define VIEW_CURVED\n#define KAPPA ") + (curved == 2 ? "1.0" : "-1.0") + "\n";
+}
+
+inline std::string shaderPrelude(ShaderTarget t, bool geo, int curved = 0) {
   std::string s;
   if (t == ShaderTarget::OpenGL) {
     s = "#version 330 core\n";
     if (geo) s += "#define VIEW_GEO\n";
+    s += curvedDefines(curved);
     s += std::string("layout(std140) uniform Frame {") + FRAME_BLOCK + "};\n";
     s += "uniform sampler2D u_nodes;  // node data: row = node, 12 RGBA32F texels\n"
          "vec4 ndat(int i, int k) { return texelFetch(u_nodes, ivec2(k, i), 0); }\n"
@@ -94,6 +102,7 @@ inline std::string shaderPrelude(ShaderTarget t, bool geo) {
   } else {
     s = "#version 450\n";
     if (geo) s += "#define VIEW_GEO\n";
+    s += curvedDefines(curved);
     s += std::string("layout(std140, set = 0, binding = 0) uniform Frame {") + FRAME_BLOCK + "};\n";
     s += "layout(std430, set = 0, binding = 1) readonly buffer Nodes { vec4 nodeData[]; };\n"
          "vec4 ndat(int i, int k) { return nodeData[i * 12 + k]; }\n"
@@ -112,6 +121,41 @@ inline std::string vertexShader(ShaderTarget t) {
 }
 
 inline const char* RAYMARCH_MAIN = R"(
+// ---- metric helpers: Euclidean, or the curved model's form (see space.hpp) ----
+#ifdef VIEW_CURVED
+float mdot(vec4 a, vec4 b) { return dot(a.xyz, b.xyz) + KAPPA * a.w * b.w; }
+vec4 crenorm(vec4 p) { return p * inversesqrt(max(mdot(p, p) * KAPPA, 1e-30)); }
+// world distance between two model points
+float cdist(vec4 a, vec4 b) {
+  vec4 d = a - b;
+  if (KAPPA > 0.0) return u_curvR * 2.0 * atan(length(d), length(a + b));
+  float l = sqrt(max(mdot(d, d), 0.0)) * 0.5;
+  return u_curvR * 2.0 * log(l + sqrt(l * l + 1.0));
+}
+#else
+float mdot(vec4 a, vec4 b) { return dot(a, b); }
+#endif
+vec4 mnorm(vec4 v) { return v * inversesqrt(max(mdot(v, v), 1e-30)); }
+vec4 mreflect(vec4 i, vec4 n) { return i - 2.0 * mdot(n, i) * n; }
+vec4 mrefract(vec4 I, vec4 N, float eta) {
+  float c = mdot(N, I), k = 1.0 - eta * eta * (1.0 - c * c);
+  return k < 0.0 ? vec4(0.0) : eta * I - (eta * c + sqrt(k)) * N;
+}
+// part of v tangent at a point (curved: w = the point) / along a surface (Geodesic: w = its normal)
+vec4 tproj(vec4 v, vec4 w) { return v - w * (mdot(v, w) / mdot(w, w)); }
+// the point reached from p going distance h along unit tangent d (and the direction there)
+void geoMove(inout vec4 p, inout vec4 d, float h) {
+#ifdef VIEW_CURVED
+  float t = h / u_curvR, c = cC(t), s = cS(t);
+  vec4 np = p * c + d * s;
+  d = d * c - p * (KAPPA * s);
+  p = np;
+#else
+  p += d * h;
+#endif
+}
+vec4 geoPoint(vec4 p, vec4 d, float h) { geoMove(p, d, h); return p; }
+
 bool g_noBody = false;     // primary ray still inside the player's own body
 bool g_noDbg = false;      // primary ray still next to the eye (the debug ray may pass through it)
 
@@ -120,12 +164,18 @@ float map(vec4 p, out MAT m) {
   float d = mapScene(p, m);
   if (u_markerCol.w > 0.0 && !g_noBody) {
     float r = u_markerCol.w;
+#ifdef VIEW_CURVED
+    float body = cdist(p, u_marker) - r;
+    float nose = cdist(p, geoPoint(u_marker, u_markerFwd, r * 0.95)) - r * 0.4;
+#else
     float body = length(p - u_marker) - r;
     float nose = length(p - (u_marker + u_markerFwd * r * 0.95)) - r * 0.4;
+#endif
     float dm = min(body, nose);
     if (dm < d) { d = dm; m = MAT(vec4(nose < body ? u_markerCol.rgb * 0.55 : u_markerCol.rgb, 0.0), vec4(0.0, 0.6, 0.3, 0.0), vec4(0.0)); }
   }
   // debug ray: a thin glowing tube along its path (emissive: no shadows), end marker coloured by the stop reason
+#ifndef VIEW_CURVED
   if (u_dbgN > 1 && !g_noEmissive && !g_noDbg) {
     float dt = INF;
     for (int i = 0; i < 47; i++) {
@@ -141,6 +191,7 @@ float map(vec4 p, out MAT m) {
     if (dt < d) { d = dt; m = MAT(vec4(1.0, 0.55, 0.1, 0.0), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0)); }
     if (de < d) { d = de; m = MAT(vec4(u_dbgEndCol, 0.0), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0)); }
   }
+#endif
   return d;
 }
 
@@ -170,10 +221,24 @@ vec4 projectToWorld(inout vec4 p) {
 #endif
 
 // surf: Geodesic only, the colour of the world surface where the ray ended
-vec3 sky(vec4 dir, vec3 surf) {
+// p: where the direction is (curved spaces: the sky is fixed in the world, u_axes = camera isometry)
+vec3 sky(vec4 p, vec4 dir, vec3 surf) {
 #ifdef VIEW_GEO
   // the sky of a world surface has the colour of the surface the ray travelled to
   return surf * (0.9 + 0.1 * dot(dir, normalize(u_light)));
+#elif defined(VIEW_CURVED)
+  float y;
+  if (KAPPA < 0.0) {
+    // hyperbolic: the point at infinity the ray heads for (p + dir is light-like), in world coordinates
+    vec4 v = u_axes * (p + dir);
+    y = normalize(v.xyz).y;
+  } else {
+    // spherical: the direction compared with "up" there (away from the ground sphere y = 0)
+    vec4 pw = u_axes * p, vw = u_axes * dir;
+    vec4 up = tproj(vec4(0.0, 1.0, 0.0, 0.0), pw);
+    y = mdot(vw, up) * inversesqrt(max(mdot(up, up), 1e-12));
+  }
+  return mix(u_skyBottom, u_skyTop, clamp(y * 0.5 + 0.5, 0.0, 1.0));
 #else
   return mix(u_skyBottom, u_skyTop, clamp(dot(dir, u_axes[1]) * 0.5 + 0.5, 0.0, 1.0)) + 0.05 * dot(dir, u_axes[3]);
 #endif
@@ -200,6 +265,26 @@ vec4 rndDir4() {
 // light li (0 = sun, 1.. = point lights) seen from hp: direction, colour, distance to it
 void lightAt(int li, vec4 hp, vec4 wn, vec4 dir, out vec4 L, out vec3 lc, out float lmax) {
   bool stoch = u_stochastic == 1;
+#ifdef VIEW_CURVED
+  // curved: the sun is a direction at infinity (hyperbolic) / a far point (spherical) given as a
+  // 4-vector; light travels along geodesics, so directions are tangent projections
+  if (li == 0) {
+    L = mnorm(tproj(u_light, hp));
+    if (stoch) L = mnorm(tproj(L + rndDir4() * u_sunSize, hp));
+    lc = vec3(u_sunI);
+    lmax = u_shadowMax;
+  } else {
+    vec4 lp = u_lpos[li - 1];
+    if (stoch) lp = crenorm(lp + rndDir4() * (u_lightRadius * rnd() / u_curvR));
+    float dist = cdist(hp, lp);
+    vec4 tl = tproj(lp, hp);
+    L = mdot(tl, tl) > 1e-14 ? mnorm(tl) : -dir;
+    float a = clamp(1.0 - dist / max(u_lcol[li - 1].w, 1e-3), 0.0, 1.0);
+    lc = u_lcol[li - 1].rgb * a * a;
+    lmax = dist;
+  }
+  return;
+#endif
   if (li == 0) {
     L = normalize(u_light);
     if (stoch) L = normalize(L + rndDir4() * u_sunSize);  // a sun of some size: soft shadows
@@ -231,7 +316,14 @@ void main() {
   vec2 uv = v_uv * vec2(u_res.x / u_res.y, 1.0) + jit;
   vec4 ro = u_eye;
   vec4 rd = normalize(u_frame * vec4(uv * u_tanHalf, 1.0, 0.0));
-#ifndef VIEW_GEO
+#if defined(VIEW_CURVED)
+  if (stoch && u_aperture > 0.0) {  // depth of field (camera-relative: the eye is the origin)
+    vec4 fp = geoPoint(ro, rd, u_focus / max(rd.z, 1e-3));
+    float a = 6.2831853 * rnd(), r = u_aperture * sqrt(rnd());
+    ro = geoPoint(ro, vec4(cos(a), sin(a), 0.0, 0.0), r);
+    rd = mnorm(tproj(fp, ro));
+  }
+#elif !defined(VIEW_GEO)
   if (stoch && u_aperture > 0.0) {  // depth of field: rays from a lens disc, sharp at the focus distance
     vec4 fp = ro + rd * (u_focus / max(dot(rd, u_frame[2]), 1e-3));
     float a = 6.2831853 * rnd(), r = u_aperture * sqrt(rnd());
@@ -270,7 +362,11 @@ void main() {
   for (int it = 0; it < 3000; it++) {
     if (phase == DONE) break;
     vec4 q = p;
+#ifdef VIEW_CURVED
+    if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); }
+#else
     if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3; }
+#endif
     else if (phase == AO) {
       vec4 ad = n;
       if (stoch) {  // sampled ambient occlusion: random directions around the normal
@@ -278,10 +374,13 @@ void main() {
 #ifdef VIEW_GEO
         ad -= dot(ad, wn) * wn;
 #endif
-        ad = normalize(ad);
-        if (dot(ad, n) < 0.0) ad = reflect(ad, n);
+#ifdef VIEW_CURVED
+        ad = tproj(ad, hp);
+#endif
+        ad = mnorm(ad);
+        if (mdot(ad, n) < 0.0) ad = mreflect(ad, n);
       }
-      q = hp + ad * (0.03 + 0.12 * float(k + 1));
+      q = geoPoint(hp, ad, 0.03 + 0.12 * float(k + 1));
     }
     else if (phase == SHADOW) q = sp;
 
@@ -341,15 +440,21 @@ void main() {
 #ifdef VIEW_GEO
         n = normalize(n - dot(n, wn) * wn + 1e-6);
 #endif
+#ifdef VIEW_CURVED
+        n = mnorm(tproj(vec4(n.xyz, KAPPA * n.w), hp));  // ambient gradient -> tangent gradient
+#endif
         k = 0;
         if (exiting) {
           // leaving a transparent object: refract outward (total internal reflection keeps it inside)
           exiting = false;
           float ior = max(hm[2].y, 1.0);
-          vec4 nd2 = refract(dir, -n, ior);
+          vec4 nd2 = mrefract(dir, -n, ior);
           phase = MARCH;
-          if (dot(nd2, nd2) < 1e-6) { dir = reflect(dir, -n); p = hp - n * (u_eps * 3.0); }
-          else { dir = normalize(nd2); inside = false; p = hp + n * (u_eps * 3.0); }
+          if (mdot(nd2, nd2) < 1e-6) { dir = mreflect(dir, -n); p = geoPoint(hp, n, -u_eps * 3.0); }
+          else { dir = mnorm(nd2); inside = false; p = geoPoint(hp, n, u_eps * 3.0); }
+#ifdef VIEW_CURVED
+          dir = mnorm(tproj(dir, p));
+#endif
           ro = p; rd = dir; t0 = t;
           omega = 1.0; prevR = 0.0; stepLen = 0.0;
           continue;
@@ -373,9 +478,9 @@ void main() {
         // this light is done: add its contribution
         float shv = clamp(sh, 0.0, 1.0);
         diffAcc += lc * dif * shv;
-        vec4 H = normalize(Ll - dir);
+        vec4 H = mnorm(Ll - dir);
         float rough = clamp(hm[1].y, 0.02, 1.0);
-        specAcc += lc * pow(max(dot(n, H), 0.0), mix(160.0, 6.0, rough)) * hm[1].z * shv * float(u_specular);
+        specAcc += lc * pow(max(mdot(n, H), 0.0), mix(160.0, 6.0, rough)) * hm[1].z * shv * float(u_specular);
         startLights = true;
       } else {
 #ifdef VIEW_GEO
@@ -394,18 +499,22 @@ void main() {
         if (li > u_nLights) break;
         float lmax;
         lightAt(li, hp, wn, dir, Ll, lc, lmax);
-        dif = max(dot(n, Ll), 0.0);
+        dif = max(mdot(n, Ll), 0.0);
         if (dif <= 0.0 || max(lc.r, max(lc.g, lc.b)) < 1e-4) continue;
         bool shadowed = li == 0 ? u_shadows == 1 : ((u_lightShadowMask >> (li - 1)) & 1) == 1;
         if (shadowed) {
-          sp = hp + n * 0.01; sdir = Ll; st = 0.02; sh = 1.0; sSteps = 0; shMax = min(lmax, li == 0 ? u_shadowMax : 1e9);
+          sp = geoPoint(hp, n, 0.01); sdir = Ll;
+#ifdef VIEW_CURVED
+          sdir = mnorm(tproj(Ll, sp));
+#endif
+          st = 0.02; sh = 1.0; sSteps = 0; shMax = min(lmax, li == 0 ? u_shadowMax : 1e9);
           phase = SHADOW;
           break;
         }
         diffAcc += lc * dif;  // unshadowed light
-        vec4 H = normalize(Ll - dir);
+        vec4 H = mnorm(Ll - dir);
         float rough = clamp(hm[1].y, 0.02, 1.0);
-        specAcc += lc * pow(max(dot(n, H), 0.0), mix(160.0, 6.0, rough)) * hm[1].z * float(u_specular);
+        specAcc += lc * pow(max(mdot(n, H), 0.0), mix(160.0, 6.0, rough)) * hm[1].z * float(u_specular);
       }
       if (li > u_nLights) {
         // all lights done: shade this surface
@@ -413,17 +522,17 @@ void main() {
         float emissive = clamp(hm[1].x, 0.0, 1.0);
         float ao = u_ao == 1 ? clamp(1.0 - u_aoStrength * occ, 0.0, 1.0) : 1.0;
         vec4 V = -dir;
-        float fre = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+        float fre = pow(1.0 - max(mdot(n, V), 0.0), 3.0);
 #ifdef VIEW_GEO
         vec3 rim = rayWorldCol;
 #else
-        vec3 rim = sky(n, rayWorldCol);
+        vec3 rim = sky(hp, n, rayWorldCol);
 #endif
         vec3 lit = base * (u_ambient * ao + 0.9 * diffAcc) + specAcc + 0.12 * fre * ao * rim;
         vec3 c = mix(lit, base, emissive);  // emissive: always fully lit, unshadowed
         c = mix(c, vec3(1.0, 0.6, 0.15), hm[0].a * (0.25 + 0.5 * fre));  // selection highlight
         float f = t / u_maxDist;
-        c = mix(c, sky(dir, rayWorldCol), clamp(u_fog * f * f * 1.5, 0.0, 1.0));
+        c = mix(c, sky(hp, dir, rayWorldCol), clamp(u_fog * f * f * 1.5, 0.0, 1.0));
         // no bounces left (or bounces off): mirrors and glass are drawn as plain surfaces, not dark
         bool canBounce = layers < u_maxLayers;
         float transp = canBounce ? clamp(hm[1].w, 0.0, 1.0) : 0.0;
@@ -435,7 +544,7 @@ void main() {
           // one path per sample, chosen by its share: the surface, a mirror reflection, or (glass)
           // a Fresnel reflection / refraction; the average over samples mixes them correctly
           float ior = max(hm[2].y, 1.0), f0 = (ior - 1.0) / (ior + 1.0);
-          float F = f0 * f0 + (1.0 - f0 * f0) * pow(1.0 - abs(dot(dir, n)), 5.0);
+          float F = f0 * f0 + (1.0 - f0 * f0) * pow(1.0 - abs(mdot(dir, n)), 5.0);
           float wM = metal * (1.0 - transp), wR = transp * F, r = rnd();
           if (r < wSurf) accum += thr * c;
           else if (r < wSurf + wM) { path = 1; tint = mix(vec3(1.0), base, 0.6); }
@@ -455,22 +564,28 @@ void main() {
           thr *= tint;
           if (path == 1) {
             // mirror: reflect (stochastic: rough surfaces scatter the reflection)
-            dir = reflect(dir, n);
+            dir = mreflect(dir, n);
             if (stoch && hm[1].y > 0.02) {
-              dir = normalize(dir + rndDir4() * hm[1].y * hm[1].y);
+              dir = mnorm(dir + rndDir4() * hm[1].y * hm[1].y);
 #ifdef VIEW_GEO
               dir = normalize(dir - dot(dir, wn) * wn);
 #endif
-              if (dot(dir, n) < 0.0) dir = reflect(dir, n);
+#ifdef VIEW_CURVED
+              dir = mnorm(tproj(dir, hp));
+#endif
+              if (mdot(dir, n) < 0.0) dir = mreflect(dir, n);
             }
-            p = hp + n * (u_eps * 4.0);
+            p = geoPoint(hp, n, u_eps * 4.0);
           } else {
             // glass: bend into the object by its index of refraction
-            vec4 nd2 = refract(dir, n, 1.0 / max(hm[2].y, 1.0));
-            dir = dot(nd2, nd2) < 1e-6 ? reflect(dir, n) : normalize(nd2);
-            inside = dot(nd2, nd2) >= 1e-6;
-            p = inside ? hp - n * (u_eps * 4.0) : hp + n * (u_eps * 4.0);
+            vec4 nd2 = mrefract(dir, n, 1.0 / max(hm[2].y, 1.0));
+            dir = mdot(nd2, nd2) < 1e-6 ? mreflect(dir, n) : mnorm(nd2);
+            inside = mdot(nd2, nd2) >= 1e-6;
+            p = geoPoint(hp, n, inside ? -u_eps * 4.0 : u_eps * 4.0);
           }
+#ifdef VIEW_CURVED
+          dir = mnorm(tproj(dir, p));  // the small step off the surface moved the tangent space
+#endif
           ro = p; rd = dir; t0 = t;
           omega = 1.0; prevR = 0.0; stepLen = 0.0;
         } else { phase = DONE; toSky = false; }
@@ -482,6 +597,11 @@ void main() {
       ap += adir * h;
       vec4 nn = projectToWorld(ap);   // the only world-projection site
       adir = normalize(adir - dot(adir, nn) * nn);
+#elif defined(VIEW_CURVED)
+      // exact geodesics: the primary segment from its start (over-relaxation may step back)
+      // (no re-normalisation of far points: there the form cancels catastrophically in floats)
+      if (phase == MARCH) { ap = ro; adir = rd; geoMove(ap, adir, t - t0); }
+      else { geoMove(ap, adir, h); if (abs(ap.w) < 100.0) { ap = crenorm(ap); adir = mnorm(tproj(adir, ap)); } }
 #else
       if (phase == MARCH) ap = ro + rd * (t - t0);  // straight segment: exact (and over-relaxation may step back)
       else ap += adir * h;
@@ -497,10 +617,35 @@ void main() {
   }
 
   vec3 col = accum;
-  if (toSky) col += thr * sky(dir, rayWorldCol);  // the ray (or what continued of it) ended in the sky
+  if (toSky) col += thr * sky(p, dir, rayWorldCol);  // the ray (or what continued of it) ended in the sky
   float tGrid = firstT >= 0.0 ? firstT : 1e9;
 
-#ifndef VIEW_GEO
+#ifdef VIEW_CURVED
+  // ground grid on the geodesic plane y = 0 of the world (normal coordinates x, z)
+  if (u_grid == 1) {
+    mat4 G = mat4(1.0); G[3][3] = KAPPA;
+    vec4 nu = G * transpose(u_axes) * G * vec4(0.0, 1.0, 0.0, 0.0);  // the plane's normal, camera-relative
+    float a = mdot(gro, nu), b = mdot(grd, nu), th = -1.0;
+    if (abs(b) > 1e-6) {
+      float r = -a / b;
+      if (KAPPA > 0.0) { th = atan(r); if (th < 0.0) th += 3.14159265; }
+      else if (abs(r) < 1.0) th = 0.5 * log((1.0 + r) / (1.0 - r));
+    }
+    float tg = th * u_curvR;
+    if (th > 0.0 && tg < tGrid && tg < u_maxDist) {
+      vec4 gp = gro, gd = grd;
+      geoMove(gp, gd, tg);
+      vec4 g = clogO(u_axes * gp);
+      float fade = exp(-tg * 0.05);
+      float gl = max(gridLine(g.x), gridLine(g.z)) * 0.25;
+      float ax = 1.0 - smoothstep(0.0, fwidth(g.z) * 1.5, abs(g.z));
+      float az = 1.0 - smoothstep(0.0, fwidth(g.x) * 1.5, abs(g.x));
+      col = mix(col, vec3(0.8) * gl + col * 0.5, gl * fade);
+      col = mix(col, axisCol(vec4(1.0, 0.0, 0.0, 0.0)), ax * fade * 0.8);
+      col = mix(col, axisCol(vec4(0.0, 0.0, 1.0, 0.0)), az * fade * 0.8);
+    }
+  }
+#elif !defined(VIEW_GEO)
   // ground grid in display coordinates (the shown axes: X, up, Z; lines along the slider axis)
   vec4 rod = gro * u_axes, rdd = grd * u_axes;
   if (u_grid == 1 && abs(rdd.y) > 1e-4) {
@@ -525,8 +670,8 @@ void main() {
 }
 )";
 
-inline std::string buildFragmentShader(const std::string& sceneGLSL, bool geo, ShaderTarget t) {
-  return shaderPrelude(t, geo) + sceneGLSL + RAYMARCH_MAIN;
+inline std::string buildFragmentShader(const std::string& sceneGLSL, bool geo, ShaderTarget t, int curved = 0) {
+  return shaderPrelude(t, geo, curved) + sceneGLSL + RAYMARCH_MAIN;
 }
 
 }  // namespace fd

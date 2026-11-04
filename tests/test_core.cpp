@@ -526,6 +526,92 @@ int main() {
     CHECK(v.mods.size() == 2 && v.mods[1].type == MOD_MIRROR, "added modifier reaches matching stacks");
   }
 
+  // ---- curved spaces (hyperbolic / spherical) ----
+  for (SpaceKind kind : {SpaceKind::Hyperbolic, SpaceKind::Spherical}) {
+    Space sp{kind, 2.5};
+    double k = sp.k();
+    const char* nm = SPACE_NAMES[(int)kind];
+    V4 u{1.1, -0.7, 0.4, 0};
+    V4 p = cs::expO(sp, u);
+    CHECK(std::abs(cs::mdot(k, p, p) - k) < 1e-12, "%s: expO lies on the model", nm);
+    CHECK(length(cs::logO(sp, p) - u) < 1e-10, "%s: logO inverts expO", nm);
+    CHECK(std::abs(cs::distance(sp, cs::origin(), p) - length(u)) < 1e-10, "%s: distance from the origin", nm);
+    M4 T = cs::translation(sp, u);
+    CHECK(length(mul(T, cs::origin()) - p) < 1e-10, "%s: translation moves O to expO", nm);
+    V4 a = cs::expO(sp, {-0.3, 0.9, 1.2, 0}), b = cs::expO(sp, {0.5, 0.2, -0.8, 0});
+    CHECK(std::abs(cs::distance(sp, mul(T, a), mul(T, b)) - cs::distance(sp, a, b)) < 1e-10, "%s: translations are isometries", nm);
+    M4 Ti = cs::inverse(k, T);
+    CHECK(length(mul(Ti, p) - cs::origin()) < 1e-10, "%s: inverse isometry", nm);
+    M4 Tab = cs::transvection(k, a, b);
+    CHECK(length(mul(Tab, a) - b) < 1e-10, "%s: transvection a -> b", nm);
+    V4 v = cs::tnormalize(k, cs::tangent(k, a, V4{0.3, 1, -0.2, 0.4}));
+    V4 tv = cs::transport(k, a, b, v);
+    CHECK(std::abs(cs::mdot(k, tv, b)) < 1e-10 && std::abs(cs::mdot(k, tv, tv) - 1) < 1e-10, "%s: transport keeps tangency and length", nm);
+    CHECK(length(mul(Tab, v) - tv) < 1e-10, "%s: transvection transports tangent vectors", nm);
+    // walking a geodesic: the distance travelled is the distance reached (less than half way round)
+    V4 q = a, d = v;
+    cs::geodesic(sp, q, d, 1.7);
+    CHECK(std::abs(cs::distance(sp, a, q) - 1.7) < 1e-9, "%s: geodesic distance", nm);
+    // right triangle with legs x, y at the origin: cosh(c/R) = cosh(x/R) cosh(y/R) (hyperbolic),
+    // cos(c/R) = cos(x/R) cos(y/R) (spherical) -- the Pythagorean theorem of each geometry
+    double x = 1.3, y = 0.9, R = sp.R();
+    double c = cs::distance(sp, cs::expO(sp, {x, 0, 0, 0}), cs::expO(sp, {0, y, 0, 0}));
+    double expect = R * (k < 0 ? std::acosh(std::cosh(x / R) * std::cosh(y / R)) : std::acos(std::cos(x / R) * std::cos(y / R)));
+    CHECK(std::abs(c - expect) < 1e-9, "%s: Pythagoras (%.6f vs %.6f)", nm, c, expect);
+    CHECK(k < 0 ? c > std::hypot(x, y) : c < std::hypot(x, y), "%s: hypotenuse longer / shorter than flat", nm);
+    // node transforms: relative isometry and back
+    Transform xf;
+    xf.pos = {0.8, -1.2, 2.0, 0};
+    double ang[6] = {20, 35, 0, -15, 0, 0};
+    xf.rot = cs::rot3(rotationFromAngles(ang));
+    xf.scale = 1.7;
+    M4 iso = cs::nodeIso(sp, xf, 1.3);
+    Transform back;
+    back.scale = xf.scale;
+    cs::setFromIso(sp, back, iso, 1.3);
+    CHECK(length(back.pos - xf.pos) < 1e-9, "%s: node position round trip", nm);
+    bool rotOk = true;
+    for (int i = 0; i < 16; i++) rotOk &= std::abs(back.rot[i] - xf.rot[i]) < 1e-9;
+    CHECK(rotOk, "%s: node rotation round trip", nm);
+    // the CPU evaluator: a ball of radius 1 is a geodesic ball (exact in normal coordinates)
+    PrimitiveRegistry reg;
+    Node ball = makeShape("sphere", "Ball", {3, 0, 0, 0});
+    Node root = makeGroup(BoolOp::Union, {ball}, "Scene");
+    SceneEvaluator ev(root, reg, "", sp);
+    V4 dir3 = normalize(V4{0.3, 0.8, -0.5, 0});
+    M4 Tb = cs::translation(sp, {3, 0, 0, 0});
+    V4 at = mul(Tb, cs::expO(sp, dir3 * 1.6));  // 1.6 from the ball's centre
+    double dd = ev.evalCurved(at).d;
+    if (k < 0) CHECK(std::abs(dd - 0.6) < 1e-6, "%s: distance to a geodesic ball %.6f", nm, dd);
+    else CHECK(dd > 0 && dd <= 0.6 + 1e-9 && dd > 0.3, "%s: spherical distances stay safe (%.6f <= 0.6)", nm, dd);
+    V4 inside = mul(Tb, cs::expO(sp, dir3 * 0.5));
+    CHECK(ev.evalCurved(inside).d < 0, "%s: inside the ball", nm);
+    // camera isometry stays an isometry after many moves
+    CurvedCamera cam;
+    cam.reset(sp);
+    for (int i = 0; i < 200; i++) { cam.orbit(sp, 13, -7); cam.pan(sp, 9, 4); cam.move(sp, {0.05, 0.02, 0.1, 0}, nullptr); }
+    M4 I = mul(cs::inverse(k, cam.iso), cam.iso);
+    bool isoOk = true;
+    for (int i = 0; i < 16; i++) isoOk &= std::abs(I[i] - identity()[i]) < 1e-9;
+    CHECK(isoOk, "%s: camera stays an isometry", nm);
+    // scene files keep the space and the curved camera
+    SceneFile f;
+    f.root = root;
+    f.space = sp;
+    CurvedCamState cc = cam.save();
+    std::string text = sceneToJson(f.root, reg, "", nullptr, nullptr, nullptr, "", nullptr, &sp, &cc);
+    SceneFile g = sceneFromJson(text);
+    CHECK(g.space.kind == kind && std::abs(g.space.radius - 2.5) < 1e-12, "%s: space saved", nm);
+    CHECK(g.curvedCam && std::abs(g.curvedCam->iso[5] - cc.iso[5]) < 1e-9, "%s: curved camera saved", nm);
+  }
+  {  // flat scenes do not write a space
+    PrimitiveRegistry reg;
+    Node root = makeGroup(BoolOp::Union, {}, "Scene");
+    Space flat;
+    std::string text = sceneToJson(root, reg, "", nullptr, nullptr, nullptr, "", nullptr, &flat);
+    CHECK(text.find("\"space\"") == std::string::npos && sceneFromJson(text).space.kind == SpaceKind::Flat, "flat space is the default");
+  }
+
   std::printf("%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

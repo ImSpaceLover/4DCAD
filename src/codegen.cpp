@@ -196,8 +196,112 @@ static std::string extrudeGLSL(const Node& n, const std::vector<ModAxis>& ax, co
   return o.str();
 }
 
+// ---------------------------------------------------------------- curved spaces
+// Every node function gets a model point in its parent's frame, applies the node's inverse
+// isometry (relative to the parent, slots 0-3; the root's includes the camera) and either passes
+// the point on (groups) or evaluates its shape in normal coordinates around its origin (leaves).
+static const char* CURVED_HELPERS = R"(
+float cC(float t) { return KAPPA > 0.0 ? cos(t) : 0.5 * (exp(t) + exp(-t)); }
+float cS(float t) { return KAPPA > 0.0 ? sin(t) : 0.5 * (exp(t) - exp(-t)); }
+// angle (model distance) of q from the origin
+float cAngO(vec4 q) { float l = length(q.xyz); return KAPPA > 0.0 ? atan(l, q.w) : log(l + sqrt(l * l + 1.0)); }
+float cdistO(vec4 q) { return u_curvR * cAngO(q); }
+vec4 clogO(vec4 q) {  // normal coordinates (world units) of q
+  float l = length(q.xyz);
+  vec3 d = l > 1e-12 ? q.xyz / l : vec3(1.0, 0.0, 0.0);
+  return vec4(d * (u_curvR * cAngO(q)), 0.0);
+}
+vec4 cexpO(vec4 u) {
+  float l = length(u.xyz);
+  if (l < 1e-12) return vec4(0.0, 0.0, 0.0, 1.0);
+  float t = l / u_curvR;
+  return vec4(u.xyz * (cS(t) / l), cC(t));
+}
+)";
+
+static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, const std::unordered_set<std::string>* badCode) {
+  CompiledScene cs;
+  std::unordered_map<std::string, int> index;
+  walk(root, [&](Node& n, Node*, int) { index[n.id] = (int)cs.nodeIds.size(); cs.nodeIds.push_back(n.id); });
+  std::ostringstream o;
+  o << SDF_HELPERS << SCENE_HELPERS << CURVED_HELPERS;
+  std::map<std::string, std::string> primFn;
+  walk(root, [&](Node& n, Node*, int) {
+    if (n.isCustom()) {
+      std::string suffix = "_c" + std::to_string(index[n.id]);
+      if (badCode && badCode->count(n.code))
+        o << "float sdf" << suffix << "(vec4 p) { vec4 e = abs(p) - " << glslFloat(n.codeBound) << "; return length(max(e, 0.0)) + min(max(max(e.x, e.y), max(e.z, e.w)), 0.0); }\n";
+      else o << "// custom SDF: " << n.name << "\n" << renameCustomCode(n.code, suffix) << "\n";
+      return;
+    }
+    if (!n.isLeaf() || primFn.count(n.prim)) return;
+    auto* def = reg.get(n.prim);
+    if (!def) return;
+    std::string name = "prim" + std::to_string(primFn.size());
+    primFn[n.prim] = name;
+    o << "// " << def->name << "\n" << primitiveGLSL(*def, name);
+  });
+  auto D = [](int i, int k) { return "ndat(" + std::to_string(i) + ", " + std::to_string(k) + ")"; };
+  auto ROT = [&](int i) { return "mat4(" + D(i, 0) + ", " + D(i, 1) + ", " + D(i, 2) + ", " + D(i, 3) + ")"; };
+  auto fn = [&](const Node& n) { return "n" + std::to_string(index[n.id]) + "_c"; };
+  std::function<void(Node&)> emit = [&](Node& n) {
+    if (!n.hidden && !n.isCamera() && !n.isLeaf()) for (auto& c : n.children) emit(c);
+    int i = index[n.id];
+    std::ostringstream L;
+    L << "float " << fn(n) << "(vec4 p, out MAT m) {\n";
+    const PrimitiveDef* def = n.isLeaf() ? reg.get(n.prim) : nullptr;
+    if (n.hidden || n.isCamera() || (n.isLeaf() && !def) || (n.isGroup() && n.children.empty())) {
+      L << "  m = MAT(0.0); return INF;\n}\n";
+      o << L.str();
+      return;
+    }
+    if (n.isLeaf() && n.mat.emissive > 0) L << "  if (g_noEmissive && " << D(i, 9) << ".x > 0.0) { m = MAT(0.0); return INF; }\n";
+    L << "  vec4 par = " << D(i, 5) << ";\n  vec4 qm = " << ROT(i) << " * p;\n";
+    if (n.id != root.id) L << "  float bd = cdistO(qm) - " << D(i, 8) << ".x;\n  if (bd > par.w && !g_exact) { m = MAT(0.0); return bd; }\n";
+    L << "  float s = par.x;\n";
+    auto ax = modifierAxes(n, reg);
+    if (n.isLeaf()) {
+      L << "  vec4 q = clogO(qm) / s;\n  vec4 q0 = q;\n";
+      L << modifierCoordsGLSL(n, ax, "q", "");
+      if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
+      else L << "  float d = " << primFn[n.prim] << "(q);\n";
+      L << extrudeGLSL(n, ax, "");
+      double shell = n.shell.value_or(0.0), round = n.round.value_or(0.0);
+      if (shell > 0) L << "  d = abs(d) - " << glslFloat(shell) << ";\n";
+      if (round != 0) L << "  d -= " << glslFloat(round) << ";\n";
+      for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
+      L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
+      if (const char* tf = texFn(n.mat.texture)) {
+        L << "  vec4 tq = q0 * m9.y;\n";
+        for (int a = nodeDim(n, reg); a < 4; a++) L << "  tq." << C[a] << " = 0.5;\n";
+        L << "  if (u_textures == 1) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(tq) * m9.z);\n";
+      }
+      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
+      L << "  return d * s * " << D(i, 8) << ".w;\n}\n";  // .w: spherical safety factor
+    } else {
+      std::string coords = modifierCoordsGLSL(n, ax, "q", "");
+      if (!coords.empty()) L << "  vec4 q = clogO(qm) / s;\n" << coords << "  q.w = 0.0;\n  qm = cexpO(q * s);\n";
+      static const char* opf[6] = {"opU", "opI", "opS", "opSU", "opSI", "opSS"};
+      L << "  float k = max(par.y, 1e-4);\n  MAT mb;\n";
+      L << "  float d = " << fn(n.children[0]) << "(qm, m);\n";
+      for (size_t c = 1; c < n.children.size(); c++)
+        L << "  { float b = " << fn(n.children[c]) << "(qm, mb); d = " << opf[(int)n.op] << "(d, m, b, mb" << (isSmooth(n.op) ? ", k" : "") << "); }\n";
+      std::string ex = extrudeGLSL(n, ax, "");
+      if (!ex.empty()) L << "  if (d < INF * 0.5) {\n  d /= s;\n" << ex << "  d *= s;\n  }\n";
+      L << "  return d;\n}\n";
+    }
+    o << L.str();
+  };
+  emit(root);
+  o << "float mapScene(vec4 p, out MAT m) { return " << fn(root) << "(p, m); }\n";
+  o << "float worldSDF(vec4 p) { return INF; }\nfloat worldSDFm(vec4 p, out MAT m) { m = MAT(0.0); return INF; }\n";
+  cs.glsl = o.str();
+  return cs;
+}
+
 CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::string& activeWorldIn, bool geo,
-                           const std::unordered_set<std::string>* badCode) {
+                           const std::unordered_set<std::string>* badCode, SpaceKind space) {
+  if (space != SpaceKind::Flat) return compileCurved(root, reg, badCode);
   CompiledScene cs;
   std::unordered_map<std::string, int> index;
   walk(root, [&](Node& n, Node*, int) { index[n.id] = (int)cs.nodeIds.size(); cs.nodeIds.push_back(n.id); });
@@ -345,8 +449,10 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
   return cs;
 }
 
-std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight) {
+std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight,
+                             const Space* space, const M4* camIso) {
   const int S = 12 * 4;  // floats per node (12 vec4 slots, see emitNode)
+  const int S_PER = S;
   size_t N = cs.nodeIds.size();
   std::vector<float> d(std::max<size_t>(N, 1) * S, 0.f);
   auto bounds = computeBounds(root, reg);
@@ -392,12 +498,40 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
     // attached objects: how far from the tangent space they may reach (see attachCut)
     slot(8)[2] = (float)attachCut(reach, b != bounds.end() ? b->second.r : INFINITY);
   }
+  if (space && space->curved()) {
+    // curved: inverse isometries relative to the parent (the root's also undoes the camera: the
+    // shader works in camera-relative coordinates, which keeps float precision near the eye),
+    // total scales, world-unit bounds and blend radii
+    std::unordered_map<std::string, int> idx;
+    for (size_t i = 0; i < N; i++) idx[cs.nodeIds[i]] = (int)i;
+    double k = space->k();
+    std::function<void(Node&, double)> visit = [&](Node& n, double sAnc) {
+      auto it = idx.find(n.id);
+      double S = sAnc * n.xf.scale;
+      if (it != idx.end()) {
+        float* v = &d[it->second * S_PER];
+        M4 iso = cs::nodeIso(*space, n.xf, sAnc);
+        if (&n == &root && camIso) iso = mul(cs::inverse(k, *camIso), iso);
+        M4 inv = cs::inverse(k, iso);
+        for (int q = 0; q < 16; q++) v[q] = (float)inv[q];
+        v[5 * 4 + 0] = (float)S;
+        v[5 * 4 + 3] *= (float)sAnc;  // skip distance in world units
+        if (!n.isLeaf()) v[5 * 4 + 1] = (float)(n.k * S);
+        auto b = bounds.find(n.id);
+        double r = b != bounds.end() && std::isfinite(b->second.r) ? b->second.r * sAnc : INFINITY;
+        v[8 * 4 + 0] = std::isfinite(r) ? (float)r : 1e9f;
+        v[8 * 4 + 3] = (float)curvedFactor(*space, r);
+      }
+      for (auto& c : n.children) visit(c, S);
+    };
+    visit(root, 1.0);
+  }
   return d;
 }
 
-std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo) {
+std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space) {
   std::ostringstream o;
-  o << world << "|" << geo << "|";
+  o << world << "|" << geo << "|" << (int)space << "|";
   walkc(root, [&](const Node& n, const Node*, int depth) {
     o << depth << n.id << (n.isLeaf() ? "L" + n.prim : n.isCamera() ? std::string("C") : "G" + std::to_string((int)n.op)) << (n.hidden ? "h" : "") << (n.anchor ? "a" + n.anchor->world : "");
     for (auto& m : n.mods) o << "m" << m.type << m.axis << m.spacing << ":" << m.count << ":" << (int)m.mode << m.length << ":" << m.radius << ":" << m.i << m.j << m.angle;

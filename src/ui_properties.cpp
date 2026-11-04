@@ -72,7 +72,9 @@ void UI::cameraProperties(Node& n, bool& live, bool& done) {
   }
   ImGui::SeparatorText("Placement");
   float pos[4] = {(float)n.xf.pos[0], (float)n.xf.pos[1], (float)n.xf.pos[2], (float)n.xf.pos[3]};
-  if (ImGui::DragFloat4(geoCam ? "Surface point" : "Position XYZW", pos, 0.02f)) for (int i = 0; i < 4; i++) n.xf.pos[i] = pos[i];
+  bool cv = app.curved();
+  if (cv ? ImGui::DragFloat3("Position XYZ", pos, 0.02f) : ImGui::DragFloat4(geoCam ? "Surface point" : "Position XYZW", pos, 0.02f))
+    for (int i = 0; i < (cv ? 3 : 4); i++) n.xf.pos[i] = pos[i];
   keyable(id, {"pos.x", "pos.y", "pos.z", "pos.w"});
   track();
   if (geoCam) ImGui::TextDisabled("Move it with the gizmo or G to slide along the surface");
@@ -82,14 +84,14 @@ void UI::cameraProperties(Node& n, bool& live, bool& done) {
   bool rc = false;
   ImGui::TextUnformatted("Rotation (degrees per plane)");
   for (int k = 0; k < 6; k++) {
-    if (geoCam && (k == 2 || k == 4 || k == 5)) continue;  // stays in the surface's tangent space
+    if ((geoCam || cv) && (k == 2 || k == 4 || k == 5)) continue;  // stays in the surface's tangent space / 3D space
     ImGui::PushID(k);
     ImGui::SetNextItemWidth(68);
     if (ImGui::DragFloat(PLANE_NAMES[k], &a[k], 0.5f, -180.f, 180.f, "%.1f")) rc = true;
     keyable(id, {"rot"});
     track();
     ImGui::PopID();
-    if (k % 3 != 2 && !(geoCam && k == 3)) ImGui::SameLine();
+    if (k % 3 != 2 && !((geoCam || cv) && k == 3)) ImGui::SameLine();
   }
   if (rc) {
     double d[6];
@@ -285,7 +287,11 @@ void UI::propertiesPanel() {
   if (!isRoot) {
     ImGui::SeparatorText(n->anchor ? "Transform (on the world surface)" : "Transform");
     float pos[4] = {(float)n->xf.pos[0], (float)n->xf.pos[1], (float)n->xf.pos[2], (float)n->xf.pos[3]};
-    if (ImGui::DragFloat4("Position XYZW", pos, 0.02f)) for (int i = 0; i < 4; i++) n->xf.pos[i] = pos[i];
+    bool cv = app.curved();
+    if (cv ? ImGui::DragFloat3("Position XYZ", pos, 0.02f) : ImGui::DragFloat4("Position XYZW", pos, 0.02f))
+      for (int i = 0; i < (cv ? 3 : 4); i++) n->xf.pos[i] = pos[i];
+    if (cv && ImGui::IsItemHovered())
+      ImGui::SetTooltip("Normal coordinates in the parent's frame: walk %.2f along this direction from its origin", length(n->xf.pos));
     keyable(nid, {"pos.x", "pos.y", "pos.z", "pos.w"});
     track();
     mixed([](const Node& x) { return x.xf.pos; });
@@ -296,7 +302,7 @@ void UI::propertiesPanel() {
     bool rotChanged = false;
     ImGui::TextUnformatted("Rotation (degrees per plane)");
     for (int k = 0; k < 6; k++) {
-      bool hide = n->anchor && (k == 2 || k == 4 || k == 5);  // stay in the surface's tangent space
+      bool hide = (n->anchor || cv) && (k == 2 || k == 4 || k == 5);  // stay in the surface's tangent space / 3D space
       if (hide) continue;
       ImGui::PushID(k);
       ImGui::SetNextItemWidth(68);
@@ -304,7 +310,7 @@ void UI::propertiesPanel() {
       keyable(nid, {"rot"});
       track();
       ImGui::PopID();
-      if (k % 3 != 2 && !(n->anchor && k == 3)) ImGui::SameLine();
+      if (k % 3 != 2 && !((n->anchor || cv) && k == 3)) ImGui::SameLine();
     }
     if (rotChanged) {
       double d[6];
@@ -457,6 +463,8 @@ void UI::propertiesPanel() {
     ImGui::EndPopup();
   }
 
+  if (app.curved()) ImGui::End();  // no world surfaces in curved spaces
+  if (!app.curved()) {
   ImGui::SeparatorText("World surface");
   if (n->id == app.world) {
     ImGui::TextUnformatted("This object is the world.");
@@ -472,6 +480,7 @@ void UI::propertiesPanel() {
     if (ImGui::Button("Attach to world surface")) { app.attachToWorld(nid); ImGui::End(); return; }
   }
   ImGui::End();
+  }
   if ((done || live) && !others.empty())
     for (Node* o : others) propagateEdit(before, *n, *o, stacksMatch, modOp);
   if (done) app.commit();
