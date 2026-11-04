@@ -19,12 +19,16 @@ set(FETCHCONTENT_QUIET ON)
 # --- dependencies ---------------------------------------------------------------
 FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz)
 FetchContent_MakeAvailable(json)
+# stb_image_write (PNG / JPEG output), public domain, pinned
+FetchContent_Declare(stb GIT_REPOSITORY https://github.com/nothings/stb.git GIT_TAG d14d46f6b44456eb88beac58cba833a4135d4c89)
+FetchContent_Populate(stb)
 
 # --- core (platform independent: no OpenGL / window) ------------------------------
 add_library(fdcore STATIC
   src/primitives.cpp src/scene.cpp src/evaluator.cpp src/geodesic.cpp src/camera.cpp
-  src/surface.cpp src/codegen.cpp src/examples.cpp src/library.cpp src/animation.cpp)
+  src/surface.cpp src/codegen.cpp src/examples.cpp src/library.cpp src/animation.cpp src/media.cpp)
 target_include_directories(fdcore PUBLIC src)
+target_include_directories(fdcore PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(fdcore PUBLIC nlohmann_json::nlohmann_json)
 if(MINGW)
   target_compile_definitions(fdcore PUBLIC _USE_MATH_DEFINES)
