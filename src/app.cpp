@@ -96,12 +96,12 @@ void App::toast(const std::string& msg, bool error) {
 }
 
 // ============================================================ scene lifecycle
-// undo snapshot: world id, bookmarks, scene tree (one line each)
-std::string App::snapshot() { return world + "\n" + bookmarksToJson(bookmarks) + "\n" + lightsToJson(lights) + "\n" + nodeToJson(root); }
+// undo snapshot: world id, active camera, lights, scene tree (one line each)
+std::string App::snapshot() { return world + "\n" + activeCamera + "\n" + lightsToJson(lights) + "\n" + nodeToJson(root); }
 void App::restore(const std::string& s) {
   auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1), nl3 = s.find('\n', nl2 + 1);
   world = s.substr(0, nl);
-  bookmarks = bookmarksFromJson(s.substr(nl + 1, nl2 - nl - 1));
+  activeCamera = s.substr(nl + 1, nl2 - nl - 1);
   lights = lightsFromJson(s.substr(nl2 + 1, nl3 - nl2 - 1));
   root = nodeFromJson(s.substr(nl3 + 1));
   recordLinks(root, linkDefs_);
@@ -110,7 +110,20 @@ void App::restore(const std::string& s) {
 void App::loadScene(SceneFile f) {
   root = std::move(f.root);
   world = (!f.world.empty() && findNode(root, f.world)) ? f.world : "";
-  bookmarks = std::move(f.bookmarks);
+  // old camera bookmarks become camera objects
+  for (auto& b : f.bookmarks) {
+    FullCamera fc;
+    fc.load(b.cam);
+    View v = fc.view();
+    Node c = makeCamera(b.name, v.eye, v.frame, 60, b.cam.slider);
+    if (b.geo && !f.world.empty()) { c.xf.pos = b.geoPivot; c.xf.rot = identity(); c.anchor = Anchor{f.world, b.geoFrame, 1e4}; }
+    root.children.push_back(std::move(c));
+  }
+  activeCamera = f.activeCamera;
+  if (Node* a = findNode(root, activeCamera); !a || !a->isCamera()) {
+    activeCamera.clear();
+    walk(root, [&](Node& n, Node*, int) { if (n.isCamera() && activeCamera.empty()) activeCamera = n.id; });
+  }
   lights = std::move(f.lights);
   recordLinks(root, linkDefs_);
   isolate.clear();
@@ -148,7 +161,7 @@ bool App::loadSceneFile(const std::string& path, std::string& err) {
 
 std::string App::serialize() {
   CameraState cs = editCam.save();
-  return sceneToJson(root, reg, world, &cs, &bookmarks, &lights);
+  return sceneToJson(root, reg, world, &cs, nullptr, &lights, activeCamera);
 }
 
 bool App::saveSceneFile(const std::string& path, std::string& err) {
@@ -327,35 +340,95 @@ void App::toggleIsolate() {
   rebuild();
 }
 
-void App::addBookmark(const std::string& name) {
-  CameraBookmark b;
-  b.name = name.empty() ? "View " + std::to_string(bookmarks.size() + 1) : name;
-  b.cam = editCam.save();
-  if (geo && geoEdit.valid) { b.geo = true; b.geoPivot = geoEdit.pivot; b.geoFrame = geoEdit.frame; }
-  bookmarks.push_back(b);
-  commit();
+// ============================================================ cameras (scene objects)
+View App::cameraView(const std::string& id, bool* geoCam, double* fov) {
+  Node* n = findNode(root, id);
+  View v;
+  if (!n) return v;
+  v.eye = nodeWorldPos(id);
+  v.frame = orthonormalize(nodeWorldFrame(id));
+  if (geoCam) *geoCam = n->anchor && !world.empty() && n->anchor->world == world;
+  if (fov) *fov = n->camFov;
+  return v;
 }
 
-void App::updateBookmark(size_t i) {
-  if (i >= bookmarks.size()) return;
-  std::string name = bookmarks[i].name;
-  bookmarks[i].cam = editCam.save();
-  bookmarks[i].geo = geo && geoEdit.valid;
-  if (bookmarks[i].geo) { bookmarks[i].geoPivot = geoEdit.pivot; bookmarks[i].geoFrame = geoEdit.frame; }
+std::string App::addCamera() {
+  View v = currentView();
+  int count = 0;
+  walk(root, [&](Node& m, Node*, int) { if (m.isCamera()) count++; });
+  Node c = makeCamera("Camera " + std::to_string(count + 1), v.eye, v.frame, fov(), editCam.slider);
+  if (geo && geoEdit.valid && !world.empty()) {
+    // a Geodesic camera: attached to the world surface (it then moves along it)
+    c.xf.pos = geoEdit.pivot;
+    c.xf.rot = identity();
+    c.anchor = Anchor{world, geoEdit.frame, 1e4};
+  }
+  std::string id = c.id;
+  root.children.push_back(std::move(c));
+  if (activeCamera.empty() || !findNode(root, activeCamera)) activeCamera = id;
+  selection = {id};
   commit();
+  return id;
 }
 
-void App::gotoBookmark(size_t i) {
-  if (i >= bookmarks.size()) return;
-  const auto& b = bookmarks[i];
-  if (b.geo && !world.empty()) {
+void App::lookThrough(const std::string& id) {
+  Node* n = findNode(root, id);
+  if (!n || !n->isCamera()) return;
+  bool gcam = false;
+  double f = 60;
+  View v = cameraView(id, &gcam, &f);
+  if (gcam) {
     if (!geo) setGeo(true);
-    if (geo) { geoEdit.pivot = b.geoPivot; geoEdit.frame = b.geoFrame; geoEdit.valid = true; }
+    if (geo) { geoEdit.pivot = v.eye; geoEdit.frame = v.frame; geoEdit.valid = true; }
   } else {
     if (geo) setGeo(false);
-    editCam.load(b.cam);
+    editCam.slider = n->camSlider;
+    editCam.setFromView(v, std::max(1.0, editCam.distance));
+    editCam.pivotSet = false;
   }
+  (mode == Mode::Explore ? exploreSet.fov : editSet.fov) = f;
   lastChange_ = now;
+}
+
+void App::cameraToView(const std::string& id) {
+  Node* n = findNode(root, id);
+  if (!n || !n->isCamera()) return;
+  View v = currentView();
+  n->camFov = fov();
+  if (geo && geoEdit.valid && !world.empty()) {
+    n->xf.pos = geoEdit.pivot;
+    n->xf.rot = identity();
+    n->anchor = Anchor{world, geoEdit.frame, 1e4};
+    if (findParent(root, id) != &root) {  // attached objects live at the scene root
+      auto m = removeNode(root, id);
+      root.children.push_back(std::move(*m));
+    }
+  } else {
+    n->anchor.reset();
+    n->camSlider = editCam.slider;
+    Transform w{v.eye, v.frame, 1};
+    Node* p = findParent(root, id);
+    auto pw = p ? worldXf(root, p->id) : std::optional<Transform>(Transform{});
+    Transform local = pw ? relativeXf(*pw, w) : w;
+    n->xf.pos = local.pos;
+    n->xf.rot = local.rot;
+  }
+  commit();
+}
+
+std::string App::pickCamera(double x, double y) {
+  // cameras have no shape: they are clicked on their drawn icon (its centre)
+  View v = currentView();
+  std::string best;
+  double bd = 14;
+  walk(root, [&](Node& n, Node*, int) {
+    if (!n.isCamera() || n.hidden || isLocked(n.id)) return;
+    double sx, sy;
+    if (!project(nodeWorldPos(n.id), v, sx, sy)) return;
+    double d = std::hypot(sx - x, sy - y);
+    if (d < bd) { bd = d; best = n.id; }
+  });
+  return best;
 }
 
 void App::groupSelection(BoolOp op) {
@@ -395,7 +468,7 @@ void App::ungroup(const std::string& id) {
   if (!p) return;
   size_t i = 0;
   while (i < p->children.size() && p->children[i].id != id) i++;
-  if (p->children[i].isLeaf()) return;
+  if (!p->children[i].isGroup()) return;
   Node g = std::move(p->children[i]);
   p->children.erase(p->children.begin() + i);
   selection.clear();
@@ -419,7 +492,7 @@ void App::reparent(const std::string& id, const std::string& targetId, Drop wher
     if (W && P) n->xf = relativeXf(*P, *W);
   };
   Node* target = findNode(root, targetId);
-  if (where == Drop::Into && !target->isLeaf()) { into(targetId); target->children.push_back(std::move(*n)); }
+  if (where == Drop::Into && target->isGroup()) { into(targetId); target->children.push_back(std::move(*n)); }
   else {
     Node* p = findParent(root, targetId);
     if (!p) { into(root.id); root.children.push_back(std::move(*n)); commit(); return; }
@@ -1024,6 +1097,12 @@ void App::handleKey(int key, bool shift, bool ctrl, bool alt) {
   else if (P(Action::ViewTop)) standardView(2);
   else if (P(Action::ViewAlongW)) standardView(3);
   else if (P(Action::Reset4D)) editCam.reset4();
+  else if (P(Action::LookThrough) || P(Action::CameraToView)) {
+    // the selected camera, else the active one
+    std::string id = selected() && selected()->isCamera() ? selected()->id : activeCamera;
+    if (Node* c = findNode(root, id); c && c->isCamera()) { if (P(Action::LookThrough)) lookThrough(id); else cameraToView(id); }
+    else toast("No camera: View > Cameras > Add camera at the view", true);
+  }
 }
 
 void App::flyGeoEdit(const InputState& in, double dt) {
@@ -1078,8 +1157,9 @@ void App::handleInput(const InputState& in, double dt) {
     drag_ = Drag::Click;
     if (tool == Tool::Move) {
       auto hit = pick(in.mx, in.my);
-      if (hit && hit->node) {
-        std::string id = hit->node->id;
+      std::string camHit = pickCamera(in.mx, in.my);
+      if (!camHit.empty() || (hit && hit->node)) {
+        std::string id = !camHit.empty() ? camHit : hit->node->id;
         bool keep = false;
         for (auto& s : selection) if (s == id || isAncestor(root, s, id)) keep = true;
         if (!keep) selection = {id};
@@ -1172,7 +1252,8 @@ void App::handleInput(const InputState& in, double dt) {
     bool click = !dragMoved_ && dragButton_ == 0 && (drag_ == Drag::Click || drag_ == Drag::FreeMove);
     if (click && in.vpHovered) {
       auto hit = pick(in.mx, in.my);
-      std::string id = hit && hit->node ? hit->node->id : "";
+      std::string id = pickCamera(in.mx, in.my);  // camera icons first (they have no shape)
+      if (id.empty()) id = hit && hit->node ? hit->node->id : "";
       // a click selects exactly the object under the cursor; Ctrl+click selects its group instead
       if (!id.empty() && in.ctrl) {
         Node* p = findParent(root, id);

@@ -38,6 +38,18 @@ Node makeCustom(const std::string& name, const std::string& code) {
   return n;
 }
 
+Node makeCamera(const std::string& name, const V4& eye, const M4& frame, double fov, int slider) {
+  Node n;
+  n.id = newId("c");
+  n.kind = NodeKind::Camera;
+  n.name = name;
+  n.xf.pos = eye;
+  n.xf.rot = orthonormalize(frame);
+  n.camFov = fov;
+  n.camSlider = slider;
+  return n;
+}
+
 M4 nodeRotation(const Node& n) { return n.anchor ? mul(n.anchor->basis, n.xf.rot) : n.xf.rot; }
 
 void walk(Node& n, const std::function<void(Node&, Node*, int)>& fn, Node* parent, int depth) {
@@ -87,7 +99,7 @@ std::optional<Node> removeNode(Node& root, const std::string& id) {
 }
 Node cloneFresh(const Node& n) {
   Node c = n;
-  walk(c, [](Node& m, Node*, int) { m.id = newId(m.isLeaf() ? "n" : "g"); });
+  walk(c, [](Node& m, Node*, int) { m.id = newId(m.isLeaf() ? "n" : m.isCamera() ? "c" : "g"); });
   return c;
 }
 
@@ -134,7 +146,7 @@ bool centreGroupOnFirst(Node& g) {
 void pruneEmptyGroups(Node& root) {
   std::function<void(Node&)> rec = [&](Node& n) {
     for (auto& c : n.children) rec(c);
-    n.children.erase(std::remove_if(n.children.begin(), n.children.end(), [](const Node& c) { return !c.isLeaf() && c.children.empty(); }),
+    n.children.erase(std::remove_if(n.children.begin(), n.children.end(), [](const Node& c) { return c.isGroup() && c.children.empty(); }),
                      n.children.end());
   };
   rec(root);
@@ -377,7 +389,7 @@ static Modifier jMod(const json& mj) {
 }
 
 static json nodeJ(const Node& n) {
-  json j = {{"id", n.id}, {"name", n.name}, {"kind", n.isLeaf() ? "leaf" : "group"},
+  json j = {{"id", n.id}, {"name", n.name}, {"kind", n.isLeaf() ? "leaf" : n.isCamera() ? "camera" : "group"},
             {"xf", {{"pos", v4j(n.xf.pos)}, {"rotm", m4j(n.xf.rot)}, {"scale", n.xf.scale}}}};
   json mods = json::array();
   for (auto& m : n.mods) mods.push_back(modJ(m));
@@ -398,6 +410,8 @@ static json nodeJ(const Node& n) {
                      {"roughness", m.roughness}, {"specular", m.specular}, {"transparency", m.transparency}, {"ior", m.ior},
                      {"metallic", m.metallic}};
     if (n.isCustom()) { j["code"] = n.code; j["codeBound"] = n.codeBound; }
+  } else if (n.isCamera()) {
+    j["camera"] = {{"fov", n.camFov}, {"slider", n.camSlider}};
   } else {
     j["op"] = BOOL_OP_NAMES[(int)n.op];
     j["k"] = n.k;
@@ -418,8 +432,8 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
   if (!j.is_object()) throw std::runtime_error("Invalid node");
   Node n;
   std::string kind = j.value("kind", std::string("leaf"));
-  if (kind != "leaf" && kind != "group") throw std::runtime_error("Unknown node kind: " + kind);
-  n.kind = kind == "leaf" ? NodeKind::Leaf : NodeKind::Group;
+  if (kind != "leaf" && kind != "group" && kind != "camera") throw std::runtime_error("Unknown node kind: " + kind);
+  n.kind = kind == "leaf" ? NodeKind::Leaf : kind == "camera" ? NodeKind::Camera : NodeKind::Group;
   n.id = j.value("id", newId());
   if (j.contains("xf")) {
     auto& x = j["xf"];
@@ -482,6 +496,11 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
       if (!n.shell && def->shell != 0) n.shell = def->shell;
       n.prim = "point";
     }
+  } else if (n.isCamera()) {
+    n.name = j.value("name", std::string("Camera"));
+    auto c = j.value("camera", json::object());
+    n.camFov = std::clamp(c.value("fov", 60.0), 5.0, 170.0);
+    n.camSlider = std::clamp(c.value("slider", 3), 0, 3);
   } else {
     std::string op = j.value("op", std::string("union"));
     for (int i = 0; i < 6; i++) if (op == BOOL_OP_NAMES[i]) n.op = (BoolOp)i;
@@ -566,11 +585,13 @@ std::vector<PointLight> lightsFromJson(const std::string& text) {
 }
 
 std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam,
-                        const std::vector<CameraBookmark>* bookmarks, const std::vector<PointLight>* lights) {
+                        const std::vector<CameraBookmark>* bookmarks, const std::vector<PointLight>* lights,
+                        const std::string& activeCamera) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   j["world"] = world.empty() ? json(nullptr) : json(world);
   if (cam) j["camera"] = camJ(*cam);
   if (bookmarks && !bookmarks->empty()) j["bookmarks"] = marksJ(*bookmarks);
+  if (!activeCamera.empty()) j["activeCamera"] = activeCamera;
   if (lights && !lights->empty()) j["lights"] = lightsJ(*lights);
   return j.dump(2);
 }
@@ -681,6 +702,7 @@ SceneFile sceneFromJson(const std::string& text) {
     f.camera = cs;
   }
   if (j.contains("bookmarks")) f.bookmarks = jMarks(j["bookmarks"]);
+  f.activeCamera = j.value("activeCamera", std::string());
   if (j.contains("lights")) f.lights = jLights(j["lights"]);
   return f;
 }

@@ -202,6 +202,36 @@ void UI::overlays(ImDrawList* dl) {
     return;
   }
 
+  // camera objects: small frustums (orange = active camera; a triangle marks "up")
+  walk(app.root, [&](Node& n, Node*, int) {
+    if (!n.isCamera() || n.hidden) return;
+    if (!app.isolate.empty() && !app.isolate.count(n.id)) return;
+    double cf = 60;
+    View cv = app.cameraView(n.id, nullptr, &cf);
+    double s = 0.55, b = s * std::tan(cf * PI / 360), a2 = b * 1.5;
+    V4 R = col(cv.frame, 0), U = col(cv.frame, 1), F = col(cv.frame, 2);
+    V4 pts[7] = {cv.eye, cv.eye + F * s + R * a2 + U * b, cv.eye + F * s - R * a2 + U * b, cv.eye + F * s - R * a2 - U * b,
+                 cv.eye + F * s + R * a2 - U * b, cv.eye + F * s + U * (b * 1.15) + R * (a2 * 0.4), cv.eye + F * s + U * (b * 1.6)};
+    ImVec2 sp[7];
+    for (int i = 0; i < 7; i++) {
+      double x, y;
+      if (!app.project(pts[i], v, x, y)) return;
+      sp[i] = {(float)x, (float)y};
+    }
+    bool sel = std::find(app.selection.begin(), app.selection.end(), n.id) != app.selection.end();
+    ImU32 c = n.id == app.activeCamera ? IM_COL32(255, 170, 60, 230) : IM_COL32(200, 200, 210, 200);
+    if (sel) c = IM_COL32(255, 235, 140, 255);
+    float th = sel ? 2.f : 1.3f;
+    for (int i = 1; i <= 4; i++) {
+      dl->AddLine(sp[0], sp[i], c, th);
+      dl->AddLine(sp[i], sp[i % 4 + 1], c, th);
+    }
+    double lx, ly, rx, ry;
+    if (app.project(cv.eye + F * s + U * (b * 1.15) - R * (a2 * 0.4), v, lx, ly) && app.project(cv.eye + F * s + U * (b * 1.15) + R * (a2 * 0.4), v, rx, ry))
+      dl->AddTriangle({(float)lx, (float)ly}, {(float)rx, (float)ry}, sp[6], c, th);
+    dl->AddCircleFilled(sp[0], 3, c);
+  });
+
   // centre of rotation (set with a middle-click)
   if (!app.geo && app.editCam.pivotSet) {
     double px, py;

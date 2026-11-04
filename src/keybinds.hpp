@@ -17,7 +17,7 @@ enum class Action {
   // Edit mode
   ToolSelect, ToolMove, ToolRotate, ToggleGlobal, ToggleSnap,
   Grab, Rotate, Scale, Delete, Duplicate, DuplicateLinked, Group, Isolate, Focus, Deselect, SelectAll,
-  ViewFront, ViewRight, ViewTop, ViewAlongW, Reset4D,
+  ViewFront, ViewRight, ViewTop, ViewAlongW, Reset4D, LookThrough, CameraToView,
   // during G / R / S
   AxisX, AxisY, AxisZ, AxisW, Confirm, Cancel,
   // Explore

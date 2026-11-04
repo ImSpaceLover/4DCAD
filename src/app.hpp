@@ -160,14 +160,21 @@ class App {
   // Isolate (view only, not saved): only these objects (and the world) are drawn and pickable
   std::unordered_set<std::string> isolate;
   void toggleIsolate();
-  // camera bookmarks (saved in the scene)
-  std::vector<CameraBookmark> bookmarks;
   std::vector<PointLight> lights;  // scene point lights (saved in the scene)
   /** The point lights for a frame: enabled scene lights, then emissive objects (if enabled). */
   std::vector<LightParam> frameLights();
-  void addBookmark(const std::string& name = "");
-  void gotoBookmark(size_t i);
-  void updateBookmark(size_t i);
+  // cameras are scene objects (NodeKind::Camera); the active one is used for rendering
+  std::string activeCamera;
+  /** View, Geodesic flag and field of view of a camera object. */
+  View cameraView(const std::string& id, bool* geoCamera = nullptr, double* fov = nullptr);
+  /** A new camera at the current view (attached to the world surface in the Geodesic view); returns its id. */
+  std::string addCamera();
+  /** Moves the view to the camera (Numpad 0). */
+  void lookThrough(const std::string& id);
+  /** Moves the camera to the current view (Ctrl+Alt+Numpad 0). */
+  void cameraToView(const std::string& id);
+  /** Camera whose icon is under the screen point ("" if none). */
+  std::string pickCamera(double x, double y);
   void groupSelection(BoolOp op);
   void ungroup(const std::string& id);
   /** Moves a group's origin to its first object, without moving anything. */

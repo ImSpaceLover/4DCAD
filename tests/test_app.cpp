@@ -540,18 +540,39 @@ int main() {
     h = app.pick(sx, sy);
     CHECK(h && h->node && h->node->id == b, "show all again");
 
-    // camera bookmarks: saved in the scene, undoable
+    // cameras are scene objects: add at the view, look through, camera to view, saved, undoable
     app.editCam.target = {1, 2, 3, 4};
     app.editCam.yaw = 0.3;
-    app.addBookmark("Spot");
+    View at = app.currentView();
+    std::string cam = app.addCamera();
+    Node* cn = findNode(app.root, cam);
+    CHECK(cn && cn->isCamera() && app.activeCamera == cam, "camera added and active");
+    View cvw = app.cameraView(cam);
+    CHECK(length(cvw.eye - at.eye) < 1e-9 && length(col(cvw.frame, 2) - col(at.frame, 2)) < 1e-9, "camera at the view");
     app.editCam.target = {0, 0, 0, 0};
     app.editCam.yaw = 1.5;
-    app.gotoBookmark(0);
-    CHECK(length(app.editCam.target - V4{1, 2, 3, 4}) < 1e-12 && app.editCam.yaw == 0.3, "bookmark restores the camera");
+    app.lookThrough(cam);
+    View back = app.currentView();
+    CHECK(length(back.eye - at.eye) < 1e-9 && length(col(back.frame, 2) - col(at.frame, 2)) < 1e-9, "look through restores the view");
+    app.editCam.target = {5, 0, 0, 0};
+    app.cameraToView(cam);
+    CHECK(length(app.cameraView(cam).eye - app.currentView().eye) < 1e-9, "camera to view");
+    CHECK(app.ev->evalFull(app.cameraView(cam).eye).node == nullptr || app.ev->evalFull(app.cameraView(cam).eye).node->id != cam, "cameras have no shape");
     SceneFile f = sceneFromJson(app.serialize());
-    CHECK(f.bookmarks.size() == 1 && f.bookmarks[0].name == "Spot", "bookmark saved in the scene");
+    const Node* fc = findNode(f.root, cam);
+    CHECK(fc && fc->isCamera() && f.activeCamera == cam, "camera and active camera saved");
+    // old files: camera bookmarks become camera objects
+    std::string old = app.serialize();
+    auto oj = nlohmann::json::parse(old);
+    oj["bookmarks"] = nlohmann::json::array({{{"name", "Old view"}, {"camera", {{"target", {0, 1, 0, 0}}, {"distance", 5}, {"yaw", 0}, {"pitch", 0}}}}});
+    App other;
+    other.loadScene(sceneFromJson(oj.dump()));
+    int named = 0;
+    walk(other.root, [&](Node& n, Node*, int) { if (n.isCamera() && n.name == "Old view") named++; });
+    CHECK(named == 1, "bookmark converted to a camera");
     app.undo();
-    CHECK(app.bookmarks.empty(), "adding a bookmark is undoable");
+    app.undo();
+    CHECK(!findNode(app.root, cam), "adding a camera is undoable");
   }
 
   // --- emissive objects light the scene (shadowed: shadow rays ignore emissive objects, so no self-shadow) ---
@@ -640,6 +661,18 @@ int main() {
     double maxDev = 0;
     for (auto& p : d.pts) maxDev = std::max(maxDev, std::abs(p[0]) + std::abs(p[2]) + std::abs(p[3] - 7));
     CHECK(maxDev < 1e-12, "Full 4D ray is straight");
+  }
+  // Geodesic camera: attached to the world surface, slides along it
+  {
+    std::string gc = app.addCamera();
+    Node* g = findNode(app.root, gc);
+    CHECK(g && g->anchor && std::abs(length(g->xf.pos) - 3) < 1e-3, "geodesic camera on the surface");
+    app.translateNodes({gc}, col(app.currentView().frame, 0) * 1.0);
+    g = findNode(app.root, gc);
+    CHECK(std::abs(length(g->xf.pos) - 3) < 1e-3, "moved along the surface");
+    bool isGeo = false;
+    app.cameraView(gc, &isGeo);
+    CHECK(isGeo, "geodesic camera view");
   }
   View tv = app.thumbnailView();
   V4 cam = app.currentView().eye;

@@ -3,7 +3,7 @@
 namespace fd {
 
 Role nodeRole(const Node& n, EvalCtx ctx, const std::string& activeWorld, const std::function<bool(const std::string&)>& worldExists) {
-  if (n.hidden) return Role::Empty;
+  if (n.hidden || n.isCamera()) return Role::Empty;  // cameras have no shape
   if (ctx == EvalCtx::Geo && !activeWorld.empty() && n.id == activeWorld) return Role::Empty;
   if (n.anchor) {
     if (ctx == EvalCtx::World) return Role::Empty;

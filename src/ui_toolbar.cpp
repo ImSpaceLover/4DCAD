@@ -69,26 +69,21 @@ void UI::menuBar() {
       if (ImGui::MenuItem("Along the slider axis", K(Action::ViewAlongW).c_str())) app.standardView(3);
       ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Camera bookmarks")) {
-      if (ImGui::MenuItem("Save current view")) app.addBookmark();
-      if (!app.bookmarks.empty()) ImGui::Separator();
-      int del = -1;
-      for (size_t i = 0; i < app.bookmarks.size(); i++) {
-        ImGui::PushID((int)i);
-        std::string label = app.bookmarks[i].name + (app.bookmarks[i].geo ? "  (Geodesic)" : "");
-        if (ImGui::BeginMenu(label.c_str())) {
-          if (ImGui::MenuItem("Go to")) app.gotoBookmark(i);
-          if (ImGui::MenuItem("Update to the current view")) app.updateBookmark(i);
-          char nb[64];
-          std::snprintf(nb, sizeof nb, "%s", app.bookmarks[i].name.c_str());
-          ImGui::SetNextItemWidth(160);
-          if (ImGui::InputText("Name", nb, sizeof nb, ImGuiInputTextFlags_EnterReturnsTrue)) { app.bookmarks[i].name = nb; app.commit(); }
-          if (ImGui::MenuItem("Delete")) del = (int)i;
-          ImGui::EndMenu();
-        }
+    if (ImGui::BeginMenu("Cameras")) {
+      if (ImGui::MenuItem("Add camera at the view")) app.addCamera();
+      Node* sel = app.selected();
+      bool selCam = sel && sel->isCamera();
+      if (ImGui::MenuItem("Look through selected camera", K(Action::LookThrough).c_str(), false, selCam)) app.lookThrough(sel->id);
+      if (ImGui::MenuItem("Selected camera to the view", K(Action::CameraToView).c_str(), false, selCam)) app.cameraToView(sel->id);
+      std::vector<std::pair<std::string, std::string>> cams;
+      walk(app.root, [&](Node& n, Node*, int) { if (n.isCamera()) cams.push_back({n.id, n.name}); });
+      if (!cams.empty()) ImGui::SeparatorText("Look through");
+      for (auto& [id, name] : cams) {
+        ImGui::PushID(id.c_str());
+        std::string label = name + (id == app.activeCamera ? "  (active)" : "");
+        if (ImGui::MenuItem(label.c_str())) app.lookThrough(id);
         ImGui::PopID();
       }
-      if (del >= 0) { app.bookmarks.erase(app.bookmarks.begin() + del); app.commit(); }
       ImGui::EndMenu();
     }
     ImGui::Separator();

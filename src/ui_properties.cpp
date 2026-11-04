@@ -4,6 +4,52 @@
 namespace fd {
 
 // ============================================================ properties
+void UI::cameraProperties(Node& n, bool& live, bool& done) {
+  auto track = [&] { if (ImGui::IsItemEdited()) live = true; if (ImGui::IsItemDeactivatedAfterEdit()) done = true; };
+  std::string id = n.id;
+  bool geoCam = n.anchor.has_value();
+  ImGui::TextDisabled("%s camera", geoCam ? "Geodesic (on the world surface)" : "Full 4D");
+  bool active = app.activeCamera == id;
+  if (ImGui::Checkbox("Active camera", &active) && active) { app.activeCamera = id; done = true; }
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Used for rendering images and animations");
+  if (ImGui::Button("Look through")) app.lookThrough(id);
+  ImGui::SameLine();
+  if (ImGui::Button("Camera to view")) { app.cameraToView(id); return; }
+  ImGui::SeparatorText("Lens");
+  float fv = (float)n.camFov;
+  if (ImGui::SliderFloat("Field of view", &fv, 10, 150, "%.0f deg")) n.camFov = fv;
+  track();
+  if (!geoCam) {
+    const char* ax[4] = {"X", "Y", "Z", "W"};
+    if (ImGui::Combo("Slider axis", &n.camSlider, ax, 4)) done = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shown axes when looking through it (as the viewport's slider axis)");
+  }
+  ImGui::SeparatorText("Placement");
+  float pos[4] = {(float)n.xf.pos[0], (float)n.xf.pos[1], (float)n.xf.pos[2], (float)n.xf.pos[3]};
+  if (ImGui::DragFloat4(geoCam ? "Surface point" : "Position XYZW", pos, 0.02f)) for (int i = 0; i < 4; i++) n.xf.pos[i] = pos[i];
+  track();
+  if (geoCam) ImGui::TextDisabled("Move it with the gizmo or G to slide along the surface");
+  auto ang = anglesFromRotation(n.xf.rot);
+  float a[6];
+  for (int k = 0; k < 6; k++) a[k] = (float)ang[k];
+  bool rc = false;
+  ImGui::TextUnformatted("Rotation (degrees per plane)");
+  for (int k = 0; k < 6; k++) {
+    if (geoCam && (k == 2 || k == 4 || k == 5)) continue;  // stays in the surface's tangent space
+    ImGui::PushID(k);
+    ImGui::SetNextItemWidth(68);
+    if (ImGui::DragFloat(PLANE_NAMES[k], &a[k], 0.5f, -180.f, 180.f, "%.1f")) rc = true;
+    track();
+    ImGui::PopID();
+    if (k % 3 != 2 && !(geoCam && k == 3)) ImGui::SameLine();
+  }
+  if (rc) {
+    double d[6];
+    for (int k = 0; k < 6; k++) d[k] = a[k];
+    n.xf.rot = rotationFromAngles(d);
+  }
+}
+
 void UI::propertiesPanel() {
   ImGuiIO& io = ImGui::GetIO();
   float top = ImGui::GetFrameHeight() + TOOLBAR_H;
@@ -49,6 +95,13 @@ void UI::propertiesPanel() {
   std::snprintf(nameBuf, sizeof nameBuf, "%s", n->name.c_str());
   if (ImGui::InputText("Name", nameBuf, sizeof nameBuf)) n->name = nameBuf;
   track();
+  if (n->isCamera()) {  // cameras: their own small panel
+    cameraProperties(*n, live, done);
+    ImGui::End();
+    if (done) app.commit();
+    else if (live) app.rebuild();
+    return;
+  }
   int dim = nodeDim(*n, app.reg);
   ImGui::TextDisabled("%dD %s", dim, n->isCustom() ? "custom SDF" : n->isLeaf() ? "shape (point + modifiers)" : "group");
   ImGui::SameLine();

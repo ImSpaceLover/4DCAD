@@ -12,7 +12,7 @@
 
 namespace fd {
 
-enum class NodeKind { Leaf, Group };
+enum class NodeKind { Leaf, Group, Camera };
 enum class BoolOp { Union, Intersection, Subtraction, SmoothUnion, SmoothIntersection, SmoothSubtraction };
 inline const char* BOOL_OP_NAMES[6] = {"union", "intersection", "subtraction", "smoothUnion", "smoothIntersection", "smoothSubtraction"};
 inline const char* BOOL_OP_LABELS[6] = {"Union", "Intersection", "Subtraction", "Smooth union", "Smooth intersection", "Smooth subtraction"};
@@ -97,6 +97,10 @@ struct Node {
   std::optional<double> round, shell;
   Material mat;
   std::string code;        // custom SDF (prim == "custom"): GLSL defining float sdf(vec4 p)
+  // camera: position = eye, rotation = view frame (right, up, forward, slider direction);
+  // attached to the world surface (anchor) = a Geodesic camera
+  double camFov = 60;      // degrees
+  int camSlider = 3;       // Full 4D: world axis on the slice slider
   double codeBound = 1.5;  // custom SDF: half size of its bounding box (used for picking / collisions)
   bool isCustom() const { return kind == NodeKind::Leaf && prim == "custom"; }
   // group
@@ -105,6 +109,8 @@ struct Node {
   std::vector<Node> children;
 
   bool isLeaf() const { return kind == NodeKind::Leaf; }
+  bool isGroup() const { return kind == NodeKind::Group; }
+  bool isCamera() const { return kind == NodeKind::Camera; }
 };
 
 struct CameraState {
@@ -172,6 +178,8 @@ std::string newId(const char* prefix = "n");
 Node makeLeaf(const std::string& prim, const std::string& name, V4 pos = {0, 0, 0, 0}, std::array<double, 3> color = {0.8, 0.5, 0.3});
 Node makeGroup(BoolOp op, std::vector<Node> children, const std::string& name = "");
 Node makeCustom(const std::string& name, const std::string& code = DEFAULT_CUSTOM_SDF);
+/** A camera object at eye looking along the frame's third column (columns: right, up, forward, slider). */
+Node makeCamera(const std::string& name, const V4& eye, const M4& frame, double fov, int slider);
 
 /** Full rotation of a node: anchor basis (if any) followed by its own rotation. */
 M4 nodeRotation(const Node& n);
@@ -264,7 +272,8 @@ struct CameraBookmark {
 };
 
 struct SceneFile {
-  std::vector<CameraBookmark> bookmarks;
+  std::vector<CameraBookmark> bookmarks;  // old files only: converted to camera objects when loaded
+  std::string activeCamera;               // id of the camera used for rendering
   std::vector<PointLight> lights;
   Node root;
   std::vector<PrimitiveDef> primitives;
@@ -288,7 +297,8 @@ std::vector<LibraryFolder> builtinFolders();
 
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
 std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
-                        const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr);
+                        const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr,
+                        const std::string& activeCamera = "");
 std::string lightsToJson(const std::vector<PointLight>& l);
 std::vector<PointLight> lightsFromJson(const std::string& text);
 std::string bookmarksToJson(const std::vector<CameraBookmark>& b);

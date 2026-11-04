@@ -41,6 +41,8 @@ static const ActionInfo INFO[(int)Action::Count] = {
     {"viewTop", "Top view", "Edit", false},
     {"viewAlongW", "View along W", "Edit", false},
     {"reset4D", "Reset 4D orientation", "Edit", false},
+    {"lookThrough", "Look through camera", "Edit", false},
+    {"cameraToView", "Camera to view", "Edit", false},
     {"axisX", "Constrain X", "Transform", false},
     {"axisY", "Constrain Y", "Transform", false},
     {"axisZ", "Constrain Z", "Transform", false},
@@ -106,6 +108,8 @@ void KeyBindings::resetDefaults() {
   set(Action::ViewTop, K(GLFW_KEY_7), K(GLFW_KEY_KP_7));
   set(Action::ViewAlongW, K(GLFW_KEY_9), K(GLFW_KEY_KP_9));
   set(Action::Reset4D, S(GLFW_KEY_W), K(GLFW_KEY_BACKSPACE));
+  set(Action::LookThrough, K(GLFW_KEY_KP_0), K(GLFW_KEY_0));
+  set(Action::CameraToView, KeyCombo{GLFW_KEY_KP_0, true, false, true}, KeyCombo{GLFW_KEY_0, true, false, true});
   set(Action::AxisX, K(GLFW_KEY_X));
   set(Action::AxisY, K(GLFW_KEY_Y));
   set(Action::AxisZ, K(GLFW_KEY_Z));

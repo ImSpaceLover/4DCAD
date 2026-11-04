@@ -399,7 +399,7 @@ std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const s
   std::ostringstream o;
   o << world << "|" << geo << "|";
   walkc(root, [&](const Node& n, const Node*, int depth) {
-    o << depth << n.id << (n.isLeaf() ? "L" + n.prim : "G" + std::to_string((int)n.op)) << (n.hidden ? "h" : "") << (n.anchor ? "a" + n.anchor->world : "");
+    o << depth << n.id << (n.isLeaf() ? "L" + n.prim : n.isCamera() ? std::string("C") : "G" + std::to_string((int)n.op)) << (n.hidden ? "h" : "") << (n.anchor ? "a" + n.anchor->world : "");
     for (auto& m : n.mods) o << "m" << m.type << m.axis << m.spacing << ":" << m.count << ":" << (int)m.mode << m.length << ":" << m.radius << ":" << m.i << m.j << m.angle;
     if (n.round) o << "r" << *n.round;
     if (n.shell) o << "s" << *n.shell;

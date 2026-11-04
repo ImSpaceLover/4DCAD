@@ -39,6 +39,7 @@ class UI {
   void treePanel();
   void treeNode(Node& n, int depth);
   void propertiesPanel();
+  void cameraProperties(Node& n, bool& live, bool& done);
   void viewport(double dt);
   void overlays(ImDrawList* dl);
   void thumbnail();
