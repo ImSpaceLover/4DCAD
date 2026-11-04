@@ -62,6 +62,8 @@ struct FrameParams {
   // camera's isometry (world <- camera), light / marker positions are camera-relative model points
   Space space;
   M4 camIso = identity();
+  bool honeycomb = false;  // set by render(): the scene has a honeycomb
+  bool ballView = false;   // curved: the Poincare ball / stereographic overview (view = outside camera in the ball)
 };
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */
@@ -121,7 +123,7 @@ class Renderer {
   std::unordered_set<std::string> failed_;
   std::unordered_set<std::string> badCode_;
   std::unordered_map<std::string, std::string> codeErrors_;
-  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space);
+  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball = false);
 };
 
 /** OpenGL 3.3 backend (needs a current context with loaded functions). */

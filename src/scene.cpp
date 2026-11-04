@@ -248,6 +248,7 @@ std::vector<PrimitiveDef> PrimitiveRegistry::custom() const {
 
 int nodeBaseDim(const Node& n, const PrimitiveRegistry& reg) {
   if (n.isCustom()) return 4;
+  if (n.isPolytope()) return 3;
   if (n.isLeaf()) { auto* p = reg.get(n.prim); return p ? primitiveDim(*p) : 0; }
   int d = 0;
   for (auto& c : n.children) d = std::max(d, nodeDim(c, reg));
@@ -410,6 +411,12 @@ static json nodeJ(const Node& n) {
                      {"roughness", m.roughness}, {"specular", m.specular}, {"transparency", m.transparency}, {"ior", m.ior},
                      {"metallic", m.metallic}};
     if (n.isCustom()) { j["code"] = n.code; j["codeBound"] = n.codeBound; }
+    if (n.isPolytope()) {
+      const PolyParams& p = n.poly;
+      j["poly"] = {{"type", POLY_NAMES[std::clamp(p.type, 0, POLY_COUNT - 1)]}, {"size", p.size}, {"style", p.style ? "cells" : "edges"},
+                   {"width", p.width}, {"alternate", p.alternate}};
+      if (n.isHoneycomb() && p.honey >= 0 && p.honey < (int)honeycombs().size()) j["poly"]["honeycomb"] = honeycombs()[p.honey].schlafli;
+    }
   } else if (n.isCamera()) {
     j["camera"] = {{"fov", n.camFov}, {"slider", n.camSlider}, {"aperture", n.camAperture}, {"focus", n.camFocus}};
   } else {
@@ -484,6 +491,18 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
     if (n.prim == "custom") {
       n.code = j.value("code", std::string(DEFAULT_CUSTOM_SDF));
       n.codeBound = j.value("codeBound", 1.5);
+    } else if (n.prim == "polyhedron" || n.prim == "honeycomb") {
+      if (j.contains("poly") && j["poly"].is_object()) {
+        auto& pj = j["poly"];
+        std::string t = pj.value("type", std::string("Cube"));
+        for (int i = 0; i < POLY_COUNT; i++) if (t == POLY_NAMES[i]) n.poly.type = i;
+        n.poly.size = std::max(1e-3, pj.value("size", 1.0));
+        n.poly.style = pj.value("style", std::string("edges")) == "cells" ? 1 : 0;
+        n.poly.width = std::max(0.0, pj.value("width", 0.05));
+        n.poly.alternate = pj.value("alternate", true);
+        std::string h = pj.value("honeycomb", std::string());
+        for (size_t i = 0; i < honeycombs().size(); i++) if (h == honeycombs()[i].schlafli) n.poly.honey = (int)i;
+      }
     } else if (n.prim != "point") {
       // old primitive types become a point with the recipe as innermost modifiers
       const PrimitiveDef* def = nullptr;
@@ -624,7 +643,7 @@ static void copyDef(Node& d, const Node& s, bool top) {
   d.kind = s.kind;
   d.mods = s.mods;
   d.prim = s.prim; d.color = s.color; d.thickness = s.thickness; d.round = s.round; d.shell = s.shell;
-  d.mat = s.mat; d.code = s.code; d.codeBound = s.codeBound;
+  d.mat = s.mat; d.code = s.code; d.codeBound = s.codeBound; d.poly = s.poly;
   d.op = s.op; d.k = s.k;
   bool same = d.children.size() == s.children.size();
   for (size_t i = 0; same && i < s.children.size(); i++) same = d.children[i].kind == s.children[i].kind;
@@ -829,6 +848,29 @@ std::vector<LibraryFolder> builtinFolders() {
     o.node = nodeFromPrimitive(p, p.name);
     out[d <= 2 ? 0 : d == 3 ? 1 : 2].objects.push_back(o);
   }
+  // regular polyhedra with flat faces, and the regular honeycombs (tilings of the whole space)
+  LibraryFolder poly{"builtin-poly", "Polyhedra & tilings", true, {}};
+  for (int t = 0; t < POLY_COUNT; t++) {
+    LibraryObject o;
+    o.id = std::string("builtin-poly-") + POLY_NAMES[t];
+    o.name = POLY_NAMES[t];
+    o.node = makeLeaf("polyhedron", POLY_NAMES[t]);
+    o.node.poly.type = t;
+    o.node.poly.size = 0.7;
+    poly.objects.push_back(o);
+  }
+  {
+    LibraryObject o;
+    o.id = "builtin-honeycomb";
+    o.name = "Honeycomb (tiling)";
+    o.node = makeLeaf("honeycomb", "Honeycomb");
+    o.node.poly.honey = 0;
+    o.node.poly.size = 1.5;
+    o.node.color = {0.85, 0.75, 0.55};
+    o.node.mat.color2 = {0.35, 0.55, 0.85};
+    poly.objects.push_back(o);
+  }
+  out.push_back(poly);
   return out;
 }
 

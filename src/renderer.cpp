@@ -26,11 +26,12 @@ void Renderer::clearPrograms() {
   lru_.clear();
 }
 
-Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space) {
+Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball) {
+  if (space == SpaceKind::Flat) ball = false;
   if (space != SpaceKind::Flat) geo = false;
   // custom SDFs that do not compile are replaced by their bounding box
   walk(root, [&](Node& n, Node*, int) { if (n.isCustom()) checkCustomCode(n.code); });
-  std::string key = structureKey(root, reg, world, geo, space);
+  std::string key = structureKey(root, reg, world, geo, space) + (ball ? "|ball" : "");
   auto it = cache_.find(key);
   if (it != cache_.end()) {
     lru_.remove(key);
@@ -42,7 +43,7 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
   Program p;
   p.cs = compileScene(root, reg, world, geo, &badCode_, space);
   std::string err;
-  p.handle = createProgram(buildFragmentShader(p.cs.glsl, geo, shaderTarget(), (int)space), err);
+  p.handle = createProgram(buildFragmentShader(p.cs.glsl, geo, shaderTarget(), (int)space, ball), err);
   if (!p.handle) {
     lastError = err;
     std::fprintf(stderr, "Shader error:\n%s\n", err.c_str());
@@ -83,7 +84,8 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   float maxDist = fp.geo ? q.maxDistGeo : q.maxDistFull;
   // hyperbolic: coordinates grow like e^(d/R), floats give out beyond ~12 R (where anything is far
   // below a pixel anyway); spherical: a ray has gone all the way round after 2 pi R
-  if (fp.space.kind == SpaceKind::Hyperbolic) maxDist = std::min(maxDist, (float)(12 * fp.space.R()));
+  // (honeycombs fold far points through many reflections: they need a shorter reach)
+  if (fp.space.kind == SpaceKind::Hyperbolic) maxDist = std::min(maxDist, (float)((fp.honeycomb ? 7 : 12) * fp.space.R()));
   if (fp.space.kind == SpaceKind::Spherical) maxDist = std::min(maxDist, (float)(2 * PI * fp.space.R()));
   float a[4] = {(float)w, (float)h, (float)std::tan(fp.fovDeg * PI / 360), maxDist};
   float b[4] = {q.eps, q.stepScale, q.shadowK, q.shadowMax};
@@ -126,8 +128,10 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
 bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const PrimitiveRegistry& reg, const std::string& world,
                       const std::unordered_set<std::string>& highlight, const FrameParams& fp) {
   int rw = std::max(1, (int)(w * fp.scale)), rh = std::max(1, (int)(h * fp.scale));
-  Program* p = get(root, reg, world, fp.geo, fp.space.kind);
-  FrameUniforms u = frameUniforms(fp, rw, rh);
+  Program* p = get(root, reg, world, fp.geo, fp.space.kind, fp.ballView);
+  FrameParams fpx = fp;
+  walk(root, [&](Node& n, Node*, int) { if (n.isHoneycomb() && !n.hidden) fpx.honeycomb = true; });
+  FrameUniforms u = frameUniforms(fpx, rw, rh);
   if (!p) {
     draw(rt, rw, rh, nullptr, u, {}, 0);  // clears the target to an error colour
     return false;

@@ -9,6 +9,7 @@
 
 #include "math4.hpp"
 #include "primitives.hpp"
+#include "polytope.hpp"
 #include "space.hpp"
 
 namespace fd {
@@ -106,6 +107,11 @@ struct Node {
   double camFocus = 5;     // distance in focus
   double codeBound = 1.5;  // custom SDF: half size of its bounding box (used for picking / collisions)
   bool isCustom() const { return kind == NodeKind::Leaf && prim == "custom"; }
+  // regular polyhedron with flat (geodesic) faces / regular honeycomb (see polytope.hpp)
+  PolyParams poly;
+  bool isPoly() const { return kind == NodeKind::Leaf && prim == "polyhedron"; }
+  bool isHoneycomb() const { return kind == NodeKind::Leaf && prim == "honeycomb"; }
+  bool isPolytope() const { return isPoly() || isHoneycomb(); }
   // group
   BoolOp op = BoolOp::Union;
   double k = 0.3;

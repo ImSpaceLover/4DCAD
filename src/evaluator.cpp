@@ -121,7 +121,12 @@ std::unordered_map<std::string, Bound> computeBounds(const Node& root, const Pri
     auto ax = modifierAxes(n, reg);
     int dimFinal = nodeDim(n, reg);
     if (n.isCustom()) e = {n.codeBound, n.codeBound, n.codeBound, n.codeBound};
-    else if (n.isLeaf()) {
+    else if (n.isHoneycomb()) e = {INFINITY, INFINITY, INFINITY, INFINITY};
+    else if (n.isPoly()) {
+      // circumradius (x2: curved polyhedra are larger than flat ones of the same inradius)
+      double r = n.poly.size * polyCircumRatio(n.poly.type) * 2;
+      e = {r, r, r, n.thickness / 2};
+    } else if (n.isLeaf()) {
       if (auto* def = reg.get(n.prim)) e = primitiveExtents(*def);
       for (int a = dimFinal; a < 4; a++) e[a] = n.thickness / 2;
     } else {
@@ -198,6 +203,12 @@ Sample SceneEvaluator::evalCurved(const V4& p) const { return evalCurvedNode(roo
 
 double SceneEvaluator::leafShape(const Node& n, const Prep& pr, V4& q) const {
   double t[64];
+  if (n.isPoly() || n.isHoneycomb()) {  // flat polyhedra / honeycombs (curved ones: evalCurvedNode)
+    double d = n.isPoly() ? polyDistFlat(n.poly.type, n.poly.size, q) : honeycombDist(Space{}, n.poly, q);
+    d -= n.round.value_or(0.0);
+    for (int a = 3; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
+    return d;
+  }
   if (n.mods.size() > 64 || !pr.prim) return INF;
   modifierCoords(n, pr.axes, q, t);
   double d;
@@ -218,6 +229,13 @@ Sample SceneEvaluator::evalCurvedNode(const Node& n, const V4& p) const {
   if (n.hidden || n.isCamera()) return {};
   const Prep& pr = prep_.at(n.id);
   V4 q = mul(pr.isoInv, p);  // the node's own frame
+  if (n.isPoly() || n.isHoneycomb()) {  // exact flat faces of the curved space, on the model point
+    int par = 0;
+    double d = n.isPoly() ? polyDistCurved(space, n.poly.type, n.poly.size * pr.S, q) : honeycombDist(space, n.poly, q, &par);
+    if (d >= INF * 0.5) return {};
+    d -= n.round.value_or(0.0) * pr.S;
+    return {d, par && n.poly.alternate && n.isHoneycomb() ? n.mat.color2 : n.color, &n};
+  }
   if (n.isLeaf()) {
     V4 u = cs::logO(space, q) * (1.0 / pr.S);  // local coordinates (normal coordinates at the node)
     double d = leafShape(n, pr, u);
@@ -298,7 +316,11 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
   if (n.mods.size() > 64) return {};
   modifierCoords(n, pr.axes, q, t);
   Sample r;
-  if (n.isLeaf()) {
+  if (n.isLeaf() && n.isPolytope()) {
+    V4 lq = q;
+    double d = leafShape(n, pr, lq);
+    r = {d, n.color, &n};
+  } else if (n.isLeaf()) {
     if (!pr.prim) return {};
     double d;
     if (n.isCustom()) {  // GLSL code cannot run on the CPU: use its bounding box

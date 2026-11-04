@@ -156,7 +156,7 @@ void UI::propertiesPanel() {
     return;
   }
   int dim = nodeDim(*n, app.reg);
-  ImGui::TextDisabled("%dD %s", dim, n->isCustom() ? "custom SDF" : n->isLeaf() ? "shape (point + modifiers)" : "group");
+  ImGui::TextDisabled("%dD %s", dim, n->isCustom() ? "custom SDF" : n->isPoly() ? "polyhedron" : n->isHoneycomb() ? "honeycomb" : n->isLeaf() ? "shape (point + modifiers)" : "group");
   ImGui::SameLine();
   if (ImGui::SmallButton("View SDF code")) { showSdf_ = true; sdfNodeId_ = n->id; }
   if (!isRoot) {
@@ -172,6 +172,57 @@ void UI::propertiesPanel() {
   }
 
   if (n->isLeaf()) {
+    if (n->isPolytope()) {
+      PolyParams& pp = n->poly;
+      if (n->isPoly()) {
+        ImGui::SeparatorText("Polyhedron (flat faces)");
+        if (ImGui::Combo("Type", &pp.type, POLY_NAMES, POLY_COUNT)) done = true;
+        float sz = (float)pp.size;
+        if (ImGui::DragFloat("Inradius", &sz, 0.01f, 0.01f, 100.f)) { pp.size = std::max(0.01f, sz); live = true; }
+        if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distance from the centre to each face. In curved space the faces are geodesic\nplanes: the same inradius gives other angles than in flat space");
+      } else {
+        ImGui::SeparatorText("Honeycomb (fills the whole space)");
+        const auto& all = honeycombs();
+        SpaceKind sk = app.space.kind;
+        std::string cur = pp.honey >= 0 && pp.honey < (int)all.size() ? std::string(all[pp.honey].schlafli) + " " + all[pp.honey].name : "?";
+        if (ImGui::BeginCombo("Tiling", cur.c_str())) {
+          for (int i = 0; i < (int)all.size(); i++) {
+            if (all[i].space != sk) continue;
+            std::string l = std::string(all[i].schlafli) + " " + all[i].name;
+            if (ImGui::Selectable(l.c_str(), i == pp.honey)) { pp.honey = i; done = true; }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", all[i].note);
+          }
+          ImGui::EndCombo();
+        }
+        if (pp.honey >= 0 && pp.honey < (int)all.size()) {
+          const Honeycomb& h = all[pp.honey];
+          if (h.space != sk) ImGui::TextColored({1, 0.6f, 0.3f, 1}, "This tiling belongs to %s space: choose another", SPACE_NAMES[(int)h.space]);
+          else if (sk == SpaceKind::Flat) {
+            float sz = (float)pp.size;
+            if (ImGui::DragFloat("Cell inradius", &sz, 0.01f, 0.05f, 100.f)) { pp.size = std::max(0.05f, sz); live = true; }
+            if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+          } else
+          {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s; cell inradius %.3f (%.4f R: set by the curvature)", h.note, honeycombInradius(h) * app.space.R(), honeycombInradius(h));
+            ImGui::PopStyleColor();
+          }
+        }
+        const char* styles[2] = {"Edges", "Cells"};
+        if (ImGui::Combo("Style", &pp.style, styles, 2)) done = true;
+        float w = (float)pp.width;
+        if (ImGui::DragFloat(pp.style ? "Gap" : "Edge radius", &w, 0.002f, 0.f, 2.f, "%.3f")) { pp.width = std::max(0.f, w); live = true; }
+        if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+        if (ImGui::Checkbox("Alternate colours", &pp.alternate)) done = true;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Neighbouring cells use the colour and the material's second colour");
+        if (pp.alternate) {
+          float c2[3] = {(float)n->mat.color2[0], (float)n->mat.color2[1], (float)n->mat.color2[2]};
+          if (ImGui::ColorEdit3("Second colour", c2)) { for (int i = 0; i < 3; i++) n->mat.color2[i] = c2[i]; live = true; }
+          if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+        }
+      }
+    }
     ImGui::SeparatorText("Shape");
     float c[3] = {(float)n->color[0], (float)n->color[1], (float)n->color[2]};
     if (ImGui::ColorEdit3("Color", c)) for (int i = 0; i < 3; i++) n->color[i] = c[i];

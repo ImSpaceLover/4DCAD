@@ -670,7 +670,67 @@ void main() {
 }
 )";
 
-inline std::string buildFragmentShader(const std::string& sceneGLSL, bool geo, ShaderTarget t, int curved = 0) {
+// Overview of a curved space from outside: the Poincare ball (hyperbolic: the whole space in a
+// unit ball) or the stereographic projection (spherical: the half of the space around the origin
+// fills the unit ball, more out to radius 1.6). Rays are straight in the ball; each step converts
+// the scene distance with the conformal factor (lengths in the ball = world / R * (1 -+ |x|^2) / 2).
+inline const char* BALL_MAIN = R"(
+vec4 ballToModel(vec3 x) {
+  float r2 = dot(x, x);
+  return KAPPA < 0.0 ? vec4(2.0 * x, 1.0 + r2) / (1.0 - r2) : vec4(2.0 * x, 1.0 - r2) / (1.0 + r2);
+}
+float ballMap(vec3 x, out MAT m) {
+  float r2 = dot(x, x);
+  float d = mapScene(ballToModel(x), m) / u_curvR * (KAPPA < 0.0 ? 1.0 - r2 : 1.0 + r2) * 0.5;
+  // you (a small marker with a nose)
+  float dm = min(length(x - u_marker.xyz) - u_markerCol.w, length(x - u_marker.xyz - u_markerFwd.xyz * u_markerCol.w) - u_markerCol.w * 0.5);
+  if (dm < d) { d = dm; m = MAT(vec4(u_markerCol.rgb, 0.0), vec4(1.0, 0.5, 0.0, 0.0), vec4(0.0)); }
+  return d;
+}
+void main() {
+  vec2 uv = v_uv * vec2(u_res.x / u_res.y, 1.0);
+  vec3 ro = u_eye.xyz, rd = normalize((u_frame * vec4(uv * u_tanHalf, 1.0, 0.0)).xyz);
+  float B = KAPPA < 0.0 ? 0.999 : 1.6;
+  vec3 bg = vec3(0.07, 0.075, 0.09);
+  // the ball
+  float b = dot(ro, rd), c = dot(ro, ro) - B * B, h = b * b - c;
+  if (h < 0.0) { fragColor = vec4(pow(bg, vec3(0.4545)), 1.0); return; }
+  float t0 = max(-b - sqrt(h), 0.0), t1 = -b + sqrt(h);
+  vec3 col = bg;
+  vec3 nb = normalize(ro + rd * t0);
+  float rim = pow(1.0 - abs(dot(nb, rd)), 3.0);
+  float t = t0;
+  bool hit = false;
+  MAT m;
+  for (int i = 0; i < 220; i++) {
+    vec3 x = ro + rd * t;
+    float d = ballMap(x, m);
+    if (d < 0.0005 * (1.0 + t)) { hit = true; break; }
+    t += max(d, 0.0004);
+    if (t > t1) break;
+  }
+  vec3 inner = mix(u_skyBottom, u_skyTop, 0.5) * 0.35;
+  if (hit) {
+    vec3 x = ro + rd * t;
+    MAT mm;
+    const float e = 0.0008;
+    vec3 n = normalize(vec3(ballMap(x + vec3(e, 0, 0), mm) - ballMap(x - vec3(e, 0, 0), mm),
+                            ballMap(x + vec3(0, e, 0), mm) - ballMap(x - vec3(0, e, 0), mm),
+                            ballMap(x + vec3(0, 0, e), mm) - ballMap(x - vec3(0, 0, e), mm)));
+    vec3 L = normalize(vec3(0.5, 0.8, 0.35));
+    vec3 base = m[0].rgb;
+    float emis = clamp(m[1].x, 0.0, 1.0);
+    vec3 lit = base * (0.25 + 0.75 * max(dot(n, L), 0.0));
+    col = mix(lit, base, emis);
+    col = mix(col, vec3(1.0, 0.6, 0.15), m[0].a * 0.6);
+  } else col = inner;
+  col = mix(col, vec3(0.75, 0.82, 1.0), rim * 0.35);  // the ball's boundary (infinity / the far half)
+  fragColor = vec4(pow(col, vec3(0.4545)), 1.0);
+}
+)";
+
+inline std::string buildFragmentShader(const std::string& sceneGLSL, bool geo, ShaderTarget t, int curved = 0, bool ball = false) {
+  if (ball && curved) return shaderPrelude(t, false, curved) + sceneGLSL + BALL_MAIN;
   return shaderPrelude(t, geo, curved) + sceneGLSL + RAYMARCH_MAIN;
 }
 

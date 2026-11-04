@@ -186,7 +186,7 @@ int main() {
   // library: built-in folders hold modifier-built shapes
   {
     auto fs = builtinFolders();
-    CHECK(fs.size() == 3 && fs[1].objects.size() >= 5 && fs[2].objects.size() >= 9, "builtin folders");
+    CHECK(fs.size() == 4 && fs[3].objects.size() == 6 && fs[1].objects.size() >= 5 && fs[2].objects.size() >= 9, "builtin folders");
     LibraryObject o = makeLibraryObject(makeShape("torus", "T"), reg, "My torus");
     LibraryFolder f{"custom", "Custom", false, {o}};
     auto imp = importLibraryJson(libraryToJson({f}));
@@ -603,6 +603,59 @@ int main() {
     SceneFile g = sceneFromJson(text);
     CHECK(g.space.kind == kind && std::abs(g.space.radius - 2.5) < 1e-12, "%s: space saved", nm);
     CHECK(g.curvedCam && std::abs(g.curvedCam->iso[5] - cc.iso[5]) < 1e-9, "%s: curved camera saved", nm);
+  }
+  {  // ---- polyhedra and honeycombs ----
+    auto hcIndex = [](const char* sch) { for (size_t i = 0; i < honeycombs().size(); i++) if (std::string(honeycombs()[i].schlafli) == sch) return (int)i; return -1; };
+    // known cell sizes: the tesseract's cubes (pi/4), the 120-cell's dodecahedra (pi/10), the 24-cell's octahedra (pi/6)
+    CLOSE(honeycombInradius(honeycombs()[hcIndex("{4,3,3}")]), PI / 4, 1e-12);
+    CLOSE(honeycombInradius(honeycombs()[hcIndex("{5,3,3}")]), PI / 10, 1e-9);
+    CLOSE(honeycombInradius(honeycombs()[hcIndex("{3,4,3}")]), PI / 6, 1e-12);
+    // order-5 cubic: cosh(h)^2 = 1 + cos 72
+    CLOSE(std::cosh(honeycombInradius(honeycombs()[hcIndex("{4,3,5}")])), std::sqrt(1 + std::cos(72 * PI / 180)), 1e-12);
+    CHECK(polyEdges(POLY_CUBE).size() == 12 && polyEdges(POLY_DODECA).size() == 30 && polyEdges(POLY_ICOSA).size() == 30 &&
+              polyEdges(POLY_TETRA).size() == 6 && polyEdges(POLY_OCTA).size() == 12, "edge counts");
+    CLOSE(polyFlatDihedral(POLY_CUBE), PI / 2, 1e-12);
+    // a curved polyhedron: the face centre is on the surface, the centre is inradius deep
+    Space hs{SpaceKind::Hyperbolic, 2};
+    CLOSE(polyDistCurved(hs, POLY_DODECA, 0.7, cs::origin()), -0.7, 1e-9);
+    CLOSE(polyDistCurved(hs, POLY_DODECA, 0.7, cs::expO(hs, polyFaces(POLY_DODECA)[3] * 0.7)), 0.0, 1e-9);
+    // a honeycomb is the same in every cell: a point and its image under a face reflection
+    PolyParams pp;
+    pp.honey = hcIndex("{4,3,5}");
+    pp.width = 0.05;
+    V4 q = cs::expO(hs, {0.3, -0.2, 0.15, 0});
+    double d0 = honeycombDist(hs, pp, q);
+    const Honeycomb& hc = honeycombs()[pp.honey];
+    double th = honeycombInradius(hc);
+    V4 f = polyFaces(hc.cell)[2];
+    V4 n{f[0] * std::cosh(th), f[1] * std::cosh(th), f[2] * std::cosh(th), std::sinh(th)};
+    V4 q2 = q - n * (2 * cs::mdot(-1, q, n));
+    CHECK(std::abs(cs::mdot(-1, q2, q2) + 1) < 1e-9 && cs::distance(hs, q, q2) > 0.1, "reflected point is elsewhere in the space");
+    CLOSE(honeycombDist(hs, pp, q2), d0, 1e-9);
+    // an edge of the central cell (two faces meet): distance = -edge radius
+    V4 e3 = normalize(polyFaces(hc.cell)[0] + polyFaces(hc.cell)[2]);
+    // walk out along the bisector until both faces are reached
+    double lo = 0, hi = 3;
+    for (int i = 0; i < 80; i++) { double mid = (lo + hi) / 2; (polyDistCurved(hs, hc.cell, th * hs.R(), cs::expO(hs, e3 * mid)) < 0 ? lo : hi) = mid; }
+    CLOSE(honeycombDist(hs, pp, cs::expO(hs, e3 * lo)), -0.05, 1e-6);
+    // far away: the cell finder brings a point back into the central cell
+    V4 far = cs::expO(hs, {7.3, 2.1, -4.4, 0});
+    int par = 0;
+    M4 g = honeycombCellOf(hs, pp, far, &par);
+    CHECK(polyDistCurved(hs, hc.cell, th * hs.R(), mul(g, far)) <= 1e-9, "cell finder");
+    CLOSE(honeycombDist(hs, pp, mul(g, far)), honeycombDist(hs, pp, far), 1e-6);
+    // file round trip
+    PrimitiveRegistry reg;
+    Node h = makeLeaf("honeycomb", "H");
+    h.poly = pp;
+    h.poly.style = 1;
+    Node pl = makeLeaf("polyhedron", "P");
+    pl.poly.type = POLY_ICOSA;
+    pl.poly.size = 0.42;
+    Node r = makeGroup(BoolOp::Union, {h, pl}, "Scene");
+    SceneFile back = sceneFromJson(sceneToJson(r, reg, "", nullptr));
+    CHECK(back.root.children.size() == 2 && back.root.children[0].poly == h.poly && back.root.children[1].poly == pl.poly, "polytopes saved");
+    CHECK(nodeDim(back.root.children[0], reg) == 3, "polytopes are 3D");
   }
   {  // flat scenes do not write a space
     PrimitiveRegistry reg;

@@ -979,7 +979,13 @@ void App::placeItem(const std::string& id, std::optional<std::pair<double, doubl
   if (!o) return;
   Node node = cloneFresh(o->node);
   node.name = o->name;
-  if (id.rfind("builtin-", 0) == 0) {  // give built-in shapes a fresh colour
+  if (node.isHoneycomb()) {  // a tiling of this scene's space
+    int h = firstHoneycomb(space.kind);
+    if (node.poly.honey < 0 || node.poly.honey >= (int)honeycombs().size() || honeycombs()[node.poly.honey].space != space.kind) node.poly.honey = std::max(0, h);
+    node.name = honeycombs()[node.poly.honey].name;
+    node.mat.roughness = 0.4;
+  }
+  if (id.rfind("builtin-", 0) == 0 && !node.isHoneycomb()) {  // give built-in shapes a fresh colour
     static int hueCounter = 0;
     auto c = hsl(std::fmod(0.13 + 0.618 * hueCounter++, 1.0), 0.55, 0.6);
     walk(node, [&](Node& m, Node*, int) { m.color = c; });
@@ -1914,6 +1920,37 @@ void App::renderFrame() {
     fp.blend = 1.0f / (accumSamples + 1);
     renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
     accumSamples++;
+  }
+  if (space.curved() && editSet.showThumbnail && mode == Mode::Edit) {
+    // overview: the Poincare ball / stereographic view from outside, with a marker where you are
+    thumbW = editSet.thumbSize;
+    thumbH = editSet.thumbSize * 3 / 4;
+    FrameParams tp;
+    tp.space = space;
+    tp.ballView = true;
+    tp.camIso = identity();  // world coordinates (the ball shows the space around the origin)
+    tp.quality = &quality;
+    tp.fovDeg = 40;
+    FullCamera oc;
+    oc.target = {0, 0, 0, 0};
+    oc.yaw = thumbYaw;
+    oc.pitch = thumbPitch;
+    oc.distance = (space.kind == SpaceKind::Hyperbolic ? 3.2 : 4.8) * thumbZoom;
+    tp.view = oc.view();
+    auto toBall = [&](const V4& p) { double w = 1 + p[3]; return w > 1e-6 ? V4{p[0] / w, p[1] / w, p[2] / w, 0} : V4{0, 0, 0, 0}; };
+    V4 eb = toBall(v.eye), fb = toBall(along(v.eye, col(v.frame, 2) * (0.05 * space.R())));
+    V4 dir = fb - eb;
+    tp.marker = eb;
+    tp.markerFwd = length(dir) > 1e-12 ? normalize(dir) : V4{0, 0, 1, 0};
+    double br = std::max(0.012, 0.03 * (space.kind == SpaceKind::Hyperbolic ? (1 - dot(eb, eb)) : 1.0));
+    tp.markerCol = {1.0f, 0.85f, 0.2f, (float)br};
+    tp.scale = 1;
+    std::ostringstream tk;
+    tk << k << "|ball" << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
+    if (tk.str() != lastThumbKey_) {
+      lastThumbKey_ = tk.str();
+      renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+    }
   }
   if (fp.geo && editSet.showThumbnail) {
     thumbW = editSet.thumbSize;

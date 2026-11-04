@@ -67,7 +67,7 @@ void UI::viewport(double dt) {
     std::snprintf(buf, sizeof buf, "%.2f", w);
     dl->AddText({p0.x + 44, p0.y + 90 + 220 * (1 - (w + range) / (2 * range)) - 7}, IM_COL32(220, 220, 220, 255), buf);
   }
-  if (app.geo && app.editSet.showThumbnail) thumbnail();
+  if ((app.geo || (app.curved() && app.mode == Mode::Edit)) && app.editSet.showThumbnail) thumbnail();
   bool thumbHovered = app.geo && app.editSet.showThumbnail && ImGui::IsItemHovered();
   if (sliderHovered || thumbHovered) vpHovered_ = false;
   overlays(dl);
@@ -137,7 +137,8 @@ void UI::thumbnail() {
     dl->PopClipRect();
   }
   dl->AddRect(p0, p1, IM_COL32(230, 180, 60, 255), 0, 0, 2);
-  dl->AddText({p0.x + 6, p0.y + 4}, IM_COL32(240, 240, 240, 255), "Outside view");
+  dl->AddText({p0.x + 6, p0.y + 4}, IM_COL32(240, 240, 240, 255),
+              !app.curved() ? "Outside view" : app.space.kind == SpaceKind::Hyperbolic ? "Poincare ball (all of space)" : "Stereographic view");
 }
 
 void UI::overlays(ImDrawList* dl) {

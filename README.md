@@ -132,6 +132,22 @@ Everything else works as in Flat 4D:
 * Group scale spreads the children along geodesics.
 * Cameras, animation and the Render window.
 
+**Polyhedra & tilings** (library folder, in any space):
+* **Polyhedra**: tetrahedron, cube, octahedron, dodecahedron, icosahedron.
+  * Their faces are truly flat planes of the space (exact distances), set by the inradius.
+  * In hyperbolic space the same inradius gives sharper corners than in flat space; in spherical space, blunter ones.
+* **Honeycombs**: regular tilings that fill the whole space with copies of one cell, drawn as edges or as cells with gaps. Neighbouring cells can alternate two colours.
+  * Flat: cubic {4,3,4} (cell size set by you).
+  * Hyperbolic: order-5 cubic {4,3,5} (5 cubes around each edge), order-4 and order-5 dodecahedral {5,3,4} / {5,3,5}, icosahedral {3,5,3}.
+  * Spherical: the regular 4D polytopes seen from inside: tesseract {4,3,3}, 120-cell {5,3,3}, 24-cell {3,4,3}, 5-cell, 16-cell, 600-cell.
+  * In curved space the cell size is fixed by the angles, so it follows the curvature radius (animate R and the tiling breathes).
+  * Rendering folds each point into the central cell by mirroring it across faces.
+  * The tiling is anchored, in double precision, at the cell you are in, so it stays sharp wherever you walk.
+* **Overview** (Edit mode, bottom right; drag to orbit, wheel to zoom; Settings > Edit mode > Outside thumbnail):
+  * Hyperbolic: the **Poincaré ball**, the whole infinite space inside a ball whose surface is infinity.
+  * Spherical: the stereographic view of the half of the space around the origin, and some of the rest.
+  * A marker shows where you are and which way you look.
+
 There are no world objects or W slider: the curved spaces are 3D. 4D shapes show their 3D cross-section (w = 0).
 
 ## Editor
@@ -256,6 +272,8 @@ src/codegen.*, shaders.hpp    scene → GLSL, ray-marching shader
 src/renderer.*, gl.*          renderer (shared part), OpenGL / Vulkan backends, function loader
 src/media.*                   PNG / JPEG / GIF / AVI writers, ffmpeg pipe
 src/render_job.cpp            offline renders (Render window)
+src/space.*                   curved spaces: hyperboloid / 3-sphere model, isometries, geodesics
+src/polytope.*                regular polyhedra and honeycombs
 src/app.*                     state, tools, undo, explore movement, thumbnail
 src/ui*.cpp, ui_common.hpp    ImGui interface (ui.cpp core, ui_toolbar / ui_library / ui_tree /
                               ui_properties / ui_viewport / ui_windows / ui_timeline / ui_render panels)
