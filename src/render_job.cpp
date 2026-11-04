@@ -86,6 +86,7 @@ bool App::startRender(bool animation, std::string& err) {
   j.sceneLights = lights;
   j.sceneAnim = anim;
   j.world = world;
+  j.space = space;
   j.quality = quality;
   j.frame = j.first;
   j.sample = 0;
@@ -112,6 +113,8 @@ void App::prepareJobFrame() {
   std::vector<PointLight> liveLights = std::move(lights);
   Animation liveAnim = std::move(anim);
   std::string liveWorld = world;
+  Space liveSpace = space;
+  space = j.space;
   auto liveIsolate = std::move(isolate);
   isolate.clear();
   root = j.sceneRoot;
@@ -161,6 +164,7 @@ void App::prepareJobFrame() {
   lights = std::move(liveLights);
   anim = std::move(liveAnim);
   world = liveWorld;
+  space = liveSpace;
   isolate = std::move(liveIsolate);
   rebuild();
   j.prepared = true;

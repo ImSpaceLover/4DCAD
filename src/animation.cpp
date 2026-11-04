@@ -398,6 +398,7 @@ void pruneTracks(Animation& a, const Node& root, const std::vector<PointLight>& 
   a.tracks.erase(std::remove_if(a.tracks.begin(), a.tracks.end(),
                                 [&](const Track& t) {
                                   if (t.keys.empty()) return true;
+                                  if (t.target == "scene") return false;  // scene-wide values (curvature)
                                   if (t.target.rfind("light:", 0) == 0) {
                                     for (auto& l : lights) if ("light:" + l.id == t.target) return false;
                                     return true;

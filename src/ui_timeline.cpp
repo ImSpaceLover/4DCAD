@@ -29,6 +29,7 @@ void diamond(ImDrawList* dl, ImVec2 c, float r, ImU32 fill, ImU32 edge) {
 }  // namespace
 
 std::string UI::targetName(const std::string& target) {
+  if (target == "scene") return "Space";
   if (target.rfind("light:", 0) == 0) {
     for (auto& l : app.lights) if ("light:" + l.id == target) return l.name;
     return "Light";
@@ -38,6 +39,7 @@ std::string UI::targetName(const std::string& target) {
 }
 
 std::string UI::pathLabel(const std::string& target, const std::string& path) {
+  if (path == "space.radius") return "Curvature radius";
   if (target.rfind("light:", 0) == 0) {
     for (auto& v : animatableLightValues()) if (v.path == path) return v.label;
     return path;
@@ -145,6 +147,9 @@ void UI::timelinePanel() {
   std::vector<Row> rows;
   std::vector<std::string> targets;
   for (auto& id : app.selection) targets.push_back(id);
+  bool curvAnim = false;  // the space's curvature is always listed when animated
+  for (auto& t : A.tracks) curvAnim |= t.target == "scene";
+  if (curvAnim && !targets.empty()) targets.push_back("scene");
   if (targets.empty()) {
     for (auto& t : A.tracks) if (std::find(targets.begin(), targets.end(), t.target) == targets.end()) targets.push_back(t.target);
   }

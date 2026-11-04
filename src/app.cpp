@@ -116,6 +116,7 @@ void App::restore(const std::string& snap) {
   if (!anim.empty()) applyAnim();
   evalRoot_ = root;
   evalLights_ = lights;
+  evalRadius_ = space.radius;
 }
 
 void App::loadScene(SceneFile f) {
@@ -158,6 +159,7 @@ void App::loadScene(SceneFile f) {
   if (!anim.empty()) applyAnim();
   evalRoot_ = root;
   evalLights_ = lights;
+  evalRadius_ = space.radius;
   committed_ = snapshot();
   saved_ = committed_;
 }
@@ -165,6 +167,9 @@ void App::loadScene(SceneFile f) {
 // ============================================================ animation
 void App::applyAnim() {
   applyAnimation(anim, root, lights, anim.frame);
+  if (space.curved())
+    for (auto& t : anim.tracks)
+      if (t.target == "scene" && t.path == "space.radius" && !t.keys.empty()) space.radius = std::max(0.2, evalTrack(t, anim.frame));
   rebuild();
   // objects / cameras on a world surface: the interpolated point is put back on the surface and
   // their frame re-aligned to it (so they travel along the surface between keys)
@@ -194,6 +199,7 @@ void App::setFrame(double frame) {
     applyAnim();
     evalRoot_ = root;
     evalLights_ = lights;
+    evalRadius_ = space.radius;
   }
   lastChange_ = now;
 }
@@ -236,7 +242,8 @@ void App::deleteKeys() {
 void App::toggleValueKey(const std::string& target, const std::string& path) {
   double fr = std::round(anim.frame);
   if (hasKeyAt(anim, target, path, fr)) { deleteKey(anim, target, path, fr); commit(); return; }
-  if (target.rfind("light:", 0) == 0) {
+  if (target == "scene") { if (path == "space.radius") setKey(anim, target, path, fr, space.radius); }
+  else if (target.rfind("light:", 0) == 0) {
     for (auto& l : lights) if ("light:" + l.id == target) { double v; if (getLightValue(l, path, v)) setKey(anim, target, path, fr, v); }
   } else if (Node* n = findNode(root, target)) {
     if (path == "rot") setRotKey(anim, target, fr, nodeRotation(*n));
@@ -248,6 +255,7 @@ void App::toggleValueKey(const std::string& target, const std::string& path) {
 void App::autoKeyChanges() {
   // key every value that differs from what the animation (or the last edit) left there
   double fr = std::round(anim.frame);
+  if (space.curved() && std::abs(space.radius - evalRadius_) > 1e-9) setKey(anim, "scene", "space.radius", fr, space.radius);
   walk(root, [&](Node& n, Node*, int) {
     if (n.id == root.id) return;
     Node* before = findNode(evalRoot_, n.id);
@@ -370,6 +378,7 @@ void App::commit() {
   rebuild();
   evalRoot_ = root;
   evalLights_ = lights;
+  evalRadius_ = space.radius;
   std::string s = snapshot();
   if (s != committed_) {
     history_.push_back(committed_);
@@ -471,7 +480,7 @@ std::string App::copySelection() {
     for (auto& o : selection) if (o != id && isAncestor(root, o, id)) covered = true;
     if (covered) continue;  // copied with its parent
     Node c = *n;
-    if (auto w = worldXf(root, id)) c.xf = *w;  // pasted at the scene root: same place in the world
+    if (auto w = worldTransform(id)) c.xf = *w;  // pasted at the scene root: same place in the world
     j["nodes"].push_back(nlohmann::json::parse(nodeToJson(c)));
   }
   return j["nodes"].empty() ? "" : j.dump();
@@ -511,7 +520,7 @@ View App::cameraView(const std::string& id, bool* geoCam, double* fov) {
   View v;
   if (!n) return v;
   v.eye = nodeWorldPos(id);
-  v.frame = orthonormalize(nodeWorldFrame(id));
+  v.frame = space.curved() ? nodeWorldIso(id) : orthonormalize(nodeWorldFrame(id));
   if (geoCam) *geoCam = n->anchor && !world.empty() && n->anchor->world == world;
   if (fov) *fov = n->camFov;
   return v;
@@ -522,7 +531,12 @@ std::string App::addCamera() {
   int count = 0;
   walk(root, [&](Node& m, Node*, int) { if (m.isCamera()) count++; });
   Node c = makeCamera("Camera " + std::to_string(count + 1), v.eye, v.frame, fov(), editCam.slider);
-  if (geo && geoEdit.valid && !world.empty()) {
+  if (space.curved()) {  // the camera's isometry, as normal coordinates + rotation (root child)
+    Transform w;
+    cs::setFromIso(space, w, v.frame, 1.0);
+    c.xf.pos = w.pos;
+    c.xf.rot = w.rot;
+  } else if (geo && geoEdit.valid && !world.empty()) {
     // a Geodesic camera: attached to the world surface (it then moves along it)
     c.xf.pos = geoEdit.pivot;
     c.xf.rot = identity();
@@ -542,7 +556,8 @@ void App::lookThrough(const std::string& id) {
   bool gcam = false;
   double f = 60;
   View v = cameraView(id, &gcam, &f);
-  if (gcam) {
+  if (space.curved()) curvCam.iso = cs::renorm(space.k(), v.frame);
+  else if (gcam) {
     if (!geo) setGeo(true);
     if (geo) { geoEdit.pivot = v.eye; geoEdit.frame = v.frame; geoEdit.valid = true; }
   } else {
@@ -572,9 +587,10 @@ void App::cameraToView(const std::string& id) {
     n->anchor.reset();
     n->camSlider = editCam.slider;
     Transform w{v.eye, v.frame, 1};
+    if (space.curved()) cs::setFromIso(space, w, v.frame, 1.0);
     Node* p = findParent(root, id);
-    auto pw = p ? worldXf(root, p->id) : std::optional<Transform>(Transform{});
-    Transform local = pw ? relativeXf(*pw, w) : w;
+    auto pw = p ? worldTransform(p->id) : std::optional<Transform>(Transform{});
+    Transform local = pw ? relativeTransform(*pw, w) : w;
     n->xf.pos = local.pos;
     n->xf.rot = local.rot;
   }
@@ -610,17 +626,18 @@ void App::groupSelection(BoolOp op) {
   size_t idx = 0;
   while (idx < parent->children.size() && parent->children[idx].id != top[0]) idx++;
   // every object keeps its place in the world: express it in the new parent's frame
-  auto parentW = worldXf(root, parentId);
+  auto parentW = worldTransform(parentId);
+  double parentScale = scaleAbove(parentId) * parent->xf.scale;
   std::vector<std::optional<Transform>> worldOf;
-  for (auto& id : top) worldOf.push_back(worldXf(root, id));
+  for (auto& id : top) worldOf.push_back(worldTransform(id));
   std::vector<Node> kids;
   for (size_t k = 0; k < top.size(); k++)
     if (auto n = removeNode(root, top[k])) {
-      if (parentW && worldOf[k]) n->xf = relativeXf(*parentW, *worldOf[k]);
+      if (parentW && worldOf[k]) n->xf = relativeTransform(*parentW, *worldOf[k]);
       kids.push_back(std::move(*n));
     }
   Node g = makeGroup(op, std::move(kids));
-  centreGroupOnFirst(g);  // the group's origin is its first object (which ends up at 0,0,0,0)
+  centreGroup(g, parentScale);  // the group's origin is its first object (which ends up at 0,0,0,0)
   std::string gid = g.id;
   Node* p2 = findNode(root, parentId);
   p2->children.insert(p2->children.begin() + std::min(idx, p2->children.size()), std::move(g));
@@ -634,12 +651,13 @@ void App::ungroup(const std::string& id) {
   size_t i = 0;
   while (i < p->children.size() && p->children[i].id != id) i++;
   if (!p->children[i].isGroup()) return;
+  double sAnc = scaleAbove(id);
   Node g = std::move(p->children[i]);
   p->children.erase(p->children.begin() + i);
   selection.clear();
   // back to the parent's coordinates, keeping every object where it is
   for (auto& c : g.children) {
-    if (!g.anchor && !c.anchor) c.xf = composeXf(g.xf, c.xf);
+    if (!g.anchor && !c.anchor) c.xf = composeLocal(g.xf, c.xf, sAnc);
     selection.push_back(c.id);
   }
   p->children.insert(p->children.begin() + i, g.children.begin(), g.children.end());
@@ -649,12 +667,12 @@ void App::ungroup(const std::string& id) {
 void App::reparent(const std::string& id, const std::string& targetId, Drop where) {
   if (id == targetId || id == root.id || isAncestor(root, id, targetId)) return;
   if (!findNode(root, targetId)) return;
-  auto W = worldXf(root, id);  // the object stays where it is in the world
+  auto W = worldTransform(id);  // the object stays where it is in the world
   auto n = removeNode(root, id);
   if (!n) return;
   auto into = [&](const std::string& parentId) {
-    auto P = worldXf(root, parentId);
-    if (W && P) n->xf = relativeXf(*P, *W);
+    auto P = worldTransform(parentId);
+    if (W && P) n->xf = relativeTransform(*P, *W);
   };
   Node* target = findNode(root, targetId);
   if (where == Drop::Into && target->isGroup()) { into(targetId); target->children.push_back(std::move(*n)); }
@@ -667,7 +685,7 @@ void App::reparent(const std::string& id, const std::string& targetId, Drop wher
     if (where == Drop::Wrap) {
       Node t = std::move(p->children[i]);
       Node g = makeGroup(BoolOp::Union, {std::move(t), std::move(*n)});
-      centreGroupOnFirst(g);
+      centreGroup(g, scaleAbove(p->id) * p->xf.scale);
       p->children[i] = std::move(g);
     } else p->children.insert(p->children.begin() + (where == Drop::After ? i + 1 : i), std::move(*n));
   }
@@ -700,7 +718,7 @@ void App::attachToWorld(const std::string& id) {
 void App::recentreGroup(const std::string& id) {
   Node* g = findNode(root, id);
   if (!g || g->id == root.id) return;
-  if (!centreGroupOnFirst(*g)) { toast("Cannot recentre this group (empty, or objects on a world surface)", true); return; }
+  if (!centreGroup(*g, scaleAbove(id))) { toast("Cannot recentre this group (empty, or objects on a world surface)", true); return; }
   commit();
 }
 
@@ -728,6 +746,62 @@ V4 App::along(const V4& p, const V4& v) const {
   V4 q = p, d = t * (1.0 / l);
   cs::geodesic(space, q, d, l);
   return q;
+}
+
+std::optional<Transform> App::worldTransform(const std::string& id) {
+  if (!space.curved()) return worldXf(root, id);
+  Node* n = findNode(root, id);
+  if (!n) return std::nullopt;
+  double sAnc = 1;
+  M4 W = nodeWorldIso(id, &sAnc);
+  Transform t;
+  cs::setFromIso(space, t, W, 1.0);
+  t.scale = sAnc * n->xf.scale;
+  return t;
+}
+
+Transform App::relativeTransform(const Transform& P, const Transform& W) {
+  if (!space.curved()) return relativeXf(P, W);
+  M4 L = mul(cs::inverse(space.k(), cs::nodeIso(space, P, 1.0)), cs::nodeIso(space, W, 1.0));
+  Transform t;
+  cs::setFromIso(space, t, L, P.scale);
+  t.scale = W.scale / P.scale;
+  return t;
+}
+
+Transform App::composeLocal(const Transform& parent, const Transform& child, double sAnc) {
+  if (!space.curved()) return composeXf(parent, child);
+  M4 W = mul(cs::nodeIso(space, parent, sAnc), cs::nodeIso(space, child, sAnc * parent.scale));
+  Transform t;
+  cs::setFromIso(space, t, W, sAnc);
+  t.scale = parent.scale * child.scale;
+  return t;
+}
+
+double App::scaleAbove(const std::string& id) {
+  double s = 1;
+  auto path = pathTo(root, id);
+  for (size_t i = 0; i + 1 < path.size(); i++) s *= path[i]->xf.scale;
+  return s;
+}
+
+bool App::centreGroup(Node& g, double sAnc) {
+  if (!space.curved()) return centreGroupOnFirst(g);
+  if (g.isLeaf() || g.children.empty()) return false;
+  // the group's origin moves to its first child's (keeping its orientation); children compensate
+  double sg = sAnc * g.xf.scale, k = space.k();
+  V4 o = g.children[0].xf.pos;
+  o[3] = 0;
+  M4 Tm = cs::translation(space, o * sg);
+  cs::setFromIso(space, g.xf, mul(cs::nodeIso(space, g.xf, sAnc), Tm), sAnc);
+  M4 Ti = cs::inverse(k, Tm);
+  for (auto& c : g.children) cs::setFromIso(space, c.xf, mul(Ti, cs::nodeIso(space, c.xf, sg)), sg);
+  return true;
+}
+
+double App::viewDepth(const V4& p, const View& v) const {
+  if (!space.curved()) return dot(p - v.eye, col(v.frame, 2));
+  return cs::logO(space, cs::renormPoint(space.k(), mul(cs::inverse(space.k(), v.frame), p)))[2];
 }
 
 V4 App::lightWorldPos(const PointLight& l) const { return space.curved() ? cs::expO(space, l.pos) : l.pos; }
@@ -972,6 +1046,24 @@ M4 App::parentWorldRotation(const std::string& id, double* scaleAcc) {
 }
 
 void App::translateNodes(const std::vector<std::string>& ids, const V4& delta) {
+  if (space.curved()) {
+    // the direction (tangent at dirBase_) is carried to each object, which slides along the geodesic
+    double k = space.k();
+    V4 dt = cs::tangent(k, dirBase_, delta);
+    for (auto& id : ids) {
+      Node* n = findNode(root, id);
+      if (!n || id == root.id) continue;
+      double sAnc = 1;
+      M4 W = nodeWorldIso(id, &sAnc);
+      V4 p = col(W, 3);
+      V4 q = along(p, cs::transport(k, dirBase_, p, dt));
+      M4 W2 = mul(cs::transvection(k, p, q), W);
+      Node* par = findParent(root, id);
+      M4 P = par ? nodeWorldIso(par->id) : identity();
+      cs::setFromIso(space, n->xf, mul(cs::inverse(k, P), W2), sAnc);
+    }
+    return;
+  }
   for (auto& id : ids) {
     Node* n = findNode(root, id);
     if (!n || id == root.id) continue;
@@ -994,6 +1086,31 @@ void App::translateNodes(const std::vector<std::string>& ids, const V4& delta) {
   }
 }
 
+void App::rotateNodesPlane(const std::vector<std::string>& ids, const V4& u, const V4& v, double ang) {
+  if (!space.curved()) { rotateNodes(ids, rotationInPlane(u, v, ang)); return; }
+  double k = space.k();
+  for (auto& id : ids) {
+    Node* n = findNode(root, id);
+    if (!n || id == root.id) continue;
+    double sAnc = 1;
+    M4 W = nodeWorldIso(id, &sAnc), Wi = cs::inverse(k, W);
+    V4 p = col(W, 3);
+    // the plane, carried to the object and written in its own axes
+    V4 ul = mul(Wi, cs::transport(k, dirBase_, p, cs::tangent(k, dirBase_, u)));
+    V4 vl = mul(Wi, cs::transport(k, dirBase_, p, cs::tangent(k, dirBase_, v)));
+    ul[3] = vl[3] = 0;
+    if (length(ul) < 1e-9) continue;
+    ul = normalize(ul);
+    vl = reject(vl, ul);
+    if (length(vl) < 1e-9) continue;
+    vl = normalize(vl);
+    M4 W2 = mul(W, rotationInPlane(ul, vl, ang));
+    Node* par = findParent(root, id);
+    M4 P = par ? nodeWorldIso(par->id) : identity();
+    cs::setFromIso(space, n->xf, mul(cs::inverse(k, P), W2), sAnc);
+  }
+}
+
 void App::rotateNodes(const std::vector<std::string>& ids, const M4& q) {
   for (auto& id : ids) {
     Node* n = findNode(root, id);
@@ -1013,6 +1130,12 @@ std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
   // straightened into an orthonormal frame of the visible slice: always 3 usable axes. Moving
   // along one may change several world coordinates (e.g. X and W) but stays inside the slice.
   Node* n = findNode(root, id);
+  if (space.curved()) {
+    // the object's axes at its position (Local), or the world axes carried there from the origin (Global)
+    V4 p = nodeWorldPos(id);
+    M4 F = editSet.globalAxes ? cs::transvection(space.k(), cs::origin(), p) : nodeWorldIso(id);
+    return {col(F, 0), col(F, 1), col(F, 2)};
+  }
   M4 F = nodeWorldFrame(id);
   if (editSet.globalAxes) {
     if (n && n->anchor) F = n->anchor->basis;  // on a world surface: the surface's directions at the object
@@ -1048,6 +1171,7 @@ std::array<V4, 3> App::gizmoAxes(const std::string& id, const View& v) {
 }
 
 bool App::globalExact(const std::string& id) {
+  if (space.curved()) return false;
   Node* n = findNode(root, id);
   return editSet.globalAxes && n && !n->anchor;
 }
@@ -1084,7 +1208,12 @@ double App::snapAng(double a) const { return snapNow_ ? snapTo(a, editSet.snapAn
 
 V4 App::snapDistance(const std::vector<std::string>& ids, const V4& delta) {
   Node* n = findNode(root, primaryOf(ids));
-  if (!snapNow_ || !n || !n->anchor || world.empty()) return delta;
+  if (!snapNow_ || !n || ((!n->anchor || world.empty()) && !space.curved())) return delta;
+  if (space.curved()) {  // no grid in curved space: the distance travelled snaps
+    V4 t = cs::tangent(space.k(), dirBase_, delta);
+    double l = std::sqrt(std::max(cs::mdot(space.k(), t, t), 0.0));
+    return l < 1e-12 ? delta : t * (snapTo(l, editSet.snapMove) / l);
+  }
   double l = length(delta);
   return l < 1e-12 ? delta : delta * (snapTo(l, editSet.snapMove) / l);
 }
@@ -1093,7 +1222,7 @@ void App::snapToGrid(const std::vector<std::string>& ids, const std::vector<V4>&
   double step = editSet.snapMove;
   std::string pid = primaryOf(ids);
   Node* n = findNode(root, pid);
-  if (!snapNow_ || step <= 0 || !n || (n->anchor && !world.empty())) return;
+  if (!snapNow_ || step <= 0 || !n || (n->anchor && !world.empty()) || space.curved()) return;
   V4 p = nodeWorldPos(pid);
   // orthonormal movement directions
   std::vector<V4> d;
@@ -1147,7 +1276,7 @@ Gizmo App::gizmo() {
   View v = currentView();
   V4 c = nodeWorldPos(n->id);
   if (!project(c, v, g.cx, g.cy)) return g;
-  double depth = std::max(0.3, dot(c - v.eye, col(v.frame, 2)));
+  double depth = std::max(0.3, viewDepth(c, v));
   g.worldLen = 95.0 * 2 * depth * tanHalf() / vpH;
   g.visible = true;
   auto dirs = gizmoAxes(n->id, v);
@@ -1155,7 +1284,7 @@ Gizmo App::gizmo() {
     auto& ax = g.axes[a];
     ax.axis = a;
     ax.dir = dirs[a];
-    if (!project(c + ax.dir * g.worldLen, v, ax.ex, ax.ey)) { ax.ex = g.cx; ax.ey = g.cy; }
+    if (!project(along(c, ax.dir * g.worldLen), v, ax.ex, ax.ey)) { ax.ex = g.cx; ax.ey = g.cy; }
     ax.visible = true;  // always 3 arrows (an arrow pointing at the camera is just short)
     bool exact = globalExact(n->id);
     ax.axis = exact ? globalAxisLabel(a) : a;
@@ -1174,13 +1303,13 @@ Gizmo App::gizmo() {
       bool ok = true;
       for (int k = 0; k <= 64 && ok; k++) {
         double t = k / 64.0 * 2 * PI, sx, sy;
-        ok = project(c + (ring.u * std::cos(t) + ring.v * std::sin(t)) * r, v, sx, sy);
+        ok = project(along(c, (ring.u * std::cos(t) + ring.v * std::sin(t)) * r), v, sx, sy);
         ring.pts.push_back({sx, sy});
       }
       if (!ok) continue;
       double ux, uy, wx, wy;
-      project(c + ring.u * r, v, ux, uy);
-      project(c + ring.v * r, v, wx, wy);
+      project(along(c, ring.u * r), v, ux, uy);
+      project(along(c, ring.v * r), v, wx, wy);
       double cr = (ux - g.cx) * (wy - g.cy) - (uy - g.cy) * (wx - g.cx);
       ring.orient = cr >= 0 ? 1 : -1;
       g.rings.push_back(ring);
@@ -1258,13 +1387,15 @@ void App::applyModal() {
     if (modalAxes.size() == 1) dirs = {keyAxis(primaryOf(ids), v, modalAxes[0])};
     for (auto& [id, o] : orig_) {
       V4 c = nodeWorldPos(id);
-      double depth = std::max(0.5, std::abs(dot(c - v.eye, fwd)));
+      dirBase_ = v.eye;
+      double depth = std::max(0.5, std::abs(viewDepth(c, v)));
       double k = 2 * depth * tanHalf() / vpH;
       V4 delta = right * (dx * k) - up * (dy * k);
       if (modalAxes.size() == 1) {
         V4 axis = keyAxis(id, v, modalAxes[0]);
         double sx0, sy0, sx1, sy1;
-        if (length(axis) > 0.5 && project(c, v, sx0, sy0) && project(c + axis, v, sx1, sy1)) {
+        dirBase_ = c;  // the axis is a direction at the object
+        if (length(axis) > 0.5 && project(c, v, sx0, sy0) && project(along(c, axis), v, sx1, sy1)) {
           double ax = sx1 - sx0, ay = sy1 - sy0, l2 = ax * ax + ay * ay;
           delta = l2 > 1e-6 ? axis * ((dx * ax + dy * ay) / l2) : axis * (dx * k);
         } else delta = {0, 0, 0, 0};
@@ -1275,18 +1406,20 @@ void App::applyModal() {
   } else if (modal == Modal::Rotate) {
     double ang = snapAng(dx * 0.01);
     for (auto& id : ids) {
-      M4 q;
-      if (modalAxes.empty()) q = rotationInPlane(right, up, -ang);
-      else {
-        int a, b;
-        if (modalAxes.size() >= 2) { a = modalAxes[0]; b = modalAxes[1]; }
-        else { int x = modalAxes[0]; a = x == 0 ? 1 : 0; b = x == 2 ? 1 : x == 3 ? 1 : 2; if (x == 1) { a = 2; b = 0; } }
-        V4 u = keyAxis(id, v, a), w = keyAxis(id, v, b);
-        w = reject(w, u);
-        if (length(u) < 0.5 || length(w) < 0.2) continue;
-        q = rotationInPlane(u, normalize(w), ang);
+      if (modalAxes.empty()) { dirBase_ = v.eye; rotateNodesPlane({id}, right, up, -ang); continue; }
+      int a, b;
+      if (modalAxes.size() >= 2) { a = modalAxes[0]; b = modalAxes[1]; }
+      else { int x = modalAxes[0]; a = x == 0 ? 1 : 0; b = x == 2 ? 1 : x == 3 ? 1 : 2; if (x == 1) { a = 2; b = 0; } }
+      V4 u = keyAxis(id, v, a), w = keyAxis(id, v, b);
+      if (space.curved()) {  // axes at the object (orthonormal in the space's metric)
+        dirBase_ = nodeWorldPos(id);
+        if (cs::mdot(space.k(), u, u) < 0.25 || cs::mdot(space.k(), w, w) < 0.04) continue;
+        rotateNodesPlane({id}, u, w, ang);
+        continue;
       }
-      rotateNodes({id}, q);
+      w = reject(w, u);
+      if (length(u) < 0.5 || length(w) < 0.2) continue;
+      rotateNodes({id}, rotationInPlane(u, normalize(w), ang));
     }
   } else if (modal == Modal::Scale) {
     for (auto& [id, o] : orig_) if (Node* n = findNode(root, id)) {
@@ -1467,8 +1600,9 @@ void App::handleInput(const InputState& in, double dt) {
         V4 right = col(v.frame, 0), up = col(v.frame, 1), fwd = col(v.frame, 2);
         std::vector<std::string> ids;
         for (auto& [id, o] : orig_) ids.push_back(id);
+        dirBase_ = v.eye;
         for (auto& id : ids) {
-          double depth = std::max(0.5, std::abs(dot(nodeWorldPos(id) - v.eye, fwd)));
+          double depth = std::max(0.5, std::abs(viewDepth(nodeWorldPos(id), v)));
           double k = 2 * depth * tanHalf() / vpH;
           translateNodes({id}, snapDistance(ids, right * (dragDx_ * k) - up * (dragDy_ * k) + fwd * (dragDepth_ * k * 2)));
         }
@@ -1489,12 +1623,14 @@ void App::handleInput(const InputState& in, double dt) {
           auto& ax = gz.axes[gizmoHandle_];
           double sx = ax.ex - gz.cx, sy = ax.ey - gz.cy, l2 = sx * sx + sy * sy;
           if (l2 > 1) dragAlong_ += (in.dx * sx + in.dy * sy) / l2 * gz.worldLen;
+          if (Node* pn = findNode(root, primaryOf(ids))) dirBase_ = nodeWorldPos(pn->id);  // arrows: directions at the object
           translateNodes(ids, snapDistance(ids, ax.dir * dragAlong_));
           snapToGrid(ids, {ax.dir});
         } else if (gizmoHandle_ == 4) {  // centre: free move in the screen plane (Shift: along depth)
           double k = gz.worldLen / 95.0;
           if (in.shift) dragDepth_ -= in.dy; else { dragDx_ += in.dx; dragDy_ += in.dy; }
           V4 right = col(v.frame, 0), up = col(v.frame, 1), fwd = col(v.frame, 2);
+          dirBase_ = v.eye;
           translateNodes(ids, snapDistance(ids, right * (dragDx_ * k) - up * (dragDy_ * k) + fwd * (dragDepth_ * k * 2)));
           std::vector<V4> dirs;
           if (dragDx_ != 0 || dragDy_ != 0) { dirs.push_back(right); dirs.push_back(up); }
@@ -1507,7 +1643,8 @@ void App::handleInput(const InputState& in, double dt) {
           if (da > PI) da -= 2 * PI;
           if (da < -PI) da += 2 * PI;
           dragAngle_ += da * ring.orient;
-          rotateNodes(ids, rotationInPlane(ring.u, ring.v, snapAng(dragAngle_)));
+          if (Node* pn = findNode(root, primaryOf(ids))) dirBase_ = nodeWorldPos(pn->id);
+          rotateNodesPlane(ids, ring.u, ring.v, snapAng(dragAngle_));
         }
         rebuild();
         break;

@@ -91,6 +91,49 @@ Rendering from the command line (renders like the Render window, from the active
 - **Debug ray** (T): shows the path of the ray leaving your eye along the view direction, marched exactly like the renderer's rays (it follows the geodesic in the Geodesic view, straight in Full 4D). It is drawn as a thin glowing tube; the ball at its end shows why it stopped (red: hit an object, blue: max ray distance, yellow: max march steps, grey: left the scene), and the status line gives its length and step count. It is re-traced from your view every frame; **Shift+T** freezes it so you can walk around it and see it bend. The outside thumbnail also shows its path.
 - **Your body** is part of the scene. It casts a shadow, and on closed worlds light comes back around so you can see yourself. On a hypersphere world every ray that misses everything returns to you, so the "sky" is your own back. Toggle it in Settings > Explore mode.
 
+## Curved spaces: Hyperbolic and Spherical 3D
+
+**File > New** asks what space the scene lives in:
+
+* **Flat 4D**: four-dimensional Euclidean space, with the Full 4D and Geodesic 3D views described above.
+* **Hyperbolic 3D**: three-dimensional space of constant negative curvature (−1/R²).
+  * Parallel lines spread apart and triangles have less than 180°.
+  * There is exponentially more room further away, so distant objects shrink very fast.
+  * A flat ground plane seen from above looks like a dome: its edge at infinity is a circle below the horizon.
+* **Spherical 3D**: three-dimensional space of constant positive curvature (+1/R², a 3-sphere).
+  * Straight lines close up after 2πR, so looking far enough ahead you see the back of things.
+  * Objects near the opposite point of the space look magnified.
+
+The **curvature radius R** is set in the dialog and in the toolbar ("R = …", drag to change).
+* Smaller is more strongly curved; large R is nearly flat.
+* Changing R keeps every object's coordinates, so space bends around them.
+* It can be undone, is saved in the scene, and can be **animated**: right-click the R field to insert keyframes ("Space: Curvature radius" in the timeline).
+
+How it works:
+* Points use the hyperboloid / 3-sphere model in four coordinates.
+* Rays follow **exact geodesics**, the straight lines of the space.
+* Objects, groups and the camera are placed by isometries of the space.
+* A position (Properties: Position XYZ) is a pair of **normal coordinates**: walk that far in that direction from the parent's origin.
+* Rotations are 3D only.
+* Every shape is evaluated in normal coordinates around its own origin:
+  * a ball is an exact geodesic ball;
+  * a cube has very slightly curved faces;
+  * marching stays safe in both spaces.
+* Shading is done relative to the camera, which keeps float precision near you; hyperbolic rays stop after 12R.
+
+Everything else works as in Flat 4D:
+* Materials, textures, lights, shadows, glass and mirrors, stochastic sampling.
+* The ground grid (normal coordinates on the plane y = 0) and the sky (hyperbolic: by the point at infinity a ray heads for).
+* Explore walking with collisions.
+* The move / rotate gizmo and G / R / S, which move objects along geodesics and rotate them about their centre.
+  * Snapping rounds the distance moved (there is no grid in curved space).
+  * Global axes are the world axes carried to the object.
+* Grouping, ungrouping and reparenting, which keep objects in place.
+* Group scale spreads the children along geodesics.
+* Cameras, animation and the Render window.
+
+There are no world objects or W slider: the curved spaces are 3D. 4D shapes show their 3D cross-section (w = 0).
+
 ## Editor
 
 * **Shapes are a point plus modifiers.** The modifier stack is applied top to bottom and works on any object or group:

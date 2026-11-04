@@ -120,8 +120,9 @@ void UI::toolbar() {
     ImGui::SetNextItemWidth(120);
     if (ImGui::DragFloat("##curvR", &r, 0.02f * std::max(1.f, r), 0.2f, 1000.f, "R = %.2f", ImGuiSliderFlags_Logarithmic)) app.setCurvatureRadius(r);
     if (ImGui::IsItemDeactivatedAfterEdit()) app.commit();
+    keyable("scene", {"space.radius"});
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Curvature radius: curvature = %s1 / R^2 (%s).\nSmaller = more strongly curved; objects keep their coordinates.",
+      ImGui::SetTooltip("Right-click: keyframes (the curvature can be animated).\nCurvature radius: curvature = %s1 / R^2 (%s).\nSmaller = more strongly curved; objects keep their coordinates.",
                         app.space.kind == SpaceKind::Spherical ? "+" : "-", app.space.kind == SpaceKind::Spherical ? "spherical" : "hyperbolic");
   }
   if (!app.curved()) {

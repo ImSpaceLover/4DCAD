@@ -98,10 +98,23 @@ class App {
   M4 nodeWorldIso(const std::string& id, double* sAncOut = nullptr);
   /** Where a light is in the world (curved scenes: its position is normal coordinates at the origin). */
   V4 lightWorldPos(const PointLight& l) const;
+  V4 lightFromWorld(const V4& p) const { return space.curved() ? cs::logO(space, p) : p; }
   /** Changes the curvature radius (curved scenes; objects keep their coordinates). */
   void setCurvatureRadius(double r);
   /** The point reached from p along tangent vector v (its length = distance): p + v in flat space, a geodesic in curved. */
   V4 along(const V4& p, const V4& v) const;
+  // transforms that keep objects in place (flat: plain composition; curved: isometries)
+  std::optional<Transform> worldTransform(const std::string& id);
+  Transform relativeTransform(const Transform& parentWorld, const Transform& world);
+  /** child (in parent's frame) expressed in the frame the parent lives in; sAnc = scale above the parent. */
+  Transform composeLocal(const Transform& parent, const Transform& child, double sAnc);
+  double scaleAbove(const std::string& id);  // product of the scales of the node's ancestors
+  bool centreGroup(Node& g, double sAnc);
+  /** Depth of p in front of the view (along its forward axis). */
+  double viewDepth(const V4& p, const View& v) const;
+  /** Moves / rotates nodes; directions are tangent vectors at dirBase_ (curved scenes). */
+  void rotateNodesPlane(const std::vector<std::string>& ids, const V4& u, const V4& v, double ang);
+  V4 dirBase_{0, 0, 0, 1};
 
   // --- modes / cameras ---
   Mode mode = Mode::Edit;
@@ -162,6 +175,7 @@ class App {
     std::vector<PointLight> sceneLights;
     Animation sceneAnim;
     std::string camera, world;
+    Space space;
     QualitySettings quality;
     FrameParams fp;
   };
@@ -353,6 +367,7 @@ class App {
   /** Applies the animation at anim.frame and re-attaches surface objects to their world. */
   void applyAnim();
   void autoKeyChanges();
+  double evalRadius_ = 8;  // curvature radius as the animation / last edit left it
   Node viewRoot_;                                 // the tree as drawn while isolating
   double lastAutosave_ = 0;
   std::vector<std::string> selectionAtPress_;

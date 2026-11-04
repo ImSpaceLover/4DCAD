@@ -170,7 +170,7 @@ void UI::lightsWindow() {
     PointLight l;
     l.id = newId("l");
     l.name = "Light " + std::to_string(app.lights.size() + 1);
-    l.pos = app.currentView().eye;  // where you are
+    l.pos = app.lightFromWorld(app.currentView().eye);  // where you are
     app.lights.push_back(l);
     done = true;
   }
@@ -185,7 +185,7 @@ void UI::lightsWindow() {
       ImGui::SameLine();
       if (ImGui::Checkbox("Shadows", &l.shadows)) done = true;
       ImGui::SameLine();
-      if (ImGui::SmallButton("To camera")) { l.pos = app.currentView().eye; done = true; }
+      if (ImGui::SmallButton("To camera")) { l.pos = app.lightFromWorld(app.currentView().eye); done = true; }
       ImGui::SameLine();
       if (ImGui::SmallButton("Delete")) del = (int)i;
       ImGui::SameLine();
@@ -193,7 +193,8 @@ void UI::lightsWindow() {
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Key every value of this light at the current frame");
       std::string lt = "light:" + l.id;
       float p[4] = {(float)l.pos[0], (float)l.pos[1], (float)l.pos[2], (float)l.pos[3]};
-      if (ImGui::DragFloat4("Position XYZW", p, 0.02f)) for (int k = 0; k < 4; k++) l.pos[k] = p[k];
+      if (app.curved() ? ImGui::DragFloat3("Position XYZ", p, 0.02f) : ImGui::DragFloat4("Position XYZW", p, 0.02f))
+        for (int k = 0; k < (app.curved() ? 3 : 4); k++) l.pos[k] = p[k];
       keyable(lt, {"pos.x", "pos.y", "pos.z", "pos.w"});
       track();
       float c[3] = {(float)l.color[0], (float)l.color[1], (float)l.color[2]};
@@ -302,6 +303,10 @@ void UI::helpWindow() {
   ImGui::BulletText("Shift+drag: pan | Ctrl+drag or wheel: zoom | Alt+drag: rotate the view into W");
   ImGui::BulletText("W slider (left edge of the viewport): moves the visible 3D slice along the camera's 4th axis");
   ImGui::BulletText("1 / 3 / 7 / 9: front / right / top / along W | Shift+W: reset 4D orientation");
+  ImGui::SeparatorText("Curved scenes: Hyperbolic / Spherical 3D (File > New)");
+  ImGui::BulletText("Navigation as in Full 4D (no W): orbit, pan, zoom, MMB click = centre of rotation, 1 / 3 / 7 views");
+  ImGui::BulletText("Toolbar R: the curvature radius (drag; right-click to keyframe it). Objects keep their coordinates");
+  ImGui::BulletText("Positions are normal coordinates: the distance and direction to walk from the parent's origin");
   ImGui::SeparatorText("Edit, Geodesic 3D (game-like)");
   ImGui::BulletText("Hold RMB: mouse look + WASD fly along the surface, Space/Shift up/down, Q/E roll; wheel = fly speed");
   ImGui::SeparatorText("Editing");

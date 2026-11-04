@@ -21,7 +21,8 @@ void UI::keyable(const std::string& target, const std::vector<std::string>& path
     if (ImGui::MenuItem(keyed ? "Replace keyframe" : "Insert keyframe", app.keys.text(Action::InsertKey).c_str())) {
       Animation& W = app.anim;
       for (auto& p : paths) {
-        if (target.rfind("light:", 0) == 0) {
+        if (target == "scene") { if (p == "space.radius") setKey(W, target, p, fr, app.space.radius); }
+        else if (target.rfind("light:", 0) == 0) {
           for (auto& l : app.lights) { double v; if ("light:" + l.id == target && getLightValue(l, p, v)) setKey(W, target, p, fr, v); }
         } else if (Node* n = findNode(app.root, target)) {
           if (p == "rot") setRotKey(W, target, fr, nodeRotation(*n));
@@ -66,9 +67,11 @@ void UI::cameraProperties(Node& n, bool& live, bool& done) {
     keyable(id, {"cam.focus"});
     track();
     const char* ax[4] = {"X", "Y", "Z", "W"};
+    if (!app.curved()) {
     if (ImGui::Combo("Slider axis", &n.camSlider, ax, 4)) done = true;
     keyable(id, {"cam.slider"});
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shown axes when looking through it (as the viewport's slider axis)");
+    }
   }
   ImGui::SeparatorText("Placement");
   float pos[4] = {(float)n.xf.pos[0], (float)n.xf.pos[1], (float)n.xf.pos[2], (float)n.xf.pos[3]};

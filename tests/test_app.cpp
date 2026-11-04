@@ -813,6 +813,57 @@ int main() {
     App d;
     d.loadScene(f);
     CHECK(d.curved() && length(d.currentView().eye - c.currentView().eye) < 1e-9, "%s: loaded at the same view", nm);
+
+    // --- editing: moving along a direction slides the object along the geodesic by that distance
+    cube = nullptr;  // (undo rebuilt the tree)
+    walk(c.root, [&](Node& n, Node*, int) { if (n.name == "Cube") cube = &n; });
+    V4 p0 = c.nodeWorldPos(cube->id);
+    M4 W0 = c.nodeWorldIso(cube->id);
+    c.dirBase_ = p0;
+    c.translateNodes({cube->id}, col(W0, 0) * 1.25);  // along its own X axis
+    V4 p1 = c.nodeWorldPos(cube->id);
+    CHECK(std::abs(cs::distance(c.space, p0, p1) - 1.25) < 1e-9, "%s: move distance", nm);
+    CHECK(cs::distance(c.space, p1, c.along(p0, col(W0, 0) * 1.25)) < 1e-9, "%s: moved along the axis", nm);
+    // rotating about the object's centre keeps its position
+    c.rotateNodesPlane({cube->id}, col(W0, 0), col(W0, 2), 0.7);
+    CHECK(cs::distance(c.space, c.nodeWorldPos(cube->id), p1) < 1e-9, "%s: rotation keeps the position", nm);
+    c.commit();
+    // grouping / ungrouping / reparenting keep every object where it is in the world
+    Node* ball = nullptr;
+    walk(c.root, [&](Node& n, Node*, int) { if (n.name == "Sphere") ball = &n; });
+    std::string cubeId = cube->id, ballId = ball->id;
+    // a scaled, rotated, moved group makes it harder
+    V4 wc = c.nodeWorldPos(cubeId), wb = c.nodeWorldPos(ballId);
+    c.selection = {cubeId, ballId};
+    c.groupSelection(BoolOp::Union);
+    std::string gid = c.selection[0];
+    CHECK(cs::distance(c.space, c.nodeWorldPos(cubeId), wc) < 1e-9 && cs::distance(c.space, c.nodeWorldPos(ballId), wb) < 1e-9, "%s: grouping keeps positions", nm);
+    CHECK(length(findNode(c.root, cubeId)->xf.pos) < 1e-9, "%s: the group's origin is its first object", nm);
+    Node* g = findNode(c.root, gid);
+    g->xf.scale = 1.5;
+    c.rebuild();
+    V4 sc = c.nodeWorldPos(cubeId), sb = c.nodeWorldPos(ballId);
+    // group scale spreads the children: the second object is 1.5 times as far from the first (on a geodesic from it)
+    CHECK(cs::distance(c.space, sc, wc) < 1e-9 && std::abs(cs::distance(c.space, sc, sb) - 1.5 * cs::distance(c.space, wc, wb)) < 1e-9, "%s: group scale", nm);
+    c.ungroup(gid);
+    CHECK(cs::distance(c.space, c.nodeWorldPos(cubeId), sc) < 1e-9 && cs::distance(c.space, c.nodeWorldPos(ballId), sb) < 1e-9, "%s: ungrouping keeps positions", nm);
+    CHECK(std::abs(findNode(c.root, ballId)->xf.scale - 1.5) < 1e-9, "%s: ungrouping keeps sizes", nm);
+    // cameras: add one at the view, look through it from elsewhere
+    std::string cam = c.addCamera();
+    View atAdd = c.currentView();
+    CHECK(cs::distance(c.space, c.cameraView(cam).eye, atAdd.eye) < 1e-7, "%s: camera at the view", nm);
+    c.curvCam.orbit(c.space, 200, 50);
+    c.lookThrough(cam);
+    { double dd = cs::distance(c.space, c.currentView().eye, atAdd.eye); CHECK(dd < 1e-7, "%s: look through the camera (%g, cam %g)", nm, dd, cs::distance(c.space, c.cameraView(cam).eye, atAdd.eye)); }
+    // animated curvature: keys interpolate the radius
+    c.anim.tracks.clear();
+    setKey(c.anim, "scene", "space.radius", 1, 4);
+    setKey(c.anim, "scene", "space.radius", 11, 8);
+    c.anim.tracks[0].keys[0].interp = Interp::Linear;
+    c.setFrame(6);
+    CHECK(std::abs(c.space.radius - 6) < 1e-9, "%s: curvature animates (%.3f)", nm, c.space.radius);
+    c.commit();
+    CHECK(c.anim.tracks.size() == 1, "%s: the space track is kept", nm);
   }
 
 #ifndef _WIN32
