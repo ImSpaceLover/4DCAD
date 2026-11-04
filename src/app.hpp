@@ -103,6 +103,10 @@ class App {
   void setCurvatureRadius(double r);
   /** The point reached from p along tangent vector v (its length = distance): p + v in flat space, a geodesic in curved. */
   V4 along(const V4& p, const V4& v) const;
+  /** Curved overview: the outside camera looking at the ball, and a point's place in the ball
+   *  (Poincare ball / stereographic projection: p.xyz / (1 + p.w)). */
+  View ballView() const;
+  static V4 toBall(const V4& p);
   // transforms that keep objects in place (flat: plain composition; curved: isometries)
   std::optional<Transform> worldTransform(const std::string& id);
   Transform relativeTransform(const Transform& parentWorld, const Transform& world);

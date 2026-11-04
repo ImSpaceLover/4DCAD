@@ -191,6 +191,23 @@ float map(vec4 p, out MAT m) {
     if (dt < d) { d = dt; m = MAT(vec4(1.0, 0.55, 0.1, 0.0), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0)); }
     if (de < d) { d = de; m = MAT(vec4(u_dbgEndCol, 0.0), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0)); }
   }
+#else
+  // curved: the polyline's pieces are short (a quarter of R at most), so the nearest point is found
+  // on the chord and put back on the space; distances are true world distances
+  if (u_dbgN > 1 && !g_noEmissive && !g_noDbg) {
+    float dt = INF;
+    for (int i = 0; i < 47; i++) {
+      if (i + 1 >= u_dbgN) break;
+      vec4 a = u_dbg[i], ba = u_dbg[i + 1] - a;
+      if (abs(a.w) > 60.0) { dt = min(dt, cdist(p, a) - 0.03); continue; }  // far: floats are too coarse for the chord
+      float h = clamp(dot(p - a, ba) / max(dot(ba, ba), 1e-12), 0.0, 1.0);
+      dt = min(dt, cdist(p, crenorm(a + ba * h)) - 0.03);
+    }
+    float de = cdist(p, u_dbg[u_dbgN - 1]) - 0.09;
+    dt = dt < u_eps * 2.0 ? dt : max(dt, 0.02);
+    if (dt < d) { d = dt; m = MAT(vec4(1.0, 0.55, 0.1, 0.0), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0)); }
+    if (de < d) { d = de; m = MAT(vec4(u_dbgEndCol, 0.0), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0)); }
+  }
 #endif
   return d;
 }

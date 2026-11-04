@@ -275,7 +275,10 @@ int main(int argc, char** argv) {
     if (debugRayArg && frame == 1 && !app.debugFrozen) {  // freeze the ray, then look at it from the side
       app.debugFrozen = true;
       double pxl = turnDeg * PI / 180 / 0.003;
-      if (app.geo && app.geoEdit.valid) {
+      if (app.curved()) {
+        if (strafe != 0) app.curvCam.move(app.space, {strafe, 0, 0, 0}, nullptr);
+        app.curvCam.look(app.space, pxl, 0);
+      } else if (app.geo && app.geoEdit.valid) {
         if (strafe != 0) app.geoEdit.move(worldField(*app.ev), {strafe, 0, 0}, app.quality.geoMaxStep * 0.5, nullptr);
         app.geoEdit.look(pxl, 0);
       } else {

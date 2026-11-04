@@ -148,6 +148,8 @@ Everything else works as in Flat 4D:
   * Spherical: the stereographic view of the half of the space around the origin, and some of the rest.
   * A marker shows where you are and which way you look.
 
+The **debug ray** (Explore, T / Shift+T) also works in curved spaces. It follows the same exact geodesics and distance limits as the renderer. Its path also shows in the ball overview: in hyperbolic space it's a circular arc that meets the ball's surface at a right angle.
+
 There are no world objects or W slider: the curved spaces are 3D. 4D shapes show their 3D cross-section (w = 0).
 
 ## Editor

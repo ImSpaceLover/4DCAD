@@ -67,7 +67,7 @@ void UI::viewport(double dt) {
     std::snprintf(buf, sizeof buf, "%.2f", w);
     dl->AddText({p0.x + 44, p0.y + 90 + 220 * (1 - (w + range) / (2 * range)) - 7}, IM_COL32(220, 220, 220, 255), buf);
   }
-  if ((app.geo || (app.curved() && app.mode == Mode::Edit)) && app.editSet.showThumbnail) thumbnail();
+  if ((app.geo || app.curved()) && app.editSet.showThumbnail) thumbnail();
   bool thumbHovered = app.geo && app.editSet.showThumbnail && ImGui::IsItemHovered();
   if (sliderHovered || thumbHovered) vpHovered_ = false;
   overlays(dl);
@@ -122,10 +122,13 @@ void UI::thumbnail() {
   }
   // debug ray seen from outside (projected onto the thumbnail's view)
   if (app.debugRay && app.debugTrace.pts.size() > 1) {
-    View tv = app.thumbnailView();
+    View tv = app.curved() ? app.ballView() : app.thumbnailView();
     double th = std::tan(40 * PI / 360), aspect = (double)app.thumbW / app.thumbH;
     std::vector<ImVec2> pts;
-    for (auto& p : app.debugTrace.pts) {
+    for (auto& p0w : app.debugTrace.pts) {
+      // curved: where the point sits in the ball (spherical: skip the far side, it runs off to infinity)
+      if (app.curved() && 1 + p0w[3] < 0.05) continue;
+      V4 p = app.curved() ? App::toBall(p0w) : p0w;
       V4 r = p - tv.eye;
       double z = dot(r, col(tv.frame, 2));
       if (z < 1e-3) continue;

@@ -55,6 +55,35 @@ std::optional<RayHit> castRay(const SceneEvaluator& ev, bool geo, const V4& eye,
 
 RayTrace traceRay(const SceneEvaluator& ev, bool geo, const V4& eye, const V4& dir, const QualitySettings& q) {
   RayTrace r;
+  if (ev.space.curved()) {
+    // constant curvature: exact geodesic steps, as the renderer marches them (same distance limits);
+    // long steps get extra points so the drawn polyline follows the curve
+    const Space& s = ev.space;
+    double maxDist = q.maxDistFull;
+    bool honey = false;
+    walkc(ev.root(), [&](const Node& n, const Node*, int) { if (n.isHoneycomb() && !n.hidden) honey = true; });
+    if (s.kind == SpaceKind::Hyperbolic) maxDist = std::min(maxDist, (honey ? 7.0 : 12.0) * s.R());
+    if (s.kind == SpaceKind::Spherical) maxDist = std::min(maxDist, 2 * PI * s.R());
+    V4 p = eye, d = cs::tnormalize(s.k(), cs::tangent(s.k(), eye, dir));
+    r.pts.push_back(p);
+    for (;;) {
+      Sample sm = ev.evalCurved(p);
+      if (sm.d < q.eps * (1 + r.t * 0.02)) { r.reason = RayTrace::Hit; r.node = sm.node; break; }
+      if (r.t > maxDist) { r.reason = RayTrace::MaxDistance; break; }
+      if (r.steps >= q.maxSteps) { r.reason = RayTrace::MaxSteps; break; }
+      double h = std::min(sm.d >= INF * 0.5 ? maxDist : sm.d * q.stepScale, maxDist + 1e-3 - r.t);
+      double piece = 0.25 * s.R();
+      for (double done = 0; done < h - 1e-12;) {
+        double l = std::min(piece, h - done);
+        cs::geodesic(s, p, d, l);
+        done += l;
+        r.pts.push_back(p);
+      }
+      r.t += h;
+      r.steps++;
+    }
+    return r;
+  }
   double maxDist = geo ? q.maxDistGeo : q.maxDistFull;
   V4 p = eye, d4 = normalize(dir);
   SurfaceField wf;

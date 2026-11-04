@@ -814,6 +814,24 @@ int main() {
     d.loadScene(f);
     CHECK(d.curved() && length(d.currentView().eye - c.currentView().eye) < 1e-9, "%s: loaded at the same view", nm);
 
+    // --- debug ray: traced along exact geodesics; into the sky it stops at the distance limit
+    {
+      View dv = c.currentView();
+      RayTrace up = traceRay(*c.ev, false, dv.eye, cs::tnormalize(k, cs::tangent(k, dv.eye, V4{0, 1, 0, 0})), c.quality);
+      double limit = kind == SpaceKind::Hyperbolic ? 12 * c.space.R() : 2 * PI * c.space.R();
+      bool onSpace = true, shortPieces = true;
+      for (size_t i = 0; i < up.pts.size(); i++) {
+        onSpace &= std::abs(cs::mdot(k, up.pts[i], up.pts[i]) - k) < 1e-6 * std::max(1.0, std::abs(up.pts[i][3]) * std::abs(up.pts[i][3]));
+        if (i && std::abs(up.pts[i][3]) < 1e3) shortPieces &= cs::distance(c.space, up.pts[i - 1], up.pts[i]) <= 0.25 * c.space.R() + 1e-6;  // (far out the measurement itself loses digits)
+      }
+      if (kind == SpaceKind::Hyperbolic) CHECK(up.reason == RayTrace::MaxDistance && std::abs(up.t - limit) < 0.01, "%s: debug ray into the sky (%s, %.2f)", nm, rayReasonText(up.reason), up.t);
+      CHECK(onSpace && shortPieces && up.pts.size() > 4, "%s: debug ray points on the space (%d), in short pieces (%d), %d points", nm, (int)onSpace, (int)shortPieces, (int)up.pts.size());
+      // at the view centre it hits what picking hits
+      RayTrace fw = traceRay(*c.ev, false, dv.eye, col(dv.frame, 2), c.quality);
+      auto ph = c.pick(500, 350);
+      CHECK(fw.reason == RayTrace::Hit && ph && fw.node == ph->node, "%s: debug ray hits the picked object", nm);
+    }
+
     // --- editing: moving along a direction slides the object along the geodesic by that distance
     cube = nullptr;  // (undo rebuilt the tree)
     walk(c.root, [&](Node& n, Node*, int) { if (n.name == "Cube") cube = &n; });

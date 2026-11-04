@@ -1773,6 +1773,20 @@ std::vector<LightParam> App::frameLights() {
   return out;
 }
 
+View App::ballView() const {
+  FullCamera oc;
+  oc.target = {0, 0, 0, 0};
+  oc.yaw = thumbYaw;
+  oc.pitch = thumbPitch;
+  oc.distance = (space.kind == SpaceKind::Hyperbolic ? 3.2 : 4.8) * thumbZoom;
+  return oc.view();
+}
+
+V4 App::toBall(const V4& p) {
+  double w = 1 + p[3];
+  return w > 1e-6 ? V4{p[0] / w, p[1] / w, p[2] / w, 0} : V4{0, 0, 0, 0};
+}
+
 View App::thumbnailView() {
   View cur = currentView();
   auto bounds = computeBounds(root, reg);
@@ -1813,6 +1827,7 @@ void App::curvedParams(FrameParams& fp, const View& v, std::ostringstream& key) 
   if (k < 0 && sun[3] > 1e-9) sun = sun * (1.0 / sun[3]);
   fp.light = sun;
   for (auto& l : fp.lights) l.pos = cs::renormPoint(k, mul(inv, l.pos));
+  for (auto& p : fp.debugPts) p = mul(inv, p);  // debug ray, camera-relative
   if (fp.markerCol[3] > 0) { fp.marker = cs::origin(); fp.markerFwd = {0, 0, 1, 0}; }
   key << "|c" << space.radius;
 }
@@ -1880,12 +1895,13 @@ void App::renderFrame() {
     key << fp.aperture << ',' << fp.focus;
   }
   // debug ray: re-traced from the view every frame unless frozen
-  if (debugRay && ev && !space.curved()) {
+  if (debugRay && ev) {
     if (!debugFrozen) debugTrace = traceRay(*ev, fp.geo, v.eye, col(v.frame, 2), quality);
     fp.debugPts = debugTrace.pts;
     {  // the start sits in (or next to) the eye: skip it, or it would cover the screen
       size_t k = 0;
-      while (k + 2 < fp.debugPts.size() && length(fp.debugPts[k] - debugTrace.pts[0]) < 0.35) k++;
+      auto far = [&](const V4& p) { return space.curved() ? cs::distance(space, p, debugTrace.pts[0]) : length(p - debugTrace.pts[0]); };
+      while (k + 2 < fp.debugPts.size() && far(fp.debugPts[k]) < 0.35) k++;
       fp.debugPts.erase(fp.debugPts.begin(), fp.debugPts.begin() + k);
     }
     fp.debugReason = (int)debugTrace.reason;
@@ -1921,7 +1937,7 @@ void App::renderFrame() {
     renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
     accumSamples++;
   }
-  if (space.curved() && editSet.showThumbnail && mode == Mode::Edit) {
+  if (space.curved() && editSet.showThumbnail) {
     // overview: the Poincare ball / stereographic view from outside, with a marker where you are
     thumbW = editSet.thumbSize;
     thumbH = editSet.thumbSize * 3 / 4;
@@ -1931,13 +1947,7 @@ void App::renderFrame() {
     tp.camIso = identity();  // world coordinates (the ball shows the space around the origin)
     tp.quality = &quality;
     tp.fovDeg = 40;
-    FullCamera oc;
-    oc.target = {0, 0, 0, 0};
-    oc.yaw = thumbYaw;
-    oc.pitch = thumbPitch;
-    oc.distance = (space.kind == SpaceKind::Hyperbolic ? 3.2 : 4.8) * thumbZoom;
-    tp.view = oc.view();
-    auto toBall = [&](const V4& p) { double w = 1 + p[3]; return w > 1e-6 ? V4{p[0] / w, p[1] / w, p[2] / w, 0} : V4{0, 0, 0, 0}; };
+    tp.view = ballView();
     V4 eb = toBall(v.eye), fb = toBall(along(v.eye, col(v.frame, 2) * (0.05 * space.R())));
     V4 dir = fb - eb;
     tp.marker = eb;

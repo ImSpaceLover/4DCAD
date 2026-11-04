@@ -71,6 +71,7 @@ class SceneEvaluator {
   V4 worldGrad(const V4& g, const std::string& worldId) const;
   V4 worldGrad(const V4& g) const { return worldGrad(g, activeWorld); }
   std::string activeWorld;
+  const Node& root() const { return root_; }
 
  private:
   struct Prep {
