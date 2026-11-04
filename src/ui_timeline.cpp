@@ -49,26 +49,16 @@ std::string UI::pathLabel(const std::string& target, const std::string& path) {
   return path;
 }
 
-float UI::timelineHeight() const {
-  if (app.mode != Mode::Edit || !showTimeline_) return ImGui::GetFrameHeightWithSpacing() + 10;
-  return showGraph_ ? 380.f : 170.f;
-}
-
 void UI::timelinePanel() {
   ImGuiIO& io = ImGui::GetIO();
+  (void)io;
   Animation& A = app.anim;
-  float h = timelineHeight();
-  ImGui::SetNextWindowPos({LEFT_W, io.DisplaySize.y - h});
-  ImGui::SetNextWindowSize({io.DisplaySize.x - LEFT_W - RIGHT_W, h});
-  ImGui::Begin("##timeline", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                                          ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar);
+  if (!showTimelineWin_) return;
+  if (!ImGui::Begin("Timeline", &showTimelineWin_, ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) { ImGui::End(); return; }
   bool animChanged = false, animCommit = false;
   auto K = [this](Action a) { return app.keys.text(a); };
 
   // ---------------------------------------------------------------- controls
-  if (ImGui::ArrowButton("##tl", showTimeline_ ? ImGuiDir_Down : ImGuiDir_Up)) showTimeline_ = !showTimeline_;
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip(showTimeline_ ? "Hide the timeline" : "Show the timeline");
-  ImGui::SameLine();
   if (ImGui::Button("|<")) { app.playing = false; app.setFrame(A.start); }
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("First frame (%s)", K(Action::FrameStart).c_str());
   ImGui::SameLine(0, 2);

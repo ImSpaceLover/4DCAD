@@ -84,7 +84,10 @@ class UI {
   // timeline + graph editor (ui_timeline.cpp)
   void timelinePanel();
   void graphEditor(const std::vector<int>& trackIds, bool& changed, bool& commit);
-  float timelineHeight() const;
+  // dockable panels (Window menu) and the dock space under the toolbar
+  bool showLibrary_ = true, showScene_ = true, showProperties_ = true, showTimelineWin_ = true;
+  bool resetLayout_ = false;
+  void dockSpace();
   std::string targetName(const std::string& target);
   std::string pathLabel(const std::string& target, const std::string& path);
   void deleteSelectedKeys();

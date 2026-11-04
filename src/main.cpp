@@ -144,7 +144,10 @@ int main(int argc, char** argv) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
-  io.IniFilename = nullptr;
+  // panel layout (docking): saved in the settings folder
+  static std::string iniPath = (std::filesystem::path(dataDir()) / "layout.ini").string();
+  io.IniFilename = iniPath.c_str();
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   float xs = 1, ys = 1;
   glfwGetWindowContentScale(win, &xs, &ys);
   ImGui::StyleColorsDark();

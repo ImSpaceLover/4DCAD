@@ -104,12 +104,8 @@ void UI::cameraProperties(Node& n, bool& live, bool& done) {
 }
 
 void UI::propertiesPanel() {
-  ImGuiIO& io = ImGui::GetIO();
-  float top = ImGui::GetFrameHeight() + TOOLBAR_H;
-  float h = (io.DisplaySize.y - top) * 0.45f;
-  ImGui::SetNextWindowPos({io.DisplaySize.x - RIGHT_W, top + h});
-  ImGui::SetNextWindowSize({RIGHT_W, io.DisplaySize.y - top - h});
-  ImGui::Begin("Properties", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+  if (!showProperties_) return;
+  if (!ImGui::Begin("Properties", &showProperties_)) { ImGui::End(); return; }
   Node* n = app.selected();
   if (!n) {
     ImGui::TextWrapped("Nothing selected. Click an object in the viewport or the scene tree.");
@@ -398,9 +394,10 @@ void UI::propertiesPanel() {
     std::string title = MOD_NAMES[m.type];
     if (m.raises() && axes[i].valid) title += std::string(" -> ") + AXIS[axes[i].newAxis];
     ImGui::TextColored(m.raises() ? ImVec4(0.6f, 0.85f, 1, 1) : ImVec4(0.9f, 0.9f, 0.9f, 1), "%s", title.c_str());
-    ImGui::SameLine(RIGHT_W - 75);
+    float ww = ImGui::GetWindowWidth();
+    ImGui::SameLine(ww - 75);
     if (i > 0 && ImGui::SmallButton("^")) moveUp = (int)i;
-    ImGui::SameLine(RIGHT_W - 50);
+    ImGui::SameLine(ww - 50);
     if (ImGui::SmallButton("x")) remove = (int)i;
     ImGui::Indent(10);
     switch (m.type) {

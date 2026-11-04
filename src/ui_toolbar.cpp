@@ -91,6 +91,16 @@ void UI::menuBar() {
     ImGui::MenuItem("Settings...", nullptr, &showQuality_);
     ImGui::EndMenu();
   }
+  if (ImGui::BeginMenu("Window")) {
+    ImGui::MenuItem("Library", nullptr, &showLibrary_);
+    ImGui::MenuItem("Scene", nullptr, &showScene_);
+    ImGui::MenuItem("Properties", nullptr, &showProperties_);
+    ImGui::MenuItem("Timeline", nullptr, &showTimelineWin_);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Reset layout")) resetLayout_ = true;
+    ImGui::TextDisabled("Drag a panel's title to move or dock it");
+    ImGui::EndMenu();
+  }
   if (ImGui::BeginMenu("Render")) {
     std::string k1 = app.keys.text(Action::RenderImage), k2 = app.keys.text(Action::RenderAnimation);
     if (ImGui::MenuItem("Render image", k1.c_str(), false, !app.job.active)) startRender(false);
@@ -107,7 +117,8 @@ void UI::toolbar() {
   float y = ImGui::GetFrameHeight();
   ImGui::SetNextWindowPos({0, y});
   ImGui::SetNextWindowSize({ImGui::GetIO().DisplaySize.x, TOOLBAR_H});
-  ImGui::Begin("##toolbar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+  ImGui::Begin("##toolbar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking);
   if (toggleButton("Edit", app.mode == Mode::Edit, "Edit mode (Tab)")) app.setMode(Mode::Edit);
   ImGui::SameLine(0, 2);
   if (toggleButton("Explore", app.mode == Mode::Explore, "Explore mode (Tab)")) app.setMode(Mode::Explore);

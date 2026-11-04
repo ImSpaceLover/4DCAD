@@ -6,11 +6,9 @@ namespace fd {
 // ============================================================ scene tree
 void UI::treePanel() {
   ImGuiIO& io = ImGui::GetIO();
-  float top = ImGui::GetFrameHeight() + TOOLBAR_H;
-  float h = (io.DisplaySize.y - top) * 0.45f;
-  ImGui::SetNextWindowPos({io.DisplaySize.x - RIGHT_W, top});
-  ImGui::SetNextWindowSize({RIGHT_W, h});
-  ImGui::Begin("Scene", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+  (void)io;
+  if (!showScene_) return;
+  if (!ImGui::Begin("Scene", &showScene_)) { ImGui::End(); return; }
   static int groupOp = 0;
   ImGui::SetNextItemWidth(130);
   ImGui::Combo("##op", &groupOp, BOOL_OP_LABELS, 6);
@@ -28,7 +26,7 @@ void UI::treePanel() {
   ImGui::SameLine();
   if (ImGui::Button("Export object") && app.selected()) fileAction(5);
   // search, collapse / expand all
-  ImGui::SetNextItemWidth(RIGHT_W - 120);
+  ImGui::SetNextItemWidth(std::max(60.f, ImGui::GetContentRegionAvail().x - 60));
   ImGui::InputTextWithHint("##filter", "Search...", treeFilter_, sizeof treeFilter_);
   ImGui::SameLine();
   if (ImGui::SmallButton("-##col")) treeOpenAll_ = 0;

@@ -6,12 +6,12 @@ namespace fd {
 // ============================================================ viewport
 void UI::viewport(double dt) {
   ImGuiIO& io = ImGui::GetIO();
-  float top = ImGui::GetFrameHeight() + TOOLBAR_H;
-  ImGui::SetNextWindowPos({LEFT_W, top});
-  ImGui::SetNextWindowSize({io.DisplaySize.x - LEFT_W - RIGHT_W, io.DisplaySize.y - top - timelineHeight()});
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-  ImGui::Begin("##viewport", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                                          ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse);
+  // docked: its tab bar hides while it is alone in its dock node (the viewport cannot be closed)
+  ImGuiWindowClass wc;
+  wc.DockNodeFlagsOverrideSet = ImGuiDockNodeFlags_AutoHideTabBar;
+  ImGui::SetNextWindowClass(&wc);
+  ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse);
   ImVec2 p0 = ImGui::GetCursorScreenPos();
   ImVec2 sz = ImGui::GetContentRegionAvail();
   app.vpX = p0.x; app.vpY = p0.y; app.vpW = std::max(1.f, sz.x); app.vpH = std::max(1.f, sz.y);

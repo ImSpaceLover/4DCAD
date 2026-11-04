@@ -55,7 +55,7 @@ if(FD_BUILD_APP)
   FetchContent_Declare(glfw URL https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip)
   FetchContent_MakeAvailable(glfw)
 
-  FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui.git GIT_TAG v1.91.6 GIT_SHALLOW TRUE)
+  FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui.git GIT_TAG v1.91.6-docking GIT_SHALLOW TRUE)
   FetchContent_MakeAvailable(imgui)
   add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
