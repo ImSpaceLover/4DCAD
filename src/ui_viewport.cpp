@@ -8,7 +8,7 @@ void UI::viewport(double dt) {
   ImGuiIO& io = ImGui::GetIO();
   float top = ImGui::GetFrameHeight() + TOOLBAR_H;
   ImGui::SetNextWindowPos({LEFT_W, top});
-  ImGui::SetNextWindowSize({io.DisplaySize.x - LEFT_W - RIGHT_W, io.DisplaySize.y - top});
+  ImGui::SetNextWindowSize({io.DisplaySize.x - LEFT_W - RIGHT_W, io.DisplaySize.y - top - timelineHeight()});
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
   ImGui::Begin("##viewport", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                           ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse);
@@ -34,7 +34,7 @@ void UI::viewport(double dt) {
 
   // W slider (Edit, Full 4D): moves the camera's visible slice along its 4th axis
   bool sliderHovered = false;
-  if (app.mode == Mode::Edit && !app.geo && app.editSet.showWSlider) {
+  if (app.mode == Mode::Edit && !app.geo && !app.curved() && app.editSet.showWSlider) {
     ImGui::SetCursorScreenPos({p0.x + 12, p0.y + 90});
     float w = (float)app.sliceW();
     float range = std::max(5.f, std::ceil(std::abs(w) / 5.f) * 5.f + 5.f);
@@ -67,7 +67,7 @@ void UI::viewport(double dt) {
     std::snprintf(buf, sizeof buf, "%.2f", w);
     dl->AddText({p0.x + 44, p0.y + 90 + 220 * (1 - (w + range) / (2 * range)) - 7}, IM_COL32(220, 220, 220, 255), buf);
   }
-  if (app.geo && app.editSet.showThumbnail) thumbnail();
+  if ((app.geo || app.curved()) && app.editSet.showThumbnail) thumbnail();
   bool thumbHovered = app.geo && app.editSet.showThumbnail && ImGui::IsItemHovered();
   if (sliderHovered || thumbHovered) vpHovered_ = false;
   overlays(dl);
@@ -122,10 +122,13 @@ void UI::thumbnail() {
   }
   // debug ray seen from outside (projected onto the thumbnail's view)
   if (app.debugRay && app.debugTrace.pts.size() > 1) {
-    View tv = app.thumbnailView();
+    View tv = app.curved() ? app.ballView() : app.thumbnailView();
     double th = std::tan(40 * PI / 360), aspect = (double)app.thumbW / app.thumbH;
     std::vector<ImVec2> pts;
-    for (auto& p : app.debugTrace.pts) {
+    for (auto& p0w : app.debugTrace.pts) {
+      // curved: where the point sits in the ball (spherical: skip the far side, it runs off to infinity)
+      if (app.curved() && 1 + p0w[3] < 0.05) continue;
+      V4 p = app.curved() ? App::toBall(p0w) : p0w;
       V4 r = p - tv.eye;
       double z = dot(r, col(tv.frame, 2));
       if (z < 1e-3) continue;
@@ -137,7 +140,8 @@ void UI::thumbnail() {
     dl->PopClipRect();
   }
   dl->AddRect(p0, p1, IM_COL32(230, 180, 60, 255), 0, 0, 2);
-  dl->AddText({p0.x + 6, p0.y + 4}, IM_COL32(240, 240, 240, 255), "Outside view");
+  dl->AddText({p0.x + 6, p0.y + 4}, IM_COL32(240, 240, 240, 255),
+              !app.curved() ? "Outside view" : app.space.kind == SpaceKind::Hyperbolic ? "Poincare ball (all of space)" : "Stereographic view");
 }
 
 void UI::overlays(ImDrawList* dl) {
@@ -148,16 +152,32 @@ void UI::overlays(ImDrawList* dl) {
   std::vector<std::string> lines;
   char buf[256];
   // controls are listed in Help (and Settings > Keys); only the state and what needs an answer now is shown here
-  std::snprintf(buf, sizeof buf, "%s | %s | eye (%.2f, %.2f, %.2f, %.2f)", app.mode == Mode::Edit ? "EDIT" : "EXPLORE", app.geo ? "Geodesic 3D" : "Full 4D",
-                v.eye[0], v.eye[1], v.eye[2], v.eye[3]);
+  if (app.curved()) {
+    // position as normal coordinates (distance and direction from the origin), and how far that is
+    V4 u = cs::logO(app.space, v.eye);
+    std::snprintf(buf, sizeof buf, "%s | %s, R = %.2f | eye (%.2f, %.2f, %.2f), %.2f from the origin", app.mode == Mode::Edit ? "EDIT" : "EXPLORE",
+                  SPACE_NAMES[(int)app.space.kind], app.space.radius, u[0], u[1], u[2], length(u));
+  } else
+    std::snprintf(buf, sizeof buf, "%s | %s | eye (%.2f, %.2f, %.2f, %.2f)", app.mode == Mode::Edit ? "EDIT" : "EXPLORE", app.geo ? "Geodesic 3D" : "Full 4D",
+                  v.eye[0], v.eye[1], v.eye[2], v.eye[3]);
   lines.push_back(buf);
   int highlight = -1;
+  if (app.accumSamples > 0 && app.accumSamples < app.quality.viewportSamples && app.mode == Mode::Edit) {
+    std::snprintf(buf, sizeof buf, "Refining %d / %d", app.accumSamples, app.quality.viewportSamples);
+    lines.push_back(buf);
+  }
   if (!app.isolate.empty()) {
     std::snprintf(buf, sizeof buf, "Isolated: %d object(s) (%s: show all)", (int)app.isolate.size(), app.keys.text(Action::Isolate).c_str());
     lines.push_back(buf);
   }
   if (app.mode == Mode::Explore) {
     if (!app.mouseCaptured) lines.push_back("Click the viewport to capture the mouse");
+    if (!app.anim.empty()) {
+      std::snprintf(buf, sizeof buf, "Animation: frame %d / %d %s (%s: play / pause, %s: from the start)", (int)std::round(app.anim.frame),
+                    (int)std::round(app.playbackEnd()),
+                    app.playing ? "playing" : "paused", app.keys.text(Action::ExplorePlay).c_str(), app.keys.text(Action::ExploreRestart).c_str());
+      lines.push_back(buf);
+    }
     if (app.debugRay) {
       const auto& d = app.debugTrace;
       std::snprintf(buf, sizeof buf, "Debug ray%s: length %.2f, %d steps, stopped: %s", app.debugFrozen ? " (frozen)" : "", d.t, d.steps,
@@ -181,10 +201,24 @@ void UI::overlays(ImDrawList* dl) {
   float cx = x0 + 60, cy = y0 + app.vpH - 60, R = 40;
   dl->AddCircleFilled({cx, cy}, R + 14, IM_COL32(20, 22, 28, 150));
   const ImU32 ac[4] = {IM_COL32(224, 85, 85, 255), IM_COL32(95, 207, 95, 255), IM_COL32(85, 136, 238, 255), IM_COL32(192, 96, 224, 255)};
+  // curved: the world axes carried from the origin to the eye, in the camera's frame (3 axes)
+  V4 axv[4] = {unit(0), unit(1), unit(2), unit(3)};
+  int nAx = 4;
+  if (app.curved()) {
+    double k = app.space.k();
+    M4 T = cs::transvection(k, cs::origin(), v.eye), inv = cs::inverse(k, v.frame);
+    for (int i = 0; i < 3; i++) {
+      V4 l = mul(inv, mul(T, unit(i)));  // components along right, up, forward
+      axv[i] = {l[0], l[1], l[2], 0};
+    }
+    right = unit(0); up = unit(1); fwd = unit(2); ana = unit(3);
+    nAx = 3;
+  }
   int order[4] = {0, 1, 2, 3};
-  std::sort(order, order + 4, [&](int a, int b) { return dot(unit(a), fwd) > dot(unit(b), fwd); });
-  for (int i : order) {
-    V4 e = unit(i);
+  std::sort(order, order + nAx, [&](int a, int b) { return dot(axv[a], fwd) > dot(axv[b], fwd); });
+  for (int oi = 0; oi < nAx; oi++) {
+    int i = order[oi];
+    V4 e = axv[i];
     float ex = cx + (float)dot(e, right) * R, ey = cy - (float)dot(e, up) * R;
     float out = (float)std::abs(dot(e, ana));
     ImU32 c = (ac[i] & 0x00FFFFFF) | ((ImU32)(255 * (0.35f + 0.65f * (1 - out))) << 24);
@@ -202,8 +236,38 @@ void UI::overlays(ImDrawList* dl) {
     return;
   }
 
+  // camera objects: small frustums (orange = active camera; a triangle marks "up")
+  walk(app.root, [&](Node& n, Node*, int) {
+    if (!n.isCamera() || n.hidden) return;
+    if (!app.isolate.empty() && !app.isolate.count(n.id)) return;
+    double cf = 60;
+    View cv = app.cameraView(n.id, nullptr, &cf);
+    double s = 0.55, b = s * std::tan(cf * PI / 360), a2 = b * 1.5;
+    V4 R = col(cv.frame, 0), U = col(cv.frame, 1), F = col(cv.frame, 2);
+    V4 pts[7] = {cv.eye, app.along(cv.eye, F * s + R * a2 + U * b), app.along(cv.eye, F * s - R * a2 + U * b), app.along(cv.eye, F * s - R * a2 - U * b),
+                 app.along(cv.eye, F * s + R * a2 - U * b), app.along(cv.eye, F * s + U * (b * 1.15) + R * (a2 * 0.4)), app.along(cv.eye, F * s + U * (b * 1.6))};
+    ImVec2 sp[7];
+    for (int i = 0; i < 7; i++) {
+      double x, y;
+      if (!app.project(pts[i], v, x, y)) return;
+      sp[i] = {(float)x, (float)y};
+    }
+    bool sel = std::find(app.selection.begin(), app.selection.end(), n.id) != app.selection.end();
+    ImU32 c = n.id == app.activeCamera ? IM_COL32(255, 170, 60, 230) : IM_COL32(200, 200, 210, 200);
+    if (sel) c = IM_COL32(255, 235, 140, 255);
+    float th = sel ? 2.f : 1.3f;
+    for (int i = 1; i <= 4; i++) {
+      dl->AddLine(sp[0], sp[i], c, th);
+      dl->AddLine(sp[i], sp[i % 4 + 1], c, th);
+    }
+    double lx, ly, rx, ry;
+    if (app.project(app.along(cv.eye, F * s + U * (b * 1.15) - R * (a2 * 0.4)), v, lx, ly) && app.project(app.along(cv.eye, F * s + U * (b * 1.15) + R * (a2 * 0.4)), v, rx, ry))
+      dl->AddTriangle({(float)lx, (float)ly}, {(float)rx, (float)ry}, sp[6], c, th);
+    dl->AddCircleFilled(sp[0], 3, c);
+  });
+
   // centre of rotation (set with a middle-click)
-  if (!app.geo && app.editCam.pivotSet) {
+  if (!app.geo && !app.curved() && app.editCam.pivotSet) {
     double px, py;
     if (app.project(app.editCam.pivot, v, px, py)) {
       ImVec2 c = {(float)px, (float)py};

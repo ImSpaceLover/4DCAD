@@ -3,6 +3,8 @@
 #include "imgui.h"
 
 #include <functional>
+#include <set>
+#include <tuple>
 
 struct GLFWwindow;
 
@@ -17,7 +19,7 @@ class UI {
   void onScroll(double y) { wheel_ += y; }
   bool exitNow = false;  // set once quitting is confirmed
   void requestQuit();    // asks to save unsaved changes first
-  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
+  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "new") openNewScene_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
 
  private:
   App& app;
@@ -39,6 +41,7 @@ class UI {
   void treePanel();
   void treeNode(Node& n, int depth);
   void propertiesPanel();
+  void cameraProperties(Node& n, bool& live, bool& done);
   void viewport(double dt);
   void overlays(ImDrawList* dl);
   void thumbnail();
@@ -65,6 +68,41 @@ class UI {
   int captureAction_ = -1, captureSlot_ = 0;  // Settings > Keys: waiting for a key press
   void keysTab();
   void lightsWindow();
+  void renderWindow();
+  void startRender(bool animation);
+  bool showRender_ = false;
+  void presetsWidget();       // render presets (Settings > Rendering and the Render window)
+  std::string presetSel_;     // preset chosen in the list
+  char presetName_[128] = {};  // Save as / Rename
+  bool openPathPrompt_ = false;
+  void newSceneDialog();
+  bool openNewScene_ = false;
+  int newKind_ = 1;
+  float newRadius_ = 8;
+  int ffmpegOk_ = -1;  // -1 = not checked, 0 / 1
+  std::string ffmpegChecked_;
+  // timeline + graph editor (ui_timeline.cpp)
+  void timelinePanel();
+  void graphEditor(const std::vector<int>& trackIds, bool& changed, bool& commit);
+  float timelineHeight() const;
+  std::string targetName(const std::string& target);
+  std::string pathLabel(const std::string& target, const std::string& path);
+  void deleteSelectedKeys();
+  void copySelectedKeys();
+  void pasteKeys();
+  /** Per-value keying in Properties: a diamond next to the last widget, right-click menu. */
+  void keyable(const std::string& target, const std::vector<std::string>& paths);
+  bool showTimeline_ = true, showGraph_ = false, graphFit_ = true, resetView_ = true;
+  double tl0_ = 0, tl1_ = 0;           // visible frame range
+  bool scrub_ = false, keyDrag_ = false, timelineHovered_ = false, graphHovered_ = false;
+  float dragX0_ = 0;
+  struct DragKey { Key* key; double frame, value; };
+  std::vector<DragKey> dragOrig_;
+  double gx0_ = 0, gx1_ = 0, gy0_ = 0, gy1_ = 0, gx0Drag_ = 0, gy0Drag_ = 0;
+  int gDrag_ = 0;
+  Key* gHandleKey_ = nullptr;
+  std::set<std::string> graphHidden_;
+  std::vector<std::tuple<std::string, std::string, Key>> keyClipboard_;
 };
 
 }  // namespace fd

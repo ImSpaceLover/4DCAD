@@ -61,6 +61,8 @@ void UI::qualityWindow() {
     }
     if (ImGui::BeginTabItem("Rendering")) {
       auto& q = app.quality;
+      ImGui::SeparatorText("Presets");
+      presetsWidget();
       ImGui::SeparatorText("Performance");
       Ff("Resolution", q.resolutionScale, 0.25f, 2.f, "%.2fx");
       Ff("While moving", q.motionScale, 0.2f, 1.f, "%.2fx", "Resolution factor while the camera or objects move");
@@ -87,6 +89,16 @@ void UI::qualityWindow() {
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflections / refractions followed per pixel (0 = mirrors and glass off)");
       ImGui::Checkbox("Over-relaxed marching", &q.relaxedMarching);
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Longer steps with a safety check: usually faster (Full 4D)");
+      ImGui::SeparatorText("Stochastic sampling");
+      ImGui::Checkbox("Refine the view when still", &q.stochastic);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("While nothing moves, random samples are averaged: soft shadows, glass that reflects and refracts by\n"
+                          "Fresnel, blurry reflections of rough mirrors, anti-aliasing, depth of field (cameras)");
+      ImGui::BeginDisabled(!q.stochastic);
+      ImGui::SliderInt("Samples##vp", &q.viewportSamples, 2, 1024);
+      ImGui::EndDisabled();
+      Ff("Sun size", q.sunSize, 0, 0.3f, "%.3f rad", "Angular size of the sun: softer shadows");
+      Ff("Light radius", q.lightRadius, 0, 2, "%.2f", "Point lights are balls of this size: softer shadows");
       ImGui::SeparatorText("Fast mode (Explore)");
       {
         auto& f = q.fast;
@@ -156,8 +168,9 @@ void UI::lightsWindow() {
   auto track = [&] { if (ImGui::IsItemEdited()) live = true; if (ImGui::IsItemDeactivatedAfterEdit()) done = true; };
   if (ImGui::Button("+ Point light")) {
     PointLight l;
+    l.id = newId("l");
     l.name = "Light " + std::to_string(app.lights.size() + 1);
-    l.pos = app.currentView().eye;  // where you are
+    l.pos = app.lightFromWorld(app.currentView().eye);  // where you are
     app.lights.push_back(l);
     done = true;
   }
@@ -172,19 +185,28 @@ void UI::lightsWindow() {
       ImGui::SameLine();
       if (ImGui::Checkbox("Shadows", &l.shadows)) done = true;
       ImGui::SameLine();
-      if (ImGui::SmallButton("To camera")) { l.pos = app.currentView().eye; done = true; }
+      if (ImGui::SmallButton("To camera")) { l.pos = app.lightFromWorld(app.currentView().eye); done = true; }
       ImGui::SameLine();
       if (ImGui::SmallButton("Delete")) del = (int)i;
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Key")) { keyLight(app.anim, l, std::round(app.anim.frame)); done = true; }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Key every value of this light at the current frame");
+      std::string lt = "light:" + l.id;
       float p[4] = {(float)l.pos[0], (float)l.pos[1], (float)l.pos[2], (float)l.pos[3]};
-      if (ImGui::DragFloat4("Position XYZW", p, 0.02f)) for (int k = 0; k < 4; k++) l.pos[k] = p[k];
+      if (app.curved() ? ImGui::DragFloat3("Position XYZ", p, 0.02f) : ImGui::DragFloat4("Position XYZW", p, 0.02f))
+        for (int k = 0; k < (app.curved() ? 3 : 4); k++) l.pos[k] = p[k];
+      keyable(lt, {"pos.x", "pos.y", "pos.z", "pos.w"});
       track();
       float c[3] = {(float)l.color[0], (float)l.color[1], (float)l.color[2]};
       if (ImGui::ColorEdit3("Colour", c)) for (int k = 0; k < 3; k++) l.color[k] = c[k];
+      keyable(lt, {"color.r", "color.g", "color.b"});
       track();
       float in = (float)l.intensity, rg = (float)l.range;
       if (ImGui::DragFloat("Intensity", &in, 0.02f, 0, 20)) l.intensity = std::max(0.f, in);
+      keyable(lt, {"intensity"});
       track();
       if (ImGui::DragFloat("Range", &rg, 0.05f, 0.1f, 500)) l.range = std::max(0.1f, rg);
+      keyable(lt, {"range"});
       track();
     }
     ImGui::PopID();
@@ -281,6 +303,10 @@ void UI::helpWindow() {
   ImGui::BulletText("Shift+drag: pan | Ctrl+drag or wheel: zoom | Alt+drag: rotate the view into W");
   ImGui::BulletText("W slider (left edge of the viewport): moves the visible 3D slice along the camera's 4th axis");
   ImGui::BulletText("1 / 3 / 7 / 9: front / right / top / along W | Shift+W: reset 4D orientation");
+  ImGui::SeparatorText("Curved scenes: Hyperbolic / Spherical 3D (File > New)");
+  ImGui::BulletText("Navigation as in Full 4D (no W): orbit, pan, zoom, MMB click = centre of rotation, 1 / 3 / 7 views");
+  ImGui::BulletText("Toolbar R: the curvature radius (drag; right-click to keyframe it). Objects keep their coordinates");
+  ImGui::BulletText("Positions are normal coordinates: the distance and direction to walk from the parent's origin");
   ImGui::SeparatorText("Edit, Geodesic 3D (game-like)");
   ImGui::BulletText("Hold RMB: mouse look + WASD fly along the surface, Space/Shift up/down, Q/E roll; wheel = fly speed");
   ImGui::SeparatorText("Editing");

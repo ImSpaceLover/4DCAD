@@ -12,16 +12,18 @@ namespace fd {
 
 enum class Action {
   // file / edit (Edit and Explore)
-  Undo, Redo, Save, SaveAs, Open, New, Copy, Paste,
+  Undo, Redo, Save, SaveAs, Open, New, Copy, Paste, RenderImage, RenderAnimation,
   ToggleMode, ToggleView,
   // Edit mode
   ToolSelect, ToolMove, ToolRotate, ToggleGlobal, ToggleSnap,
   Grab, Rotate, Scale, Delete, Duplicate, DuplicateLinked, Group, Isolate, Focus, Deselect, SelectAll,
-  ViewFront, ViewRight, ViewTop, ViewAlongW, Reset4D,
+  ViewFront, ViewRight, ViewTop, ViewAlongW, Reset4D, LookThrough, CameraToView, CameraView,
+  // animation (Edit mode)
+  PlayPause, FrameStart, FrameEnd, FramePrev, FrameNext, InsertKey, DeleteKey,
   // during G / R / S
   AxisX, AxisY, AxisZ, AxisW, Confirm, Cancel,
   // Explore
-  ReleaseMouse, DebugRay, DebugRayFreeze,
+  ReleaseMouse, DebugRay, DebugRayFreeze, ExplorePlay, ExploreRestart,
   // held (Explore and Geodesic fly)
   MoveForward, MoveBack, MoveLeft, MoveRight, MoveUp, MoveDown, RollLeft, RollRight,
   MoveAnaPlus, MoveAnaMinus, TurnWPlus, TurnWMinus, SideWPlus, SideWMinus,

@@ -13,6 +13,7 @@
 
 #include "camera.hpp"
 #include "codegen.hpp"
+#include "media.hpp"
 #include "shaders.hpp"
 
 namespace fd {
@@ -52,6 +53,17 @@ struct FrameParams {
   int debugReason = 0;
   std::vector<LightParam> lights;  // point lights (at most MAX_LIGHTS are used)
   RenderProfile prof;  // what to draw and how hard to work (main settings or the fast profile)
+  // stochastic sampling (progressive): sample index, weight of this sample in the running average
+  bool stochastic = false;
+  int sample = 0;
+  float blend = 1;  // 1 = replace the image, 1/(n+1) = add the (n+1)-th sample
+  float aperture = 0, focus = 5;  // depth of field (stochastic only; cameras)
+  // curved spaces: the shader works camera-relative (view = origin + identity frame); camIso is the
+  // camera's isometry (world <- camera), light / marker positions are camera-relative model points
+  Space space;
+  M4 camIso = identity();
+  bool honeycomb = false;  // set by render(): the scene has a honeycomb
+  bool ballView = false;   // curved: the Poincare ball / stereographic overview (view = outside camera in the ball)
 };
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */
@@ -61,6 +73,7 @@ struct FrameUniforms {
   float skyTop[4], skyBottom[4], skyCol[4], dbgEndCol[4];
   float a[4], b[4], c[4], d[4];
   int32_t i[4], j[4], k[4], l[4];
+  float e[4];  // aperture, focus distance, accumulation weight (backend blend), 0
   float lpos[MAX_LIGHTS][4], lcol[MAX_LIGHTS][4];
   float dbg[MAX_DEBUG_PTS][4];
 };
@@ -78,6 +91,12 @@ class Renderer {
   /** OpenGL images are stored bottom-up: the UI flips their texture coordinates. */
   virtual bool flipY() const = 0;
   virtual void destroy(RenderTarget& rt) = 0;
+  /** The target's image as RGBA8, top row first (after its last render has finished). */
+  virtual bool readPixels(const RenderTarget& rt, Pixels& rgba) = 0;
+  /** Offline renders: each draw is executed at once (Vulkan; OpenGL draws immediately anyway). */
+  virtual void setImmediate(bool) {}
+  /** Waits until all drawing has finished (offline renders measure their time with it). */
+  virtual void finish() {}
   virtual const char* backendName() const = 0;
   std::string device;  // GPU / driver name
   std::string lastError;
@@ -104,7 +123,7 @@ class Renderer {
   std::unordered_set<std::string> failed_;
   std::unordered_set<std::string> badCode_;
   std::unordered_map<std::string, std::string> codeErrors_;
-  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo);
+  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball = false);
 };
 
 /** OpenGL 3.3 backend (needs a current context with loaded functions). */

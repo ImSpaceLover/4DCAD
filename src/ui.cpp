@@ -15,11 +15,22 @@ void UI::frame(double dt) {
   treePanel();
   propertiesPanel();
   viewport(dt);
+  timelinePanel();
+  // I: insert keyframes for the selected objects
+  if (app.keyMenuRequest) { ImGui::OpenPopup("Insert keyframe##menu"); app.keyMenuRequest = false; }
+  if (ImGui::BeginPopup("Insert keyframe##menu")) {
+    ImGui::TextDisabled("Insert keyframe");
+    if (ImGui::MenuItem("Position / rotation / scale")) app.insertKeys(true);
+    if (ImGui::MenuItem("All values")) app.insertKeys(false);
+    ImGui::EndPopup();
+  }
   if (showQuality_) qualityWindow();
   if (showHelp_) helpWindow();
   if (showSdf_) sdfWindow();
   if (app.showLights) lightsWindow();
+  if (showRender_) renderWindow();
   pathPrompt();
+  newSceneDialog();
   unsavedPrompt();
   recoveryPrompt();
 
@@ -57,31 +68,41 @@ void UI::onKey(int key, int action, int mods) {
   ImGuiIO& io = ImGui::GetIO();
   if (io.WantTextInput && !app.mouseCaptured) return;
   auto P = [&](Action a) { return app.keys.pressed(a, key, ctrl, shift, alt); };
+  // keys over the timeline / graph editor act on keyframes
+  if ((timelineHovered_ || graphHovered_) && action == GLFW_PRESS) {
+    if (!ctrl && (key == GLFW_KEY_DELETE || key == GLFW_KEY_X)) { deleteSelectedKeys(); app.setFrame(app.anim.frame); app.commit(); return; }
+    if (ctrl && key == GLFW_KEY_C) { copySelectedKeys(); return; }
+    if (ctrl && key == GLFW_KEY_V) { pasteKeys(); return; }
+    if (key == GLFW_KEY_HOME) { graphFit_ = true; resetView_ = true; return; }
+  }
   if (action == GLFW_REPEAT && !(P(Action::Undo) || P(Action::Redo))) return;
   if (P(Action::Save)) { saveScene(); return; }
   if (P(Action::SaveAs)) { fileAction(2); return; }
   if (P(Action::Open)) { guarded([this] { fileAction(1); }); return; }
-  if (P(Action::New)) { guarded([this] { app.newScene(); }); return; }
+  if (P(Action::New)) { guarded([this] { openNewScene_ = true; }); return; }
   if (P(Action::Copy)) { copy(); return; }
   if (P(Action::Paste)) { paste(); return; }
+  if (P(Action::RenderImage) || P(Action::RenderAnimation)) { startRender(P(Action::RenderAnimation)); return; }
   app.handleKey(key, shift, ctrl, alt);
 }
 
 // ============================================================ file actions
 void UI::fileAction(int action) {
-  const char* titles[] = {"", "Open scene", "Save scene", "Import library item", "Export library", "Export object", "Export library object"};
+  const char* titles[] = {"", "Open scene", "Save scene", "Import library item", "Export library", "Export object", "Export library object",
+                          "Import render preset", "Export render preset"};
   std::string def;
   if (action == 2) def = app.currentFile.empty() ? "scene.4dscene.json" : app.currentFile;
   if (action == 4) def = "4dcad-library.json";
   if (action == 5) def = (app.selected() ? app.selected()->name : std::string("object")) + ".4dobj.json";
   if (action == 6) { auto* o = app.lib.find(exportPrimId_); def = (o ? o->name : std::string("object")) + ".4dobj.json"; }
+  if (action == 8) def = presetSel_ + ".4dpreset.json";
   if (!nativeDialogsAvailable()) {
     pendingAction_ = action;
     std::snprintf(pathBuf_, sizeof pathBuf_, "%s", def.c_str());
-    ImGui::OpenPopup("File path");
+    openPathPrompt_ = true;  // opened at the top level (pathPrompt), whichever window asked
     return;
   }
-  std::string path = (action == 1 || action == 3) ? openFileDialog(titles[action]) : saveFileDialog(titles[action], def);
+  std::string path = (action == 1 || action == 3 || action == 7) ? openFileDialog(titles[action]) : saveFileDialog(titles[action], def);
   if (!path.empty()) doFileAction(action, path);
 }
 
@@ -103,6 +124,12 @@ void UI::doFileAction(int action, const std::string& path) {
       writeFile(path, libraryObjectToJson(makeLibraryObject(*n, app.reg, n->name))) ? app.toast("Exported object") : app.toast("Cannot write", true);
       break;
     }
+    case 7: {
+      std::string name;
+      if (app.importPreset(path, err, &name)) { presetSel_ = name; app.toast("Imported preset " + name); } else app.toast(err, true);
+      break;
+    }
+    case 8: if (app.exportPreset(presetSel_, path, err)) app.toast("Exported preset " + presetSel_); else app.toast(err, true); break;
     case 6: {
       if (auto* o = app.lib.find(exportPrimId_)) writeFile(path, libraryObjectToJson(*o)) ? app.toast("Exported " + o->name) : app.toast("Cannot write", true);
       break;
@@ -110,7 +137,44 @@ void UI::doFileAction(int action, const std::string& path) {
   }
 }
 
+// File > New: the kind of space the scene lives in
+void UI::newSceneDialog() {
+  if (openNewScene_) { ImGui::OpenPopup("New scene"); openNewScene_ = false; }
+  ImGui::SetNextWindowSize({460, 0}, ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal("New scene", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+  static const char* desc[3] = {
+      "Four-dimensional Euclidean space. View 3D slices of it (Full 4D), or live on the 3D surface of a 4D "
+      "world object (Geodesic 3D: spheres, wormholes, any shape).",
+      "Three-dimensional space of constant negative curvature: parallel lines spread apart, triangles have "
+      "less than 180 degrees, and there is exponentially more room further away.",
+      "Three-dimensional space of constant positive curvature (a 3-sphere): straight lines close up into "
+      "circles, so looking far enough ahead you see the back of things."};
+  for (int i = 0; i < 3; i++) {
+    if (ImGui::RadioButton(SPACE_NAMES[i], newKind_ == i)) newKind_ = i;
+    ImGui::Indent();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 400);
+    ImGui::TextDisabled("%s", desc[i]);
+    ImGui::PopTextWrapPos();
+    ImGui::Unindent();
+  }
+  ImGui::BeginDisabled(newKind_ == 0);
+  ImGui::SetNextItemWidth(160);
+  ImGui::DragFloat("Curvature radius", &newRadius_, 0.05f, 0.5f, 200.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("R: curvature = -1/R^2 (hyperbolic) or +1/R^2 (spherical).\nCan be changed (and animated) later.");
+  if (newKind_ == 2) ImGui::TextDisabled("Distance around the whole space: %.1f", 2 * PI * newRadius_);
+  ImGui::EndDisabled();
+  ImGui::Separator();
+  if (ImGui::Button("Create", {120, 0})) {
+    app.newScene((SpaceKind)newKind_, newRadius_);
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", {120, 0})) ImGui::CloseCurrentPopup();
+  ImGui::EndPopup();
+}
+
 void UI::pathPrompt() {
+  if (openPathPrompt_) { ImGui::OpenPopup("File path"); openPathPrompt_ = false; }
   if (ImGui::BeginPopupModal("File path", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("Enter a file path:");
     ImGui::SetNextItemWidth(500);

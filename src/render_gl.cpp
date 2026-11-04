@@ -67,6 +67,22 @@ class GLRenderer : public Renderer {
   uint64_t texture(const RenderTarget& rt) override { return rt.id >= 0 ? targets_[rt.id].tex : 0; }
   bool flipY() const override { return true; }
   const char* backendName() const override { return "OpenGL"; }
+  void finish() override { gl::Finish(); }
+  bool readPixels(const RenderTarget& rt, Pixels& out) override {
+    if (rt.id < 0 || rt.id >= (int)targets_.size() || !targets_[rt.id].fbo) return false;
+    GLTarget& t = targets_[rt.id];
+    std::vector<float> f((size_t)t.w * t.h * 4);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+    gl::PixelStorei(GL_PACK_ALIGNMENT, 1);
+    gl::ReadPixels(0, 0, t.w, t.h, GL_RGBA, GL_FLOAT, f.data());
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+    out.resize(f.size());
+    for (int y = 0; y < t.h; y++)  // OpenGL rows are bottom-up
+      for (int i = 0; i < t.w * 4; i++)
+        out[(size_t)y * t.w * 4 + i] = (uint8_t)std::lround(std::clamp(f[(size_t)(t.h - 1 - y) * t.w * 4 + i], 0.f, 1.f) * 255);
+    return true;
+  }
+
   void destroy(RenderTarget& rt) override {
     if (rt.id < 0) return;
     GLTarget& t = targets_[rt.id];
@@ -135,11 +151,18 @@ class GLRenderer : public Renderer {
     gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, NODE_VEC4S, std::max(1, nodeCount), 0, GL_RGBA, GL_FLOAT, nodes.data());
     gl::Uniform1i(p->nodesLoc, 1);
     gl::Disable(GL_SCISSOR_TEST);
-    gl::Disable(GL_BLEND);
     gl::Disable(GL_DEPTH_TEST);
+    // progressive sampling: the new sample is blended into the running average (weight u.e[2])
+    float weight = u.e[2];
+    if (weight < 0.9999f) {
+      gl::Enable(GL_BLEND);
+      gl::BlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+      gl::BlendColor(0, 0, 0, weight);
+    } else gl::Disable(GL_BLEND);
     gl::BindVertexArray(vao_);
     gl::DrawArrays(GL_TRIANGLES, 0, 3);
     gl::BindVertexArray(0);
+    gl::Disable(GL_BLEND);
     gl::ActiveTexture(GL_TEXTURE0);
     gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
   }
@@ -156,7 +179,7 @@ class GLRenderer : public Renderer {
     t.w = w; t.h = h;
     rt.w = w; rt.h = h;
     gl::BindTexture(GL_TEXTURE_2D, t.tex);
-    gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);  // float: averages many samples
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);

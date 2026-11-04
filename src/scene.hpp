@@ -9,10 +9,12 @@
 
 #include "math4.hpp"
 #include "primitives.hpp"
+#include "polytope.hpp"
+#include "space.hpp"
 
 namespace fd {
 
-enum class NodeKind { Leaf, Group };
+enum class NodeKind { Leaf, Group, Camera };
 enum class BoolOp { Union, Intersection, Subtraction, SmoothUnion, SmoothIntersection, SmoothSubtraction };
 inline const char* BOOL_OP_NAMES[6] = {"union", "intersection", "subtraction", "smoothUnion", "smoothIntersection", "smoothSubtraction"};
 inline const char* BOOL_OP_LABELS[6] = {"Union", "Intersection", "Subtraction", "Smooth union", "Smooth intersection", "Smooth subtraction"};
@@ -97,14 +99,27 @@ struct Node {
   std::optional<double> round, shell;
   Material mat;
   std::string code;        // custom SDF (prim == "custom"): GLSL defining float sdf(vec4 p)
+  // camera: position = eye, rotation = view frame (right, up, forward, slider direction);
+  // attached to the world surface (anchor) = a Geodesic camera
+  double camFov = 60;      // degrees
+  int camSlider = 3;       // Full 4D: world axis on the slice slider
+  double camAperture = 0;  // depth of field: lens radius (0 = everything sharp)
+  double camFocus = 5;     // distance in focus
   double codeBound = 1.5;  // custom SDF: half size of its bounding box (used for picking / collisions)
   bool isCustom() const { return kind == NodeKind::Leaf && prim == "custom"; }
+  // regular polyhedron with flat (geodesic) faces / regular honeycomb (see polytope.hpp)
+  PolyParams poly;
+  bool isPoly() const { return kind == NodeKind::Leaf && prim == "polyhedron"; }
+  bool isHoneycomb() const { return kind == NodeKind::Leaf && prim == "honeycomb"; }
+  bool isPolytope() const { return isPoly() || isHoneycomb(); }
   // group
   BoolOp op = BoolOp::Union;
   double k = 0.3;
   std::vector<Node> children;
 
   bool isLeaf() const { return kind == NodeKind::Leaf; }
+  bool isGroup() const { return kind == NodeKind::Group; }
+  bool isCamera() const { return kind == NodeKind::Camera; }
 };
 
 struct CameraState {
@@ -161,6 +176,11 @@ struct QualitySettings {
   bool emissiveLights = true;     // emissive objects light their surroundings (as point lights)
   int transparentLayers = 3;      // reflections / refractions followed per pixel (0 = mirrors and glass off)
   bool relaxedMarching = true;    // over-relaxed sphere tracing (fewer steps)
+  // stochastic sampling (random per sample, averaged): viewport refinement when idle, renders
+  bool stochastic = true;         // refine the viewport while nothing changes
+  int viewportSamples = 64;       // samples per pixel the viewport refines to
+  float sunSize = 0.04f;          // radians: soft sun shadows
+  float lightRadius = 0.15f;      // point lights are balls of this radius: soft shadows
   // fast mode: used in Explore (keep it smooth) and optionally while moving in Edit mode
   RenderProfile fast = RenderProfile::preset(RenderProfile::Fast);
   bool fastWhileMovingInEdit = false;
@@ -172,6 +192,8 @@ std::string newId(const char* prefix = "n");
 Node makeLeaf(const std::string& prim, const std::string& name, V4 pos = {0, 0, 0, 0}, std::array<double, 3> color = {0.8, 0.5, 0.3});
 Node makeGroup(BoolOp op, std::vector<Node> children, const std::string& name = "");
 Node makeCustom(const std::string& name, const std::string& code = DEFAULT_CUSTOM_SDF);
+/** A camera object at eye looking along the frame's third column (columns: right, up, forward, slider). */
+Node makeCamera(const std::string& name, const V4& eye, const M4& frame, double fov, int slider);
 
 /** Full rotation of a node: anchor basis (if any) followed by its own rotation. */
 M4 nodeRotation(const Node& n);
@@ -245,6 +267,7 @@ Node nodeFromPrimitive(const PrimitiveDef& p, const std::string& name);
 
 /** A point light (a 4D position; light falls off to 0 at `range`). */
 struct PointLight {
+  std::string id;  // stable id (animation tracks refer to it); given when created / loaded
   std::string name = "Light";
   V4 pos{0, 3, 0, 0};
   std::array<double, 3> color{1, 0.95, 0.85};
@@ -263,8 +286,19 @@ struct CameraBookmark {
   M4 geoFrame = identity();
 };
 
+/** Editor camera of a curved scene: its isometry (columns: right, up, forward at the eye; eye)
+ *  and the distance to the point it orbits. */
+struct CurvedCamState {
+  M4 iso = identity();
+  double distance = 8;
+};
+
 struct SceneFile {
-  std::vector<CameraBookmark> bookmarks;
+  Space space;                             // Flat 4D (default), Hyperbolic or Spherical 3D
+  std::optional<CurvedCamState> curvedCam;
+  std::vector<CameraBookmark> bookmarks;  // old files only: converted to camera objects when loaded
+  std::string activeCamera;               // id of the camera used for rendering
+  std::string animation;                  // animation (JSON, see animation.hpp); empty = none
   std::vector<PointLight> lights;
   Node root;
   std::vector<PrimitiveDef> primitives;
@@ -288,7 +322,9 @@ std::vector<LibraryFolder> builtinFolders();
 
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
 std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
-                        const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr);
+                        const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr,
+                        const std::string& activeCamera = "", const std::string* animationJson = nullptr,
+                        const Space* space = nullptr, const CurvedCamState* curvedCam = nullptr);
 std::string lightsToJson(const std::vector<PointLight>& l);
 std::vector<PointLight> lightsFromJson(const std::string& text);
 std::string bookmarksToJson(const std::vector<CameraBookmark>& b);

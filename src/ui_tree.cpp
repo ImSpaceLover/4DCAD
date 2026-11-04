@@ -91,18 +91,20 @@ static int rowIcons(bool hidden, bool locked, bool isolatedOut) {
 void UI::treeNode(Node& n, int depth) {
   bool isRoot = n.id == app.root.id;
   if (!isRoot && !treeMatches(n)) return;
-  if (treeFilter_[0] && !n.isLeaf()) ImGui::SetNextItemOpen(true);
+  if (treeFilter_[0] && n.isGroup()) ImGui::SetNextItemOpen(true);
   else if (treeOpenAll_ >= 0 && !isRoot) ImGui::SetNextItemOpen(treeOpenAll_ == 1);
   bool sel = std::find(app.selection.begin(), app.selection.end(), n.id) != app.selection.end();
   ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap;
-  if (n.isLeaf() || n.children.empty()) fl |= ImGuiTreeNodeFlags_Leaf;
+  if (!n.isGroup() || n.children.empty()) fl |= ImGuiTreeNodeFlags_Leaf;
   if (sel) fl |= ImGuiTreeNodeFlags_Selected;
   std::string label;
-  if (n.isLeaf()) label = std::string("[") + DIM_LABEL[nodeDim(n, app.reg)] + "] ";
+  if (n.isCamera()) label = std::string("[cam] ");
+  else if (n.isLeaf()) label = std::string("[") + DIM_LABEL[nodeDim(n, app.reg)] + "] ";
   else label = std::string("(") + OP_ICON[(int)n.op] + ") ";
   label += n.name;
   if (n.id == app.world) label += "  [world]";
   if (n.anchor) label += "  [on surface]";
+  if (n.isCamera() && n.id == app.activeCamera) label += "  [active]";
   if (!n.linkId.empty()) label += "  [linked]";
 
   bool dim = n.hidden || (!app.isolate.empty() && !isRoot && !app.isolate.count(n.id));
@@ -126,7 +128,7 @@ void UI::treeNode(Node& n, int depth) {
   if (ImGui::BeginDragDropTarget()) {
     ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
     float t = (ImGui::GetMousePos().y - mn.y) / std::max(1.f, mx.y - mn.y);
-    App::Drop where = isRoot ? App::Drop::Into : t < 0.25f ? App::Drop::Before : t > 0.75f ? App::Drop::After : n.isLeaf() ? App::Drop::Wrap : App::Drop::Into;
+    App::Drop where = isRoot ? App::Drop::Into : t < 0.25f ? App::Drop::Before : t > 0.75f ? App::Drop::After : n.isGroup() ? App::Drop::Into : n.isCamera() ? App::Drop::After : App::Drop::Wrap;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImU32 c = IM_COL32(80, 150, 240, 255);
     if (where == App::Drop::Before) dl->AddLine(mn, {mx.x, mn.y}, c, 2);
@@ -154,7 +156,11 @@ void UI::treeNode(Node& n, int depth) {
     if (ImGui::MenuItem("Save to library", nullptr, false, !isRoot)) deferred = [this, id] {
       if (Node* m = findNode(app.root, id)) { app.lib.saveObject(makeLibraryObject(*m, app.reg, m->name)); app.toast("Saved \"" + m->name + "\" to Custom"); }
     };
-    if (!n.isLeaf() && ImGui::MenuItem("Ungroup", nullptr, false, !isRoot)) deferred = [this, id] { app.ungroup(id); };
+    if (n.isGroup() && ImGui::MenuItem("Ungroup", nullptr, false, !isRoot)) deferred = [this, id] { app.ungroup(id); };
+    if (n.isCamera()) {
+      if (ImGui::MenuItem("Look through")) deferred = [this, id] { app.lookThrough(id); };
+      if (ImGui::MenuItem("Set as active camera", nullptr, n.id == app.activeCamera)) deferred = [this, id] { app.activeCamera = id; app.commit(); };
+    }
     if (ImGui::MenuItem("Duplicate linked", nullptr, false, !isRoot)) deferred = [this] { app.duplicateLinked(); };
     if (!n.linkId.empty() && ImGui::MenuItem("Unlink")) deferred = [this, id] { app.unlink(id); };
     if (ImGui::MenuItem(n.locked ? "Unlock" : "Lock", nullptr, false, !isRoot))
@@ -175,7 +181,7 @@ void UI::treeNode(Node& n, int depth) {
     if (ic == 2) deferred = [this, id] { if (Node* m = findNode(app.root, id)) { m->locked = !m->locked; app.commit(); } };
   }
   if (open) {
-    if (!n.isLeaf()) for (size_t i = 0; i < n.children.size(); i++) treeNode(n.children[i], depth + 1);
+    if (n.isGroup()) for (size_t i = 0; i < n.children.size(); i++) treeNode(n.children[i], depth + 1);
     ImGui::TreePop();
   }
   if (isRoot && deferred) { auto f = deferred; deferred = nullptr; f(); }

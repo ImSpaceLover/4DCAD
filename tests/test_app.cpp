@@ -1,8 +1,14 @@
 // App-level tests (no window / GL context needed): editing tools, slices, thumbnail.
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+#include <algorithm>
+#include <filesystem>
 #include <cstdio>
 #include <cstdlib>
 
 #include "app.hpp"
+#include "codegen.hpp"
 #include "renderer.hpp"
 #include "examples.hpp"
 
@@ -540,18 +546,39 @@ int main() {
     h = app.pick(sx, sy);
     CHECK(h && h->node && h->node->id == b, "show all again");
 
-    // camera bookmarks: saved in the scene, undoable
+    // cameras are scene objects: add at the view, look through, camera to view, saved, undoable
     app.editCam.target = {1, 2, 3, 4};
     app.editCam.yaw = 0.3;
-    app.addBookmark("Spot");
+    View at = app.currentView();
+    std::string cam = app.addCamera();
+    Node* cn = findNode(app.root, cam);
+    CHECK(cn && cn->isCamera() && app.activeCamera == cam, "camera added and active");
+    View cvw = app.cameraView(cam);
+    CHECK(length(cvw.eye - at.eye) < 1e-9 && length(col(cvw.frame, 2) - col(at.frame, 2)) < 1e-9, "camera at the view");
     app.editCam.target = {0, 0, 0, 0};
     app.editCam.yaw = 1.5;
-    app.gotoBookmark(0);
-    CHECK(length(app.editCam.target - V4{1, 2, 3, 4}) < 1e-12 && app.editCam.yaw == 0.3, "bookmark restores the camera");
+    app.lookThrough(cam);
+    View back = app.currentView();
+    CHECK(length(back.eye - at.eye) < 1e-9 && length(col(back.frame, 2) - col(at.frame, 2)) < 1e-9, "look through restores the view");
+    app.editCam.target = {5, 0, 0, 0};
+    app.cameraToView(cam);
+    CHECK(length(app.cameraView(cam).eye - app.currentView().eye) < 1e-9, "camera to view");
+    CHECK(app.ev->evalFull(app.cameraView(cam).eye).node == nullptr || app.ev->evalFull(app.cameraView(cam).eye).node->id != cam, "cameras have no shape");
     SceneFile f = sceneFromJson(app.serialize());
-    CHECK(f.bookmarks.size() == 1 && f.bookmarks[0].name == "Spot", "bookmark saved in the scene");
+    const Node* fc = findNode(f.root, cam);
+    CHECK(fc && fc->isCamera() && f.activeCamera == cam, "camera and active camera saved");
+    // old files: camera bookmarks become camera objects
+    std::string old = app.serialize();
+    auto oj = nlohmann::json::parse(old);
+    oj["bookmarks"] = nlohmann::json::array({{{"name", "Old view"}, {"camera", {{"target", {0, 1, 0, 0}}, {"distance", 5}, {"yaw", 0}, {"pitch", 0}}}}});
+    App other;
+    other.loadScene(sceneFromJson(oj.dump()));
+    int named = 0;
+    walk(other.root, [&](Node& n, Node*, int) { if (n.isCamera() && n.name == "Old view") named++; });
+    CHECK(named == 1, "bookmark converted to a camera");
     app.undo();
-    CHECK(app.bookmarks.empty(), "adding a bookmark is undoable");
+    app.undo();
+    CHECK(!findNode(app.root, cam), "adding a camera is undoable");
   }
 
   // --- emissive objects light the scene (shadowed: shadow rays ignore emissive objects, so no self-shadow) ---
@@ -578,6 +605,61 @@ int main() {
     app.quality.emissiveLights = true;
   }
 
+  // --- animation: keys, interpolation, auto-key, undo, save, playback ---
+  {
+    app.loadScene(playgroundScene());
+    app.root.children.resize(1);
+    app.placeItem("builtin-cube", std::nullopt);
+    std::string ob = app.selection[0];
+    findNode(app.root, ob)->xf.pos = {0, 1, 0, 0};
+    app.commit();
+    app.setFrame(1);
+    app.insertKeys(true);
+    app.setFrame(21);
+    findNode(app.root, ob)->xf.pos = {4, 1, 0, 2};
+    findNode(app.root, ob)->xf.rot = planeRotation(0, 3, 1.0);
+    app.commit();
+    app.insertKeys(true);
+    Track* tx = findTrack(app.anim, ob, "pos.x");
+    CHECK(tx && tx->keys.size() == 2, "two keys on pos.x");
+    for (auto& t : app.anim.tracks) for (auto& k : t.keys) k.interp = Interp::Linear;
+    app.setFrame(11);
+    Node* nn = findNode(app.root, ob);
+    CHECK(std::abs(nn->xf.pos[0] - 2) < 1e-9 && std::abs(nn->xf.pos[3] - 1) < 1e-9, "interpolated position");
+    CHECK(std::abs(nn->xf.rot[0] - std::cos(0.5)) < 1e-6, "interpolated rotation (half of 1 rad in XW)");
+    // auto-key: a change at another frame becomes a key there
+    app.autoKey = true;
+    app.setFrame(31);
+    findNode(app.root, ob)->xf.pos[1] = 3;
+    app.commit();
+    CHECK(hasKeyAt(app.anim, ob, "pos.y", 31) && !hasKeyAt(app.anim, ob, "pos.x", 31), "auto-key keys only the changed value");
+    app.autoKey = false;
+    app.undo();
+    CHECK(!hasKeyAt(app.anim, ob, "pos.y", 31) && std::abs(app.anim.frame - 31) < 1e-9, "undo removes the key, keeps the frame");
+    // saved with the scene
+    SceneFile f = sceneFromJson(app.serialize());
+    Animation la = animationFromJson(f.animation);
+    CHECK(findTrack(la, ob, "rot") && findTrack(la, ob, "rot")->keys.size() == 2, "animation saved");
+    // playback advances by fps and loops
+    app.anim.start = 1; app.anim.end = 24; app.anim.fps = 24;
+    app.setFrame(23);
+    app.playing = true;
+    app.tickAnimation(1.0 / 24);
+    CHECK(std::abs(app.anim.frame - 24) < 1e-9, "one frame per 1/fps (%.3f)", app.anim.frame);
+    app.tickAnimation(2.0 / 24);
+    CHECK(app.anim.frame >= 1 && app.anim.frame < 3, "loops to the start (%.3f)", app.anim.frame);
+    // Explore: loops at the last keyframe (here 21 with the range ending at 24), indefinitely
+    app.setMode(Mode::Explore);
+    CHECK(std::abs(app.playbackEnd() - 21) < 1e-9, "Explore loops at the last keyframe (%.1f)", app.playbackEnd());
+    app.setFrame(20);
+    app.tickAnimation(2.0 / 24);  // 20 -> 22: past the last key
+    CHECK(std::abs(app.anim.frame - 2) < 1e-9, "back to the start, carrying the overshoot (%.3f)", app.anim.frame);
+    for (int i = 0; i < 24 * 30; i++) app.tickAnimation(1.0 / 24);  // 30 seconds
+    CHECK(app.playing && app.anim.frame >= 1 && app.anim.frame <= 21, "keeps repeating (%.3f)", app.anim.frame);
+    app.setMode(Mode::Edit);
+    app.playing = false;
+  }
+
   // --- render profiles: what the shader is told to do ---
   {
     FrameParams fp;
@@ -593,6 +675,16 @@ int main() {
     fp.prof.specular = false;
     u = frameUniforms(fp, 100, 80);
     CHECK(u.j[2] == 0 && u.l[1] == 0, "point lights / highlights off");
+    fp.stochastic = true;
+    fp.sample = 7;
+    fp.blend = 0.125f;
+    fp.aperture = 0.2f;
+    fp.focus = 6;
+    u = frameUniforms(fp, 100, 80);
+    CHECK(u.l[2] == 1 && u.l[3] == 7 && std::abs(u.e[2] - 0.125f) < 1e-7 && std::abs(u.e[0] - 0.2f) < 1e-7 && u.e[1] == 6, "stochastic sample, weight, lens");
+    fp.stochastic = false;
+    u = frameUniforms(fp, 100, 80);
+    CHECK(u.l[2] == 0 && u.e[0] == 0, "deterministic: no lens blur");
   }
 
   // --- geodesic: anchored objects slide on the surface; thumbnail slice contains the camera ---
@@ -641,10 +733,251 @@ int main() {
     for (auto& p : d.pts) maxDev = std::max(maxDev, std::abs(p[0]) + std::abs(p[2]) + std::abs(p[3] - 7));
     CHECK(maxDev < 1e-12, "Full 4D ray is straight");
   }
+  // animated object on the world surface: stays on the surface between keys
+  {
+    std::string red = app.root.children[1].id;
+    Node* rn = findNode(app.root, red);
+    V4 p0 = rn->xf.pos;
+    keyNode(app.anim, *rn, 1, true);
+    app.translateNodes({red}, col(rn->anchor->basis, 0) * 2.5);
+    keyNode(app.anim, *findNode(app.root, red), 21, true);
+    V4 p1 = findNode(app.root, red)->xf.pos;
+    app.setFrame(11);
+    V4 pm = findNode(app.root, red)->xf.pos;
+    CHECK(std::abs(length(pm) - 3) < 1e-3 && length(pm - p0) > 0.3 && length(pm - p1) > 0.3, "in between, on the surface (|p| = %.4f)", length(pm));
+    app.anim = Animation{};
+  }
+  // Geodesic camera: attached to the world surface, slides along it
+  {
+    std::string gc = app.addCamera();
+    Node* g = findNode(app.root, gc);
+    CHECK(g && g->anchor && std::abs(length(g->xf.pos) - 3) < 1e-3, "geodesic camera on the surface");
+    app.translateNodes({gc}, col(app.currentView().frame, 0) * 1.0);
+    g = findNode(app.root, gc);
+    CHECK(std::abs(length(g->xf.pos) - 3) < 1e-3, "moved along the surface");
+    bool isGeo = false;
+    app.cameraView(gc, &isGeo);
+    CHECK(isGeo, "geodesic camera view");
+  }
   View tv = app.thumbnailView();
   V4 cam = app.currentView().eye;
   CHECK(std::abs(dot(cam - tv.eye, col(tv.frame, 3))) < 1e-6, "thumbnail slice contains camera");
   CHECK(std::abs(dot(V4{0, 0, 0, 0} - tv.eye, col(tv.frame, 3))) < 1e-6, "thumbnail slice contains world centre");
+
+  for (SpaceKind kind : {SpaceKind::Hyperbolic, SpaceKind::Spherical}) {  // --- curved scenes ---
+    const char* nm = SPACE_NAMES[(int)kind];
+    App c;
+    c.vpX = 0; c.vpY = 0; c.vpW = 1000; c.vpH = 700;
+    c.newScene(kind, 5);
+    CHECK(c.curved() && c.space.kind == kind && c.ev->space.curved(), "%s: new scene", nm);
+    double k = c.space.k();
+    View v = c.currentView();
+    CHECK(std::abs(cs::mdot(k, v.eye, v.eye) - k) < 1e-9, "%s: the eye is a point of the space", nm);
+    // the view centre looks at the cube (orbit centre in front of it): a pick there hits something
+    auto hit = c.pick(500, 350);
+    CHECK(hit && hit->node, "%s: picking hits an object", nm);
+    // a picked point projects back to where it was clicked
+    if (hit) {
+      double sx, sy;
+      CHECK(c.project(hit->pos, v, sx, sy) && std::abs(sx - 500) < 0.5 && std::abs(sy - 350) < 0.5, "%s: project(pick) round trip", nm);
+    }
+    // nodes: world position of a child of the root = expO(its normal coordinates)
+    Node* cube = nullptr;
+    walk(c.root, [&](Node& n, Node*, int) { if (n.name == "Cube") cube = &n; });
+    CHECK(cube && cs::distance(c.space, c.nodeWorldPos(cube->id), cs::expO(c.space, cube->xf.pos)) < 1e-9, "%s: node world position", nm);
+    // Explore: walking forward moves the eye by the distance walked; collisions stop it at a wall
+    c.setMode(Mode::Explore);
+    V4 e0 = c.currentView().eye;
+    c.curvCam.move(c.space, {0, 0, 0.3, 0}, nullptr);
+    CHECK(std::abs(cs::distance(c.space, e0, c.currentView().eye) - 0.3) < 1e-9, "%s: walking", nm);
+    // walk straight at the cube (in hyperbolic space a line slanted toward the ground can stay
+    // above it forever, so aim at an object): collisions stop you in front of it
+    int blocked = 0;
+    for (int i = 0; i < 400; i++) {
+      View cv = c.currentView();
+      V4 to = mul(cs::inverse(k, cv.frame), cs::dirTo(c.space, cv.eye, c.nodeWorldPos(cube->id)));
+      V4 before = cv.eye;
+      c.curvCam.move(c.space, to * 0.1, [&](const V4& p) { return c.ev->evalCurved(p).d < 0.25; });
+      if (c.currentView().eye == before) blocked++;
+    }
+    double dEnd = c.ev->evalCurved(c.currentView().eye).d;
+    CHECK(blocked > 0 && dEnd >= 0.25 - 1e-9 && dEnd < 0.4, "%s: an object stops you (%d blocked, d = %.3f)", nm, blocked, dEnd);
+    c.setMode(Mode::Edit);
+    // curvature radius: changed, undone, saved and loaded
+    c.setCurvatureRadius(9);
+    c.commit();
+    CHECK(std::abs(c.space.radius - 9) < 1e-12, "%s: radius set", nm);
+    c.undo();
+    CHECK(std::abs(c.space.radius - 5) < 1e-12, "%s: radius undone", nm);
+    SceneFile f = sceneFromJson(c.serialize());
+    CHECK(f.space.kind == kind && f.curvedCam, "%s: saved with its space and camera", nm);
+    App d;
+    d.loadScene(f);
+    CHECK(d.curved() && length(d.currentView().eye - c.currentView().eye) < 1e-9, "%s: loaded at the same view", nm);
+
+    // --- debug ray: traced along exact geodesics; into the sky it stops at the distance limit
+    {
+      View dv = c.currentView();
+      RayTrace up = traceRay(*c.ev, false, dv.eye, cs::tnormalize(k, cs::tangent(k, dv.eye, V4{0, 1, 0, 0})), c.quality);
+      double limit = kind == SpaceKind::Hyperbolic ? 12 * c.space.R() : 2 * PI * c.space.R();
+      bool onSpace = true, shortPieces = true;
+      for (size_t i = 0; i < up.pts.size(); i++) {
+        onSpace &= std::abs(cs::mdot(k, up.pts[i], up.pts[i]) - k) < 1e-6 * std::max(1.0, std::abs(up.pts[i][3]) * std::abs(up.pts[i][3]));
+        if (i && std::abs(up.pts[i][3]) < 1e3) shortPieces &= cs::distance(c.space, up.pts[i - 1], up.pts[i]) <= 0.25 * c.space.R() + 1e-6;  // (far out the measurement itself loses digits)
+      }
+      if (kind == SpaceKind::Hyperbolic) CHECK(up.reason == RayTrace::MaxDistance && std::abs(up.t - limit) < 0.01, "%s: debug ray into the sky (%s, %.2f)", nm, rayReasonText(up.reason), up.t);
+      CHECK(onSpace && shortPieces && up.pts.size() > 4, "%s: debug ray points on the space (%d), in short pieces (%d), %d points", nm, (int)onSpace, (int)shortPieces, (int)up.pts.size());
+      // at the view centre it hits what picking hits
+      RayTrace fw = traceRay(*c.ev, false, dv.eye, col(dv.frame, 2), c.quality);
+      auto ph = c.pick(500, 350);
+      CHECK(fw.reason == RayTrace::Hit && ph && fw.node == ph->node, "%s: debug ray hits the picked object", nm);
+    }
+
+    // --- far from the origin: exact infinite shapes, small GPU matrices, culling
+    {
+      // the ground (half-space below the plane y = 0) is exact anywhere: 50 along it, 1.3 above it
+      V4 p = mul(cs::translation(c.space, {50, 0, 20, 0}), cs::expO(c.space, {0, 1.3, 0, 0}));
+      Sample g = c.ev->evalCurved(p);
+      if (kind == SpaceKind::Hyperbolic)  // (a 3-sphere of radius 5 wraps around past other objects)
+        CHECK(g.node && g.node->name == "Ground" && std::abs(g.d - 1.3) < 1e-6, "%s: ground distance far away (%.6f)", nm, g.d);
+      // an infinite repeat: every copy is an exact translate along its line
+      Node row = makeShape("sphere", "Row", {0, 3, 0, 0});
+      row.xf.scale = 0.5;
+      Modifier rep;
+      rep.type = MOD_REPEAT; rep.axis = 0; rep.spacing = 5; rep.count = 0;
+      row.mods.push_back(rep);
+      std::string rowId = row.id;
+      c.root.children.push_back(row);
+      c.rebuild();
+      M4 W = c.nodeWorldIso(rowId);
+      V4 off = cs::expO(c.space, {0.2, 0.9, -0.4, 0});  // near a copy, in the row's frame
+      double d0 = c.ev->evalCurved(mul(W, off)).d;
+      int nc = kind == SpaceKind::Hyperbolic ? 7 : 3;  // (spherical: less than half way round)
+      double d7 = c.ev->evalCurved(mul(W, mul(cs::translation(c.space, {nc * 2.5, 0, 0, 0}), off))).d;  // copies along (world spacing 2.5)
+      CHECK(std::abs(d0 - d7) < 1e-6 && std::abs(d0 - (cs::distance(c.space, cs::origin(), off) - 0.5)) < 1e-6 * (kind == SpaceKind::Hyperbolic ? 1 : 1e6),
+            "%s: repeat copies are exact translates (%.6f / %.6f)", nm, d0, d7);
+      if (kind == SpaceKind::Hyperbolic) {
+        // the camera 60 away (12 R; doubles hold to about 15 R from the origin): the ground's matrix stays small (re-anchored), far objects are culled
+        M4 saved = c.curvCam.iso;
+        c.curvCam.iso = cs::renorm(k, mul(cs::translation(c.space, {60, 0, 0, 0}), cs::translation(c.space, {0, 1.2, 4, 0})));
+        View fv = c.currentView();
+        CompiledScene cmp = compileScene(c.root, c.reg, "", false, nullptr, c.space.kind);
+        auto data = packNodes(c.root, c.reg, cmp, {}, &c.space, &fv.frame);
+        for (size_t i = 0; i < cmp.nodeIds.size(); i++) {
+          Node* nd = findNode(c.root, cmp.nodeIds[i]);
+          const float* v = &data[i * 48];
+          float mx = 0;
+          for (int q = 0; q < 16; q++) mx = std::max(mx, std::abs(v[q]));
+          if (nd->name == "Ground") CHECK(mx < 10, "ground matrix stays small far away (%g)", mx);
+          if (nd->name == "Cube") CHECK(v[32] < 0 || cs::distance(c.space, fv.eye, c.nodeWorldPos(nd->id)) < 13 * c.space.R() + 2, "far objects are culled");
+        }
+        {
+          // nothing else near: the ground is what is closest, at the true height (1.2 up a slanted walk of |(0, 1.2, 4)|)
+          double len = std::sqrt(1.2 * 1.2 + 16), hgt = c.space.R() * std::asinh(std::sinh(len / c.space.R()) * 1.2 / len);
+          Sample se = c.ev->evalCurved(fv.eye);
+          CHECK(se.node && se.node->name == "Ground" && std::abs(se.d - hgt) < 1e-4, "far camera above the ground (%.6f vs %.6f)", se.d, hgt);
+        }
+        c.curvCam.iso = saved;
+      }
+      removeNode(c.root, rowId);
+      c.rebuild();
+    }
+
+    // --- editing: moving along a direction slides the object along the geodesic by that distance
+    cube = nullptr;  // (undo rebuilt the tree)
+    walk(c.root, [&](Node& n, Node*, int) { if (n.name == "Cube") cube = &n; });
+    V4 p0 = c.nodeWorldPos(cube->id);
+    M4 W0 = c.nodeWorldIso(cube->id);
+    c.dirBase_ = p0;
+    c.translateNodes({cube->id}, col(W0, 0) * 1.25);  // along its own X axis
+    V4 p1 = c.nodeWorldPos(cube->id);
+    CHECK(std::abs(cs::distance(c.space, p0, p1) - 1.25) < 1e-9, "%s: move distance", nm);
+    CHECK(cs::distance(c.space, p1, c.along(p0, col(W0, 0) * 1.25)) < 1e-9, "%s: moved along the axis", nm);
+    // rotating about the object's centre keeps its position
+    c.rotateNodesPlane({cube->id}, col(W0, 0), col(W0, 2), 0.7);
+    CHECK(cs::distance(c.space, c.nodeWorldPos(cube->id), p1) < 1e-9, "%s: rotation keeps the position", nm);
+    c.commit();
+    // grouping / ungrouping / reparenting keep every object where it is in the world
+    Node* ball = nullptr;
+    walk(c.root, [&](Node& n, Node*, int) { if (n.name == "Sphere") ball = &n; });
+    std::string cubeId = cube->id, ballId = ball->id;
+    // a scaled, rotated, moved group makes it harder
+    V4 wc = c.nodeWorldPos(cubeId), wb = c.nodeWorldPos(ballId);
+    c.selection = {cubeId, ballId};
+    c.groupSelection(BoolOp::Union);
+    std::string gid = c.selection[0];
+    CHECK(cs::distance(c.space, c.nodeWorldPos(cubeId), wc) < 1e-9 && cs::distance(c.space, c.nodeWorldPos(ballId), wb) < 1e-9, "%s: grouping keeps positions", nm);
+    CHECK(length(findNode(c.root, cubeId)->xf.pos) < 1e-9, "%s: the group's origin is its first object", nm);
+    Node* g = findNode(c.root, gid);
+    g->xf.scale = 1.5;
+    c.rebuild();
+    V4 sc = c.nodeWorldPos(cubeId), sb = c.nodeWorldPos(ballId);
+    // group scale spreads the children: the second object is 1.5 times as far from the first (on a geodesic from it)
+    CHECK(cs::distance(c.space, sc, wc) < 1e-9 && std::abs(cs::distance(c.space, sc, sb) - 1.5 * cs::distance(c.space, wc, wb)) < 1e-9, "%s: group scale", nm);
+    c.ungroup(gid);
+    CHECK(cs::distance(c.space, c.nodeWorldPos(cubeId), sc) < 1e-9 && cs::distance(c.space, c.nodeWorldPos(ballId), sb) < 1e-9, "%s: ungrouping keeps positions", nm);
+    CHECK(std::abs(findNode(c.root, ballId)->xf.scale - 1.5) < 1e-9, "%s: ungrouping keeps sizes", nm);
+    // cameras: add one at the view, look through it from elsewhere
+    std::string cam = c.addCamera();
+    View atAdd = c.currentView();
+    CHECK(cs::distance(c.space, c.cameraView(cam).eye, atAdd.eye) < 1e-7, "%s: camera at the view", nm);
+    c.curvCam.orbit(c.space, 200, 50);
+    c.lookThrough(cam);
+    { double dd = cs::distance(c.space, c.currentView().eye, atAdd.eye); CHECK(dd < 1e-7, "%s: look through the camera (%g, cam %g)", nm, dd, cs::distance(c.space, c.cameraView(cam).eye, atAdd.eye)); }
+    // animated curvature: keys interpolate the radius
+    c.anim.tracks.clear();
+    setKey(c.anim, "scene", "space.radius", 1, 4);
+    setKey(c.anim, "scene", "space.radius", 11, 8);
+    c.anim.tracks[0].keys[0].interp = Interp::Linear;
+    c.setFrame(6);
+    CHECK(std::abs(c.space.radius - 6) < 1e-9, "%s: curvature animates (%.3f)", nm, c.space.radius);
+    c.commit();
+    CHECK(c.anim.tracks.size() == 1, "%s: the space track is kept", nm);
+  }
+
+#ifndef _WIN32
+  {  // --- render presets: save / load / rename / delete / export / import (in a temporary settings folder) ---
+    namespace fs = std::filesystem;
+    fs::path tmp = fs::temp_directory_path() / ("4dcad-test-" + std::to_string(::getpid()));
+    fs::remove_all(tmp);
+    setenv("XDG_CONFIG_HOME", tmp.string().c_str(), 1);
+    auto names = [&] { std::vector<std::string> n; for (auto& p : app.renderPresets()) n.push_back(p.name); return n; };
+    auto has = [&](const std::string& n) { auto v = names(); return std::find(v.begin(), v.end(), n) != v.end(); };
+    CHECK(names().size() == 3 && has("Fast") && has("Balanced") && has("Full"), "built-in presets");
+    std::string err;
+    CHECK(!app.savePreset("Full", err), "built-in presets are read-only");
+    app.quality.maxSteps = 333;
+    app.quality.viewportSamples = 77;
+    app.quality.fast.bounces = 2;
+    app.renderSet.width = 999;
+    app.renderSet.samples = 55;
+    app.renderSet.stillPath = "/somewhere/x.png";
+    CHECK(app.savePreset("Mine", err), "save: %s", err.c_str());
+    CHECK(has("Mine"), "saved preset listed");
+    std::string fastJson;
+    for (auto& p : app.renderPresets()) if (p.name == "Fast") fastJson = p.json;
+    CHECK(app.applyPreset(fastJson, err), "load Fast");
+    CHECK(app.quality.maxSteps != 333 && app.renderSet.width == 640 && app.renderSet.samples == 1, "Fast applied (%d, %d)", app.quality.maxSteps, app.renderSet.width);
+    CHECK(app.renderSet.stillPath == "/somewhere/x.png", "presets keep output paths");
+    CHECK(app.renamePreset("Mine", "Ours", err) && has("Ours") && !has("Mine"), "rename");
+    fs::path ex = tmp / "exported.json";
+    CHECK(app.exportPreset("Ours", ex.string(), err) && fs::exists(ex), "export");
+    std::string imported;
+    CHECK(app.importPreset(ex.string(), err, &imported) && imported == "Ours 2", "import gets a free name: %s", imported.c_str());
+    for (auto& p : app.renderPresets()) if (p.name == "Ours 2") CHECK(app.applyPreset(p.json, err), "load imported");
+    CHECK(app.quality.maxSteps == 333 && app.quality.viewportSamples == 77 && app.quality.fast.bounces == 2, "quality restored");
+    CHECK(app.renderSet.width == 999 && app.renderSet.samples == 55, "output settings restored");
+    CHECK(app.deletePreset("Ours") && !has("Ours") && has("Ours 2"), "delete");
+    CHECK(!app.applyPreset("{\"x\": 1}", err), "not a preset");
+    // output paths: the extension follows the format
+    app.renderSet.stillFormat = 1;
+    CHECK(app.renderPath(false) == "/somewhere/x.jpg", "still path %s", app.renderPath(false).c_str());
+    app.renderSet.animPath = "";
+    app.renderSet.animFormat = 3;
+    CHECK(fs::path(app.renderPath(true)).extension() == ".mp4", "default animation path %s", app.renderPath(true).c_str());
+    fs::remove_all(tmp);
+  }
+#endif
 
   std::printf("%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

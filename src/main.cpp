@@ -3,6 +3,9 @@
 //   4DCAD [scene.json] [--example playground|planet] [--geo] [--explore] [--gl | --vulkan]
 //         [--select NAME] [--tool move|rotate] [--size WxH] [--screenshot out.ppm --frames N]
 //         [--debug-ray] (debug ray on, frozen after the first frame) [--strafe D] [--turn DEG] (then move / turn)
+//         [--render out.png|.jpg|.gif|.avi|.mp4|.webm [--animation] [--render-size WxH] [--samples N] [--aa N]]
+//         (renders like the Render window, from the active camera, then quits)
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -64,6 +67,9 @@ int main(int argc, char** argv) {
   double turnDeg = 0, strafe = 0;
   Backend forceBackend = Backend::Auto;
   int frames = 30, W = 1600, H = 900;
+  std::string renderOut, newSpace;
+  bool renderAnim = false;
+  int renderW = 0, renderH = 0, renderSamples = -1, renderAA = -1;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--example" && i + 1 < argc) example = argv[++i];
@@ -77,6 +83,12 @@ int main(int argc, char** argv) {
     else if (a == "--strafe" && i + 1 < argc) strafe = std::atof(argv[++i]);
     else if (a == "--screenshot" && i + 1 < argc) screenshot = argv[++i];
     else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
+    else if (a == "--render" && i + 1 < argc) renderOut = argv[++i];
+    else if (a == "--new" && i + 1 < argc) newSpace = argv[++i];
+    else if (a == "--animation") renderAnim = true;
+    else if (a == "--render-size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &renderW, &renderH);
+    else if (a == "--samples" && i + 1 < argc) renderSamples = std::atoi(argv[++i]);
+    else if (a == "--aa" && i + 1 < argc) renderAA = std::atoi(argv[++i]);
     else if (a == "--gl") forceBackend = Backend::OpenGL;
     else if (a == "--vulkan") forceBackend = Backend::Vulkan;
     else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &W, &H);
@@ -163,6 +175,11 @@ int main(int argc, char** argv) {
   std::string err;
   if (!sceneArg.empty() && !app.loadSceneFile(sceneArg, err)) app.toast(err, true);
   for (auto& ex : EXAMPLES) if (example == ex.id) app.loadScene(ex.make());
+  if (!newSpace.empty()) {  // --new hyperbolic[:R] | spherical[:R] | flat
+    std::string kind = newSpace.substr(0, newSpace.find(':'));
+    double r = newSpace.find(':') != std::string::npos ? std::atof(newSpace.substr(newSpace.find(':') + 1).c_str()) : 8;
+    app.newScene(kind == "hyperbolic" ? SpaceKind::Hyperbolic : kind == "spherical" ? SpaceKind::Spherical : SpaceKind::Flat, r);
+  }
   if (startGeo) app.setGeo(true);
   if (!selectName.empty()) walk(app.root, [&](Node& n, Node*, int) { if (n.name == selectName && app.selection.empty()) app.selection = {n.id}; });
   if (toolName == "move") app.tool = Tool::Move;
@@ -170,6 +187,22 @@ int main(int argc, char** argv) {
   if (!openWindow.empty()) ui->debugOpen(openWindow);
   if (startExplore) app.setMode(Mode::Explore);
   app.debugRay = debugRayArg;
+  // --render: one offline render with these settings (the saved Render settings are left alone)
+  App::RenderSettings savedRenderSet = app.renderSet;
+  bool renderStarted = false;
+  if (!renderOut.empty()) {
+    auto& r = app.renderSet;
+    std::string ext = std::filesystem::path(renderOut).extension().string();
+    for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+    if (renderW > 0 && renderH > 0) { r.width = renderW; r.height = renderH; }
+    if (renderSamples > 0) r.samples = renderSamples;
+    if (renderAA > 0) r.aa = renderAA;
+    r.sceneRange = true;
+    r.stillFormat = (ext == ".jpg" || ext == ".jpeg") ? 1 : 0;
+    r.animFormat = ext == ".avi" ? 1 : ext == ".mp4" ? 3 : ext == ".webm" ? 4 : ext == ".png" ? 2 : 0;
+    if (ext == ".gif" || ext == ".avi" || ext == ".mp4" || ext == ".webm") renderAnim = true;
+    (renderAnim ? r.animPath : r.stillPath) = renderOut;
+  }
 
   auto t0 = std::chrono::steady_clock::now();
   double last = 0;
@@ -201,6 +234,13 @@ int main(int argc, char** argv) {
     if (!useVulkan) ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    app.tickAnimation(dt);
+    if (!renderOut.empty() && !renderStarted && frame >= 1) {
+      std::string rerr;
+      if (!app.startRender(renderAnim, rerr)) { std::fprintf(stderr, "render: %s\n", rerr.c_str()); break; }
+      renderStarted = true;
+    }
+    app.renderStep(0.05);  // offline render (Render window): a slice of work per frame
     ui->frame(dt);
     app.renderFrame();  // records / draws the scene into the offscreen targets
     app.autosaveTick();
@@ -235,7 +275,10 @@ int main(int argc, char** argv) {
     if (debugRayArg && frame == 1 && !app.debugFrozen) {  // freeze the ray, then look at it from the side
       app.debugFrozen = true;
       double pxl = turnDeg * PI / 180 / 0.003;
-      if (app.geo && app.geoEdit.valid) {
+      if (app.curved()) {
+        if (strafe != 0) app.curvCam.move(app.space, {strafe, 0, 0, 0}, nullptr);
+        app.curvCam.look(app.space, pxl, 0);
+      } else if (app.geo && app.geoEdit.valid) {
         if (strafe != 0) app.geoEdit.move(worldField(*app.ev), {strafe, 0, 0}, app.quality.geoMaxStep * 0.5, nullptr);
         app.geoEdit.look(pxl, 0);
       } else {
@@ -243,18 +286,26 @@ int main(int argc, char** argv) {
         app.editCam.look(pxl, 0);
       }
     }
+    if (renderStarted && !app.job.active) {
+      if (app.job.finished) std::printf("rendered %s (%.1f s)\n", app.job.path.c_str(), app.job.seconds);
+      else std::fprintf(stderr, "render failed: %s\n", app.job.error.c_str());
+      break;
+    }
+    if (!renderOut.empty()) { frame++; if (!useVulkan) glfwSwapBuffers(win); continue; }
     if (!screenshot.empty() && ++frame >= frames) {
       writePPM(screenshot, fw, fh, px);
       break;
     }
     if (!useVulkan) glfwSwapBuffers(win);
   }
+  if (!renderOut.empty()) app.renderSet = savedRenderSet;
   app.saveSettings();
-  if (screenshot.empty()) app.clearRecovery();  // quitting normally (unsaved changes were already asked about)
+  if (screenshot.empty() && renderOut.empty()) app.clearRecovery();  // quitting normally (unsaved changes were already asked about)
   g_ui = nullptr;
   delete ui;
   app.renderer->destroy(app.mainRT);
   app.renderer->destroy(app.thumbRT);
+  app.renderer->destroy(app.job.rt);
   app.renderer.reset();
 #ifdef FD_HAVE_VULKAN
   if (useVulkan) {

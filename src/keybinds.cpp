@@ -18,6 +18,8 @@ static const ActionInfo INFO[(int)Action::Count] = {
     {"new", "New scene", "General", false},
     {"copy", "Copy", "General", false},
     {"paste", "Paste", "General", false},
+    {"renderImage", "Render image", "General", false},
+    {"renderAnimation", "Render animation", "General", false},
     {"toggleMode", "Edit / Explore", "General", false},
     {"toggleView", "Full 4D / Geodesic", "Edit", false},
     {"toolSelect", "Select tool", "Edit", false},
@@ -41,6 +43,16 @@ static const ActionInfo INFO[(int)Action::Count] = {
     {"viewTop", "Top view", "Edit", false},
     {"viewAlongW", "View along W", "Edit", false},
     {"reset4D", "Reset 4D orientation", "Edit", false},
+    {"lookThrough", "Look through camera", "Edit", false},
+    {"cameraToView", "Camera to view", "Edit", false},
+    {"cameraView", "View through the active camera", "Edit", false},
+    {"playPause", "Play / pause", "Edit", false},
+    {"frameStart", "First frame", "Edit", false},
+    {"frameEnd", "Last frame", "Edit", false},
+    {"framePrev", "Previous frame", "Edit", false},
+    {"frameNext", "Next frame", "Edit", false},
+    {"insertKey", "Insert keyframe", "Edit", false},
+    {"deleteKey", "Delete keyframe", "Edit", false},
     {"axisX", "Constrain X", "Transform", false},
     {"axisY", "Constrain Y", "Transform", false},
     {"axisZ", "Constrain Z", "Transform", false},
@@ -50,6 +62,8 @@ static const ActionInfo INFO[(int)Action::Count] = {
     {"releaseMouse", "Release mouse / back to Edit", "Explore", false},
     {"debugRay", "Debug ray on / off", "Explore", false},
     {"debugRayFreeze", "Debug ray: freeze / follow view", "Explore", false},
+    {"explorePlay", "Play / pause the animation", "Explore", false},
+    {"exploreRestart", "Play the animation from the start", "Explore", false},
     {"moveForward", "Forward", "Movement", true},
     {"moveBack", "Back", "Movement", true},
     {"moveLeft", "Left", "Movement", true},
@@ -85,6 +99,8 @@ void KeyBindings::resetDefaults() {
   set(Action::Paste, C(GLFW_KEY_V));
   set(Action::ToggleMode, K(GLFW_KEY_TAB));
   set(Action::ToggleView, K(GLFW_KEY_V));
+  set(Action::RenderImage, K(GLFW_KEY_F12));
+  set(Action::RenderAnimation, C(GLFW_KEY_F12));
   set(Action::ToolSelect, K(GLFW_KEY_Q));
   set(Action::ToolMove, K(GLFW_KEY_W));
   set(Action::ToolRotate, K(GLFW_KEY_E));
@@ -96,7 +112,7 @@ void KeyBindings::resetDefaults() {
   set(Action::Delete, K(GLFW_KEY_X), K(GLFW_KEY_DELETE));
   set(Action::Duplicate, S(GLFW_KEY_D));
   set(Action::DuplicateLinked, KeyCombo{GLFW_KEY_D, false, false, true});
-  set(Action::Isolate, K(GLFW_KEY_I), K(GLFW_KEY_KP_DIVIDE));
+  set(Action::Isolate, K(GLFW_KEY_KP_DIVIDE), K(GLFW_KEY_SLASH));
   set(Action::Group, C(GLFW_KEY_G));
   set(Action::Focus, K(GLFW_KEY_F), K(GLFW_KEY_KP_DECIMAL));
   set(Action::Deselect, K(GLFW_KEY_ESCAPE));
@@ -106,6 +122,16 @@ void KeyBindings::resetDefaults() {
   set(Action::ViewTop, K(GLFW_KEY_7), K(GLFW_KEY_KP_7));
   set(Action::ViewAlongW, K(GLFW_KEY_9), K(GLFW_KEY_KP_9));
   set(Action::Reset4D, S(GLFW_KEY_W), K(GLFW_KEY_BACKSPACE));
+  set(Action::LookThrough, K(GLFW_KEY_KP_0), K(GLFW_KEY_0));
+  set(Action::CameraToView, KeyCombo{GLFW_KEY_KP_0, true, false, true}, KeyCombo{GLFW_KEY_0, true, false, true});
+  set(Action::CameraView, C(GLFW_KEY_KP_0), C(GLFW_KEY_0));
+  set(Action::PlayPause, K(GLFW_KEY_SPACE));
+  set(Action::FrameStart, S(GLFW_KEY_LEFT));
+  set(Action::FrameEnd, S(GLFW_KEY_RIGHT));
+  set(Action::FramePrev, K(GLFW_KEY_LEFT));
+  set(Action::FrameNext, K(GLFW_KEY_RIGHT));
+  set(Action::InsertKey, K(GLFW_KEY_I));
+  set(Action::DeleteKey, KeyCombo{GLFW_KEY_I, false, false, true});
   set(Action::AxisX, K(GLFW_KEY_X));
   set(Action::AxisY, K(GLFW_KEY_Y));
   set(Action::AxisZ, K(GLFW_KEY_Z));
@@ -115,6 +141,8 @@ void KeyBindings::resetDefaults() {
   set(Action::ReleaseMouse, K(GLFW_KEY_ESCAPE));
   set(Action::DebugRay, K(GLFW_KEY_T));
   set(Action::DebugRayFreeze, S(GLFW_KEY_T));
+  set(Action::ExplorePlay, K(GLFW_KEY_P));
+  set(Action::ExploreRestart, S(GLFW_KEY_P));
   set(Action::MoveForward, K(GLFW_KEY_W));
   set(Action::MoveBack, K(GLFW_KEY_S));
   set(Action::MoveLeft, K(GLFW_KEY_A));
