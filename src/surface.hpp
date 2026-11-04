@@ -20,6 +20,17 @@ struct RayHit {
 };
 std::optional<RayHit> castRay(const SceneEvaluator& ev, bool geo, const V4& eye, const V4& dir, double maxStep, const M4& frame, double maxDist = -1);
 
+/** A ray marched like the renderer's primary rays, with every step recorded (debug view). */
+struct RayTrace {
+  enum Reason { Hit, MaxDistance, MaxSteps, Escaped } reason = MaxSteps;
+  std::vector<V4> pts;  // eye, then the position after each step
+  double t = 0;         // distance travelled (along the surface in Geodesic)
+  int steps = 0;
+  const Node* node = nullptr;  // hit object
+};
+RayTrace traceRay(const SceneEvaluator& ev, bool geo, const V4& eye, const V4& dir, const QualitySettings& q);
+const char* rayReasonText(RayTrace::Reason r);
+
 double curvatureRadius(const SurfaceField& f, const V4& p, const M4& frame);
 struct AnchorResult { V4 pos; Anchor anchor; };
 AnchorResult makeAnchor(const SceneEvaluator& ev, const std::string& worldId, const V4& p, const M4& hint);

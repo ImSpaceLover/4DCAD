@@ -9,10 +9,12 @@
 
 #include "math4.hpp"
 #include "primitives.hpp"
+#include "polytope.hpp"
+#include "space.hpp"
 
 namespace fd {
 
-enum class NodeKind { Leaf, Group };
+enum class NodeKind { Leaf, Group, Camera };
 enum class BoolOp { Union, Intersection, Subtraction, SmoothUnion, SmoothIntersection, SmoothSubtraction };
 inline const char* BOOL_OP_NAMES[6] = {"union", "intersection", "subtraction", "smoothUnion", "smoothIntersection", "smoothSubtraction"};
 inline const char* BOOL_OP_LABELS[6] = {"Union", "Intersection", "Subtraction", "Smooth union", "Smooth intersection", "Smooth subtraction"};
@@ -21,19 +23,23 @@ inline bool isSmooth(BoolOp o) { return o >= BoolOp::SmoothUnion; }
 // Modifier stack of a node, listed in the order they are applied to the shape
 // (first = innermost). Dimension-raising modifiers (Extrude, Revolve) each add
 // the next axis (X -> Y -> Z -> W) after the node's base dimension.
-enum ModType { MOD_MIRROR = 1, MOD_REPEAT = 2, MOD_EXTRUDE = 3, MOD_REVOLVE = 4, MOD_ROTATE = 5 };
-inline const char* MOD_NAMES[6] = {"", "Mirror", "Repeat", "Extrude", "Revolve", "Rotate"};
+// MOD_RADIAL replaced the old Rotate modifier (an old rotation = one radial copy at its angle).
+enum ModType { MOD_MIRROR = 1, MOD_REPEAT = 2, MOD_EXTRUDE = 3, MOD_REVOLVE = 4, MOD_RADIAL = 5 };
+inline const char* MOD_NAMES[6] = {"", "Mirror", "Repeat", "Extrude", "Revolve", "Radial repeat"};
 
 struct Modifier {
   int type = MOD_MIRROR;
   int axis = 0;          // mirror / repeat axis; revolve: existing axis spun into the new one (-1 = newest)
   double spacing = 3;    // repeat
-  int count = 2;         // repeat: copies on each side, 0 = infinite
+  int count = 2;         // repeat: copies on each side, 0 = infinite; radial: number of copies (>= 1)
   ExtrudeMode mode = ExtrudeMode::Finite;  // extrude
   double length = 2;     // extrude
-  double radius = 0;     // revolve
-  int i = 0, j = 1;      // rotate plane
-  double angle = 45;     // rotate (degrees)
+  double radius = 0;     // revolve; radial: distance of the copies from the axis
+  int i = 0, j = 2;      // radial: plane of rotation (i -> j)
+  double angle = 60;     // radial: degrees between copies
+  double startAngle = 0; // radial: angle of the first copy (degrees)
+  double offset = 0;     // mirror: shape and mirror image sit this far from the mirror plane
+  // (new fields go last: code brace-initialises the leading ones)
   bool raises() const { return type == MOD_EXTRUDE || type == MOD_REVOLVE; }
 };
 
@@ -51,20 +57,27 @@ struct Anchor {
 
 // Surface material of a leaf. Textures are procedural 4D solid textures evaluated in
 // the object's local coordinates, so they move and rotate with the object.
-enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, TEX_RINGS, TEX_COUNT };
-inline const char* TEXTURE_NAMES[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings"};
+enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, TEX_RINGS,
+                   TEX_DOTS, TEX_WAVES, TEX_MARBLE, TEX_WOOD, TEX_CELLS, TEX_BRICKS, TEX_GRADIENT, TEX_COUNT };
+inline const char* TEXTURE_NAMES[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings",
+                                               "Dots", "Waves", "Marble", "Wood", "Cells", "Bricks", "Gradient"};
 struct Material {
   double emissive = 0;   // 0..1: always lit, casts no shadow, does not light others
   int texture = TEX_NONE;
   double texScale = 1;   // pattern cells per unit
   double texStrength = 0.7;
   std::array<double, 3> color2{0.12, 0.12, 0.14};  // second texture colour
+  double roughness = 0.75;   // 0 = sharp highlights, 1 = matte
+  double specular = 0.35;    // highlight strength
+  double transparency = 0;   // 0 = opaque, 1 = invisible (see-through surfaces)
+  double ior = 1.45;         // index of refraction of transparent materials (1 = no bending)
+  double metallic = 0;       // 0 = plain, 1 = mirror (reflections tinted by the colour)
 };
 
 /** Default code of a custom SDF leaf (GLSL). */
 inline const char* DEFAULT_CUSTOM_SDF =
     "// Signed distance in the object's local 4D space.\n"
-    "// Helpers: opExtrude(d, h), sU/sI/sS(a, b, k) smooth booleans, INF.\n"
+    "// Helpers: opExtrude(d, h), opRadial(v, r, n, start, step), sU/sI/sS(a, b, k) smooth booleans, INF.\n"
     "float sdf(vec4 p) {\n"
     "  // a hypersphere of radius 1 with a wavy surface\n"
     "  return length(p) - 1.0 + 0.05 * sin(8.0 * p.x) * sin(8.0 * p.y);\n"
@@ -76,6 +89,8 @@ struct Node {
   Transform xf;
   std::vector<Modifier> mods;
   bool hidden = false;
+  bool locked = false;   // cannot be selected / moved in the viewport
+  std::string linkId;    // linked duplicates share one: editing one edits all (except their own transform)
   std::optional<Anchor> anchor;
   // leaf
   std::string prim;
@@ -84,20 +99,57 @@ struct Node {
   std::optional<double> round, shell;
   Material mat;
   std::string code;        // custom SDF (prim == "custom"): GLSL defining float sdf(vec4 p)
+  // camera: position = eye, rotation = view frame (right, up, forward, slider direction);
+  // attached to the world surface (anchor) = a Geodesic camera
+  double camFov = 60;      // degrees
+  int camSlider = 3;       // Full 4D: world axis on the slice slider
+  double camAperture = 0;  // depth of field: lens radius (0 = everything sharp)
+  double camFocus = 5;     // distance in focus
   double codeBound = 1.5;  // custom SDF: half size of its bounding box (used for picking / collisions)
   bool isCustom() const { return kind == NodeKind::Leaf && prim == "custom"; }
+  // regular polyhedron with flat (geodesic) faces / regular honeycomb (see polytope.hpp)
+  PolyParams poly;
+  bool isPoly() const { return kind == NodeKind::Leaf && prim == "polyhedron"; }
+  bool isHoneycomb() const { return kind == NodeKind::Leaf && prim == "honeycomb"; }
+  bool isPolytope() const { return isPoly() || isHoneycomb(); }
   // group
   BoolOp op = BoolOp::Union;
   double k = 0.3;
   std::vector<Node> children;
 
   bool isLeaf() const { return kind == NodeKind::Leaf; }
+  bool isGroup() const { return kind == NodeKind::Group; }
+  bool isCamera() const { return kind == NodeKind::Camera; }
 };
 
 struct CameraState {
   V4 target{0, 0.5, 0, 0};
   double distance = 8, yaw = 0.6, pitch = -0.35;
   M4 rot4 = identity();
+  int slider = 3;  // world axis on the slice slider (the other three are shown)
+};
+
+/** What a frame draws and how hard it works. Edit mode builds one from the main settings; the
+ *  fast profile is used in Explore (and, if chosen, while moving in Edit mode). */
+struct RenderProfile {
+  float resolution = 0.5f;  // x the window resolution
+  int maxSteps = 100;       // march steps per ray
+  int bounces = 0;          // reflections / refractions followed per pixel (mirrors, glass)
+  bool textures = false;    // procedural textures
+  bool specular = true;     // highlights
+  bool pointLights = true;  // point lights (incl. emissive objects)
+  bool shadows = true;      // sun shadows
+  bool pointShadows = false;
+  bool ao = false;          // ambient occlusion
+  int aoSamples = 3;        // 1..5
+  int shadowSteps = 24;     // max steps of a shadow ray
+  enum Preset { Fast, Balanced, Full };
+  static RenderProfile preset(Preset p) {
+    RenderProfile r;  // Fast
+    if (p == Balanced) { r.resolution = 0.75f; r.maxSteps = 128; r.bounces = 1; r.textures = true; r.ao = true; r.shadowSteps = 40; }
+    if (p == Full) { r.resolution = 1.0f; r.maxSteps = 160; r.bounces = 3; r.textures = true; r.pointShadows = true; r.ao = true; r.aoSamples = 5; r.shadowSteps = 64; }
+    return r;
+  }
 };
 
 /** Ray-marching / rendering settings. */
@@ -119,6 +171,19 @@ struct QualitySettings {
   float lightYaw = 2.18f, lightPitch = 0.93f, lightW = 0.25f;  // light direction
   std::array<float, 3> skyTop{0.32f, 0.38f, 0.5f}, skyBottom{0.16f, 0.17f, 0.2f};
   bool grid = true;               // ground grid in Edit mode
+  float sunIntensity = 1.0f;      // directional light
+  bool pointShadows = true;       // point lights cast shadows (each one costs a shadow ray)
+  bool emissiveLights = true;     // emissive objects light their surroundings (as point lights)
+  int transparentLayers = 3;      // reflections / refractions followed per pixel (0 = mirrors and glass off)
+  bool relaxedMarching = true;    // over-relaxed sphere tracing (fewer steps)
+  // stochastic sampling (random per sample, averaged): viewport refinement when idle, renders
+  bool stochastic = true;         // refine the viewport while nothing changes
+  int viewportSamples = 64;       // samples per pixel the viewport refines to
+  float sunSize = 0.04f;          // radians: soft sun shadows
+  float lightRadius = 0.15f;      // point lights are balls of this radius: soft shadows
+  // fast mode: used in Explore (keep it smooth) and optionally while moving in Edit mode
+  RenderProfile fast = RenderProfile::preset(RenderProfile::Fast);
+  bool fastWhileMovingInEdit = false;
   float geoMaxStep = 0.25f;
   int geoProjectIters = 1;
 };
@@ -127,6 +192,8 @@ std::string newId(const char* prefix = "n");
 Node makeLeaf(const std::string& prim, const std::string& name, V4 pos = {0, 0, 0, 0}, std::array<double, 3> color = {0.8, 0.5, 0.3});
 Node makeGroup(BoolOp op, std::vector<Node> children, const std::string& name = "");
 Node makeCustom(const std::string& name, const std::string& code = DEFAULT_CUSTOM_SDF);
+/** A camera object at eye looking along the frame's third column (columns: right, up, forward, slider). */
+Node makeCamera(const std::string& name, const V4& eye, const M4& frame, double fov, int slider);
 
 /** Full rotation of a node: anchor basis (if any) followed by its own rotation. */
 M4 nodeRotation(const Node& n);
@@ -139,6 +206,36 @@ std::vector<Node*> pathTo(Node& root, const std::string& id);
 bool isAncestor(Node& root, const std::string& anc, const std::string& id);
 std::optional<Node> removeNode(Node& root, const std::string& id);
 Node cloneFresh(const Node& n);
+
+// ---- transforms between frames (uniform scale: x_parent = pos + scale * rot * x_local) ----
+/** The transform of `child` (given in `parent`'s local frame) expressed in the frame `parent` lives in. */
+Transform composeXf(const Transform& parent, const Transform& child);
+/** Inverse of composeXf: `world` expressed in the local frame of `parentWorld`. */
+Transform relativeXf(const Transform& parentWorld, const Transform& world);
+/** World transform of a node, composed along its path. nullopt if the node is missing or an
+ *  anchored node lies on the path (anchors live in surface tangent frames: no plain conversion). */
+std::optional<Transform> worldXf(Node& root, const std::string& id);
+/** Moves a group's origin to its first child's position without moving anything in the world
+ *  (the first child ends up at 0,0,0,0). Returns false if nothing could be done (no children, anchors). */
+bool centreGroupOnFirst(Node& g);
+/** Removes (recursively, bottom-up) every group below the root that has no children. */
+void pruneEmptyGroups(Node& root);
+
+// ---- editing several objects at once ----
+/** Structural change of a modifier stack done in the Properties panel. */
+struct ModStackOp {
+  enum Kind { None, Add, Remove, MoveUp } kind = None;
+  int index = -1;
+  Modifier mod;  // Add
+};
+/** Same modifier types in the same order. */
+bool sameModifierTypes(const Node& a, const Node& b);
+/** Applies to `target` what changed between `before` and `after` (one frame of edits on the
+ *  primary object): changed fields are copied, position / rotation / scale changes are applied
+ *  relatively (offset, rotation about the target's own centre, scale ratio). Leaf-only fields
+ *  only reach leaves and group-only fields only groups. Modifiers are edited only when
+ *  `stacksMatch` (all selected stacks have the same types). */
+void propagateEdit(const Node& before, const Node& after, Node& target, bool stacksMatch, const ModStackOp& op = {});
 
 class PrimitiveRegistry {
  public:
@@ -168,7 +265,41 @@ std::vector<std::pair<int, std::string>> modifierProblems(const Node& n, const P
 std::vector<Modifier> stepsToModifiers(const std::vector<Step>& steps);
 Node nodeFromPrimitive(const PrimitiveDef& p, const std::string& name);
 
+/** A point light (a 4D position; light falls off to 0 at `range`). */
+struct PointLight {
+  std::string id;  // stable id (animation tracks refer to it); given when created / loaded
+  std::string name = "Light";
+  V4 pos{0, 3, 0, 0};
+  std::array<double, 3> color{1, 0.95, 0.85};
+  double intensity = 1.5;
+  double range = 10;
+  bool shadows = true;
+  bool enabled = true;
+};
+
+/** A saved camera position (Full 4D camera, plus the Geodesic camera if it was used). */
+struct CameraBookmark {
+  std::string name;
+  CameraState cam;
+  bool geo = false;
+  V4 geoPivot{0, 0, 0, 0};
+  M4 geoFrame = identity();
+};
+
+/** Editor camera of a curved scene: its isometry (columns: right, up, forward at the eye; eye)
+ *  and the distance to the point it orbits. */
+struct CurvedCamState {
+  M4 iso = identity();
+  double distance = 8;
+};
+
 struct SceneFile {
+  Space space;                             // Flat 4D (default), Hyperbolic or Spherical 3D
+  std::optional<CurvedCamState> curvedCam;
+  std::vector<CameraBookmark> bookmarks;  // old files only: converted to camera objects when loaded
+  std::string activeCamera;               // id of the camera used for rendering
+  std::string animation;                  // animation (JSON, see animation.hpp); empty = none
+  std::vector<PointLight> lights;
   Node root;
   std::vector<PrimitiveDef> primitives;
   std::string world;  // empty = none
@@ -190,7 +321,26 @@ struct LibraryFolder {
 std::vector<LibraryFolder> builtinFolders();
 
 // JSON text (de)serialisation; parse functions throw std::runtime_error.
-std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam);
+std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
+                        const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr,
+                        const std::string& activeCamera = "", const std::string* animationJson = nullptr,
+                        const Space* space = nullptr, const CurvedCamState* curvedCam = nullptr);
+std::string lightsToJson(const std::vector<PointLight>& l);
+std::vector<PointLight> lightsFromJson(const std::string& text);
+std::string bookmarksToJson(const std::vector<CameraBookmark>& b);
+std::vector<CameraBookmark> bookmarksFromJson(const std::string& text);
+
+// ---- linked duplicates ----
+/** The shared part of a linked node (shape, material, modifiers, children), without ids,
+ *  the node's own transform, name, visibility, lock or anchor. Equal strings = same definition. */
+std::string linkDefinition(const Node& n);
+/** Copies src's definition onto dst, keeping dst's ids where the structure matches. */
+void copyDefinition(Node& dst, const Node& src);
+/** Makes every linked group consistent: for each linkId, the member whose definition changed
+ *  since `defs` (last known definitions) is copied to the others. Returns true if anything changed. */
+bool syncLinks(Node& root, std::map<std::string, std::string>& defs);
+/** Records the current definitions (after loading / undo). */
+void recordLinks(Node& root, std::map<std::string, std::string>& defs);
 SceneFile sceneFromJson(const std::string& text);
 std::string nodeToJson(const Node& n);  // compact snapshot (undo)
 Node nodeFromJson(const std::string& text);

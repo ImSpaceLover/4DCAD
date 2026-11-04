@@ -2,6 +2,7 @@
 // placement, gizmo / transform tools, explore movement, frame rendering.
 #pragma once
 #include <functional>
+#include <sstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -9,7 +10,9 @@
 #include <vector>
 
 #include "camera.hpp"
+#include "animation.hpp"
 #include "evaluator.hpp"
+#include "keybinds.hpp"
 #include "library.hpp"
 #include "renderer.hpp"
 #include "surface.hpp"
@@ -41,6 +44,13 @@ struct EditSettings {
   double flySpeed = 2, lookSpeed = 1;
   bool showThumbnail = true;
   int thumbSize = 300;
+  double autosaveSeconds = 60;  // recovery copy of unsaved changes (0 = off)
+  // transform tools
+  bool globalAxes = false;  // gizmo / G / R axes: false = the object's local axes, true = world axes
+  bool snap = false;        // snapping (Ctrl while transforming inverts it)
+  double snapMove = 0.25;   // grid step (world units)
+  double snapAngle = 15;    // degrees
+  double snapScale = 0.1;
 };
 
 /** Explore mode settings (Full 4D + Geodesic sub-settings). */
@@ -60,9 +70,9 @@ struct ExploreSettings {
 struct Gizmo {
   bool visible = false;
   double cx = 0, cy = 0;           // centre (window pixels)
-  struct Axis { bool visible = false; int axis = 0; V4 dir{}; double ex = 0, ey = 0; };
+  struct Axis { bool visible = false; int axis = 0; V4 dir{}; double ex = 0, ey = 0; bool faded = false; };  // axis: label (X..W); faded: leaves the slice
   Axis axes[3];                    // the object's local X, Y, Z, straightened into the visible slice
-  struct Ring { int a = 0, b = 0; V4 u{}, v{}; std::vector<std::pair<double, double>> pts; double orient = 1; };
+  struct Ring { int a = 0, b = 0; V4 u{}, v{}; std::vector<std::pair<double, double>> pts; double orient = 1; int la = 0, lb = 0; };  // la/lb: axis labels
   std::vector<Ring> rings;         // rotation planes between visible axes
   double worldLen = 1;             // world length of an arrow
   int hot = -1;                    // hovered handle: 0..2 arrows, 4 centre, 10+ rings
@@ -80,6 +90,36 @@ class App {
   std::unique_ptr<SceneEvaluator> ev;
   std::string currentFile;
 
+  // --- space: Flat 4D, or a curved 3D space (Hyperbolic / Spherical), chosen for a new scene ---
+  Space space;
+  bool curved() const { return space.curved(); }
+  CurvedCamera curvCam;  // editor / Explore camera of curved scenes
+  /** World isometry of a node in a curved scene (columns: its axes at its position, the position). */
+  M4 nodeWorldIso(const std::string& id, double* sAncOut = nullptr);
+  /** Where a light is in the world (curved scenes: its position is normal coordinates at the origin). */
+  V4 lightWorldPos(const PointLight& l) const;
+  V4 lightFromWorld(const V4& p) const { return space.curved() ? cs::logO(space, p) : p; }
+  /** Changes the curvature radius (curved scenes; objects keep their coordinates). */
+  void setCurvatureRadius(double r);
+  /** The point reached from p along tangent vector v (its length = distance): p + v in flat space, a geodesic in curved. */
+  V4 along(const V4& p, const V4& v) const;
+  /** Curved overview: the outside camera looking at the ball, and a point's place in the ball
+   *  (Poincare ball / stereographic projection: p.xyz / (1 + p.w)). */
+  View ballView() const;
+  static V4 toBall(const V4& p);
+  // transforms that keep objects in place (flat: plain composition; curved: isometries)
+  std::optional<Transform> worldTransform(const std::string& id);
+  Transform relativeTransform(const Transform& parentWorld, const Transform& world);
+  /** child (in parent's frame) expressed in the frame the parent lives in; sAnc = scale above the parent. */
+  Transform composeLocal(const Transform& parent, const Transform& child, double sAnc);
+  double scaleAbove(const std::string& id);  // product of the scales of the node's ancestors
+  bool centreGroup(Node& g, double sAnc);
+  /** Depth of p in front of the view (along its forward axis). */
+  double viewDepth(const V4& p, const View& v) const;
+  /** Moves / rotates nodes; directions are tangent vectors at dirBase_ (curved scenes). */
+  void rotateNodesPlane(const std::vector<std::string>& ids, const V4& u, const V4& v, double ang);
+  V4 dirBase_{0, 0, 0, 1};
+
   // --- modes / cameras ---
   Mode mode = Mode::Edit;
   bool geo = false;
@@ -90,7 +130,11 @@ class App {
   QualitySettings quality;  // rendering
   EditSettings editSet;
   ExploreSettings exploreSet;
-  double fov() const { return mode == Mode::Explore ? exploreSet.fov : editSet.fov; }
+  double fov() const;
+  /** Viewing through the active camera right now (Edit mode, camera view on and a valid camera). */
+  bool inCameraView() const;
+  bool keyMenuRequest = false;  // I pressed: the UI shows the insert-keyframe menu
+  int accumSamples = 0;         // stochastic samples averaged in the viewport image so far
   V4 light() const;
   double thumbYaw = 0.4, thumbPitch = -0.9, thumbZoom = 1;
   bool mouseCaptured = false, wantCapture = false, wantRelease = false;
@@ -100,15 +144,81 @@ class App {
   RenderTarget mainRT, thumbRT;
   int thumbW = 300, thumbH = 225;
   std::unique_ptr<Renderer> renderer;
+  Backend backendPref = Backend::Auto;  // graphics API for the next start (settings)
+  bool showLights = false;              // Lights window
   double fps = 0, now = 0;
 
+  // --- offline renders (Render window; render_job.cpp) ---
+  struct RenderSettings {
+    int width = 1280, height = 720;
+    int aa = 2;        // supersampling factor (1..3)
+    int samples = 32;  // stochastic samples per pixel (1 = plain render)
+    int stillFormat = 0;  // STILL_FORMATS
+    int animFormat = 0;   // ANIM_FORMATS
+    std::string stillPath, animPath;  // "" = next to the scene file
+    bool sceneRange = true;           // frame range and fps from the timeline
+    int start = 1, end = 120;
+    double fps = 24;
+    int jpegQuality = 92;
+    std::string ffmpeg = "ffmpeg";
+  };
+  static constexpr const char* STILL_FORMATS[2] = {"PNG", "JPEG"};
+  static constexpr const char* ANIM_FORMATS[5] = {"GIF", "AVI (Motion JPEG)", "PNG sequence", "MP4 (H.264, ffmpeg)", "WebM (VP9, ffmpeg)"};
+  RenderSettings renderSet;
+  struct RenderJob {
+    bool active = false, animation = false, finished = false;
+    int first = 1, last = 1, frame = 1, sample = 0, samples = 1, aa = 1, w = 0, h = 0;
+    bool prepared = false;
+    RenderTarget rt;                    // the supersampled image being refined (also the preview)
+    std::unique_ptr<FrameWriter> writer;
+    std::string path, error;
+    double started = 0, fps = 24, seconds = 0;
+    bool usedCamera = false;
+    // what is rendered (snapshot at the start: editing meanwhile does not change the render)
+    Node sceneRoot, frameRoot;
+    std::vector<PointLight> sceneLights;
+    Animation sceneAnim;
+    std::string camera, world;
+    Space space;
+    QualitySettings quality;
+    FrameParams fp;
+  };
+  RenderJob job;
+  /** Starts rendering a still image or the animation (from the active camera). */
+  bool startRender(bool animation, std::string& err);
+  /** Renders for about `budget` seconds (called every frame while a job runs). */
+  void renderStep(double budget);
+  void cancelRender();
+  /** 0..1 */
+  double renderProgress() const;
+  /** The output path a render would use (the chosen one, or next to the scene file; extension = format). */
+  std::string renderPath(bool animation) const;
+  // --- render presets (all rendering settings; JSON files in <data>/presets) ---
+  struct RenderPreset {
+    std::string name;
+    bool builtin = false;  // Fast / Balanced / Full: read-only
+    std::string json;
+  };
+  static std::vector<RenderPreset> builtinPresets();
+  std::vector<RenderPreset> renderPresets() const;  // built-in first, then the user's (by name)
+  std::string currentPresetJson(const std::string& name) const;
+  bool applyPreset(const std::string& json, std::string& err);
+  bool savePreset(const std::string& name, std::string& err);  // the current settings (overwrites)
+  bool deletePreset(const std::string& name);
+  bool renamePreset(const std::string& from, const std::string& to, std::string& err);
+  bool importPreset(const std::string& path, std::string& err, std::string* name = nullptr);
+  bool exportPreset(const std::string& name, const std::string& path, std::string& err);
+  std::string activePreset;  // last loaded / saved (shown in the preset list)
+  /** The main settings as a render profile (what the viewport draws when idle). */
+  RenderProfile mainProfile() const;
+
   // --- lifecycle ---
-  void init();
+  void init(std::unique_ptr<Renderer> r);
   void loadScene(SceneFile f);
   bool loadSceneFile(const std::string& path, std::string& err);
   bool saveSceneFile(const std::string& path, std::string& err);
   std::string serialize();
-  void newScene();
+  void newScene(SpaceKind kind = SpaceKind::Flat, double radius = 8);
   void rebuild();
   void commit();
   void undo();
@@ -120,14 +230,72 @@ class App {
   std::string lastFile;  // reopened on startup
   void loadSettings();
   void saveSettings();
+  /** The graphics API chosen in the settings (read before the window is created). */
+  static Backend savedBackend();
+  // --- autosave / crash recovery ---
+  /** Writes the recovery copy if there are unsaved changes and the interval has passed (force: now). */
+  void autosaveTick(bool force = false);
+  /** Deletes the recovery copy (after saving, or when quitting normally). */
+  void clearRecovery();
+  /** A recovery copy left by a crash: the file it belonged to and when it was written. */
+  struct RecoveryInfo { std::string file, time; };
+  std::optional<RecoveryInfo> findRecovery();
+  bool recover(std::string& err);
+  std::optional<RecoveryInfo> pendingRecovery;  // found at startup: the UI asks what to do
 
   // --- selection & tree ---
   Node* selected();
   std::unordered_set<std::string> highlightSet();
   void deleteSelection();
   void duplicateSelection();
+  /** Linked duplicates: the copies share their definition (editing one edits all). */
+  void duplicateLinked();
+  void unlink(const std::string& id);
+  int linkCount(const std::string& linkId);
+  /** Clipboard text (JSON) of the selected objects, with their world transforms. */
+  std::string copySelection();
+  /** Adds objects from clipboard text to the scene root (new ids); false if it is not 4DCAD data. */
+  bool pasteNodes(const std::string& text);
+  bool isLocked(const std::string& id);  // the node or an ancestor is locked
+  // Isolate (view only, not saved): only these objects (and the world) are drawn and pickable
+  std::unordered_set<std::string> isolate;
+  void toggleIsolate();
+  std::vector<PointLight> lights;  // scene point lights (saved in the scene)
+  // --- animation ---
+  Animation anim;
+  bool playing = false;
+  bool autoKey = false;            // every change is keyed at the current frame
+  bool viewThroughCamera = false;  // the viewport shows the active camera (preview the animation)
+  /** Moves to a frame: every animated value takes its value there (no undo step). */
+  void setFrame(double frame);
+  /** Advances playback (called every frame by the main loop). */
+  void tickAnimation(double dt);
+  /** Where playback loops back to the first frame (Explore: the last keyframe; Edit: the end of the range). */
+  double playbackEnd() const;
+  /** Keys the selected objects at the current frame (transform only, or every value). */
+  void insertKeys(bool transformOnly);
+  /** Removes the selected objects' keys at the current frame. */
+  void deleteKeys();
+  /** Per-value keying from Properties / the Lights window: key, or remove the key at this frame. */
+  void toggleValueKey(const std::string& target, const std::string& path);
+  /** The point lights for a frame: enabled scene lights, then emissive objects (if enabled). */
+  std::vector<LightParam> frameLights();
+  // cameras are scene objects (NodeKind::Camera); the active one is used for rendering
+  std::string activeCamera;
+  /** View, Geodesic flag and field of view of a camera object. */
+  View cameraView(const std::string& id, bool* geoCamera = nullptr, double* fov = nullptr);
+  /** A new camera at the current view (attached to the world surface in the Geodesic view); returns its id. */
+  std::string addCamera();
+  /** Moves the view to the camera (Numpad 0). */
+  void lookThrough(const std::string& id);
+  /** Moves the camera to the current view (Ctrl+Alt+Numpad 0). */
+  void cameraToView(const std::string& id);
+  /** Camera whose icon is under the screen point ("" if none). */
+  std::string pickCamera(double x, double y);
   void groupSelection(BoolOp op);
   void ungroup(const std::string& id);
+  /** Moves a group's origin to its first object, without moving anything. */
+  void recentreGroup(const std::string& id);
   enum class Drop { Into, Before, After, Wrap };
   void reparent(const std::string& id, const std::string& target, Drop where);
   void setWorld(const std::string& id);
@@ -147,6 +315,10 @@ class App {
   std::optional<RayHit> pick(double x, double y);
   void focusSelection();
   void standardView(int which);
+  /** Full 4D: put world axis s (0..3 = X..W) on the slice slider; the other three are shown. */
+  void setSliderAxis(int s);
+  /** World axis (0..3) shown as gizmo slot k (0..2) in Global mode. */
+  int globalAxisLabel(int k) const;
 
   // --- placement (library objects) ---
   bool canPlace(const std::string& objectId, std::string* reason);
@@ -165,13 +337,22 @@ class App {
   /** Gizmo for the current selection (Move / Rotate tool), in screen space. */
   Gizmo gizmo();
   bool gizmoDragging() const { return gizmoHandle_ >= 0; }
+  /** Snapping is in effect for the current transform (setting, inverted while Ctrl is held). */
+  bool snapping() const { return snapNow_; }
   bool flying() const { return drag_ == Drag::Fly; }
   int gizmoHandle() const { return gizmoHandle_; }
 
   // --- per frame ---
   void handleInput(const InputState& in, double dt);
-  void handleKey(int key, bool shift, bool ctrl);
+  void handleKey(int key, bool shift, bool ctrl, bool alt = false);
+  KeyBindings keys;      // rebindable shortcuts (saved with the settings)
+  bool debugRay = false; // Explore: show the debug ray
+  bool debugFrozen = false;  // keep the current debug ray instead of re-tracing it from the view
+  RayTrace debugTrace;       // the debug ray (traced from the eye along the view direction)
   void renderFrame();
+  void curvedParams(FrameParams& fp, const View& v, std::ostringstream& key);
+  void prepareJobFrame();
+  void finishJobFrame();
   View thumbnailView();
   double sliceW() { return editCam.sliceW(); }
   void setSliceW(double w) { editCam.setSliceW(w); }
@@ -183,7 +364,16 @@ class App {
 
  private:
   std::vector<std::string> history_, future_;
-  std::string committed_, saved_;
+  std::string committed_, saved_, autosaved_;
+  std::map<std::string, std::string> linkDefs_;  // last known definition of each linked group
+  Node evalRoot_;                                 // the scene as the animation left it (auto-key compares to it)
+  std::vector<PointLight> evalLights_;
+  /** Applies the animation at anim.frame and re-attaches surface objects to their world. */
+  void applyAnim();
+  void autoKeyChanges();
+  double evalRadius_ = 8;  // curvature radius as the animation / last edit left it
+  Node viewRoot_;                                 // the tree as drawn while isolating
+  double lastAutosave_ = 0;
   std::vector<std::string> selectionAtPress_;
   int version_ = 0;
   std::string lastKey_, lastThumbKey_;
@@ -199,6 +389,16 @@ class App {
   bool dragMoved_ = false;
   int gizmoHandle_ = -1;
   Gizmo gizmoAtPress_;
+  // drag totals since the press (transforms are re-applied from the original state, so snapping never drifts)
+  double dragDx_ = 0, dragDy_ = 0, dragDepth_ = 0, dragAlong_ = 0, dragAngle_ = 0;
+  bool snapNow_ = false;
+  void resetDragTotals() { dragDx_ = dragDy_ = dragDepth_ = dragAlong_ = dragAngle_ = 0; }
+  std::string primaryOf(const std::vector<std::string>& ids) const;
+  /** Moves `ids` so the primary object's world position lands on the snapping grid, within the span of `dirs`. */
+  void snapToGrid(const std::vector<std::string>& ids, const std::vector<V4>& dirs);
+  /** Anchored primary: rounds the travelled distance instead (no grid on a curved surface). */
+  V4 snapDistance(const std::vector<std::string>& ids, const V4& delta);
+  double snapAng(double a) const;
   std::string snapshot();
   void restore(const std::string& s);
   void captureOrig();
@@ -207,6 +407,9 @@ class App {
   M4 parentWorldRotation(const std::string& id, double* scaleAcc);
   /** The object's local X, Y, Z straightened into the visible slice (orthonormal, world space). */
   std::array<V4, 3> gizmoAxes(const std::string& id, const View& v);
+  /** Direction for the G / R axis key k (0..3 = X..W): Global = that world axis exactly, Local = gizmo axis. */
+  V4 keyAxis(const std::string& id, const View& v, int k);
+  bool globalExact(const std::string& id);
   SurfaceField field() { return worldField(*ev); }
   void updateExplore(const InputState& in, double dt);
   void flyGeoEdit(const InputState& in, double dt);

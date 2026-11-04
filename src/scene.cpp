@@ -38,6 +38,18 @@ Node makeCustom(const std::string& name, const std::string& code) {
   return n;
 }
 
+Node makeCamera(const std::string& name, const V4& eye, const M4& frame, double fov, int slider) {
+  Node n;
+  n.id = newId("c");
+  n.kind = NodeKind::Camera;
+  n.name = name;
+  n.xf.pos = eye;
+  n.xf.rot = orthonormalize(frame);
+  n.camFov = fov;
+  n.camSlider = slider;
+  return n;
+}
+
 M4 nodeRotation(const Node& n) { return n.anchor ? mul(n.anchor->basis, n.xf.rot) : n.xf.rot; }
 
 void walk(Node& n, const std::function<void(Node&, Node*, int)>& fn, Node* parent, int depth) {
@@ -87,11 +99,122 @@ std::optional<Node> removeNode(Node& root, const std::string& id) {
 }
 Node cloneFresh(const Node& n) {
   Node c = n;
-  walk(c, [](Node& m, Node*, int) { m.id = newId(m.isLeaf() ? "n" : "g"); });
+  walk(c, [](Node& m, Node*, int) { m.id = newId(m.isLeaf() ? "n" : m.isCamera() ? "c" : "g"); });
   return c;
 }
 
 // ---------------------------------------------------------------- registry
+// ============================================================ frames
+Transform composeXf(const Transform& P, const Transform& C) {
+  Transform r;
+  r.pos = P.pos + mul(P.rot, C.pos) * P.scale;
+  r.rot = orthonormalize(mul(P.rot, C.rot));
+  r.scale = P.scale * C.scale;
+  return r;
+}
+
+Transform relativeXf(const Transform& P, const Transform& W) {
+  Transform r;
+  M4 inv = transpose(P.rot);
+  double s = P.scale != 0 ? P.scale : 1;
+  r.pos = mul(inv, W.pos - P.pos) * (1 / s);
+  r.rot = orthonormalize(mul(inv, W.rot));
+  r.scale = W.scale / s;
+  return r;
+}
+
+std::optional<Transform> worldXf(Node& root, const std::string& id) {
+  auto path = pathTo(root, id);
+  if (path.empty()) return std::nullopt;
+  Transform acc;
+  for (Node* n : path) {
+    if (n->anchor) return std::nullopt;
+    acc = composeXf(acc, n->xf);
+  }
+  return acc;
+}
+
+bool centreGroupOnFirst(Node& g) {
+  if (g.isLeaf() || g.children.empty() || g.anchor) return false;
+  for (auto& c : g.children) if (c.anchor) return false;
+  V4 o = g.children[0].xf.pos;
+  g.xf.pos = g.xf.pos + mul(g.xf.rot, o) * g.xf.scale;
+  for (auto& c : g.children) c.xf.pos = c.xf.pos - o;
+  return true;
+}
+
+void pruneEmptyGroups(Node& root) {
+  std::function<void(Node&)> rec = [&](Node& n) {
+    for (auto& c : n.children) rec(c);
+    n.children.erase(std::remove_if(n.children.begin(), n.children.end(), [](const Node& c) { return c.isGroup() && c.children.empty(); }),
+                     n.children.end());
+  };
+  rec(root);
+}
+
+// ============================================================ multi-object editing
+bool sameModifierTypes(const Node& a, const Node& b) {
+  if (a.mods.size() != b.mods.size()) return false;
+  for (size_t i = 0; i < a.mods.size(); i++) if (a.mods[i].type != b.mods[i].type) return false;
+  return true;
+}
+
+void propagateEdit(const Node& B, const Node& A, Node& T, bool stacksMatch, const ModStackOp& op) {
+  auto ch = [](auto& b, auto& a, auto& t) { if (!(b == a)) t = a; };
+  if (B.isLeaf() == T.isLeaf()) {
+    if (T.isLeaf()) {
+      ch(B.color, A.color, T.color);
+      ch(B.thickness, A.thickness, T.thickness);
+      ch(B.round, A.round, T.round);
+      ch(B.shell, A.shell, T.shell);
+      ch(B.mat.emissive, A.mat.emissive, T.mat.emissive);
+      ch(B.mat.texture, A.mat.texture, T.mat.texture);
+      ch(B.mat.texScale, A.mat.texScale, T.mat.texScale);
+      ch(B.mat.texStrength, A.mat.texStrength, T.mat.texStrength);
+      ch(B.mat.color2, A.mat.color2, T.mat.color2);
+      ch(B.mat.roughness, A.mat.roughness, T.mat.roughness);
+      ch(B.mat.specular, A.mat.specular, T.mat.specular);
+      ch(B.mat.transparency, A.mat.transparency, T.mat.transparency);
+      ch(B.mat.ior, A.mat.ior, T.mat.ior);
+      ch(B.mat.metallic, A.mat.metallic, T.mat.metallic);
+      if (B.isCustom() && T.isCustom()) { ch(B.code, A.code, T.code); ch(B.codeBound, A.codeBound, T.codeBound); }
+    } else {
+      ch(B.op, A.op, T.op);
+      ch(B.k, A.k, T.k);
+    }
+  }
+  // transforms: relative
+  if (!T.anchor) {
+    V4 d = A.xf.pos - B.xf.pos;
+    if (length(d) > 0) T.xf.pos = T.xf.pos + d;
+    if (A.xf.rot != B.xf.rot) T.xf.rot = orthonormalize(mul(mul(A.xf.rot, transpose(B.xf.rot)), T.xf.rot));
+  } else if (A.xf.rot != B.xf.rot) {
+    T.xf.rot = orthonormalize(mul(mul(A.xf.rot, transpose(B.xf.rot)), T.xf.rot));  // anchored: rotation within the tangent frame
+  }
+  if (A.xf.scale != B.xf.scale && B.xf.scale > 0) T.xf.scale = std::max(0.01, T.xf.scale * A.xf.scale / B.xf.scale);
+  // modifiers
+  if (!stacksMatch) return;
+  if (op.kind == ModStackOp::Add) { T.mods.push_back(op.mod); return; }
+  if (op.kind == ModStackOp::Remove) { if (op.index >= 0 && op.index < (int)T.mods.size()) T.mods.erase(T.mods.begin() + op.index); return; }
+  if (op.kind == ModStackOp::MoveUp) { if (op.index > 0 && op.index < (int)T.mods.size()) std::swap(T.mods[op.index], T.mods[op.index - 1]); return; }
+  if (!sameModifierTypes(B, A) || !sameModifierTypes(B, T)) return;
+  for (size_t i = 0; i < A.mods.size(); i++) {
+    const Modifier &b = B.mods[i], &a = A.mods[i];
+    Modifier& t = T.mods[i];
+    ch(b.axis, a.axis, t.axis);
+    ch(b.spacing, a.spacing, t.spacing);
+    ch(b.count, a.count, t.count);
+    ch(b.mode, a.mode, t.mode);
+    ch(b.length, a.length, t.length);
+    ch(b.radius, a.radius, t.radius);
+    ch(b.i, a.i, t.i);
+    ch(b.j, a.j, t.j);
+    ch(b.angle, a.angle, t.angle);
+    ch(b.offset, a.offset, t.offset);
+    ch(b.startAngle, a.startAngle, t.startAngle);
+  }
+}
+
 PrimitiveRegistry::PrimitiveRegistry() {
   list_ = builtinPrimitives();
   PrimitiveDef custom;  // placeholder for GLSL custom SDF leaves (base dimension 4)
@@ -125,6 +248,7 @@ std::vector<PrimitiveDef> PrimitiveRegistry::custom() const {
 
 int nodeBaseDim(const Node& n, const PrimitiveRegistry& reg) {
   if (n.isCustom()) return 4;
+  if (n.isPolytope()) return 3;
   if (n.isLeaf()) { auto* p = reg.get(n.prim); return p ? primitiveDim(*p) : 0; }
   int d = 0;
   for (auto& c : n.children) d = std::max(d, nodeDim(c, reg));
@@ -143,7 +267,7 @@ std::vector<ModAxis> modifierAxes(const Node& n, const PrimitiveRegistry& reg) {
         if (m.type == MOD_REVOLVE) a.srcAxis = (m.axis < 0 || m.axis >= dim) ? dim - 1 : m.axis;
         dim++;
       }
-    } else if (m.type == MOD_ROTATE) a.valid = m.i != m.j;
+    } else if (m.type == MOD_RADIAL) a.valid = m.i != m.j;
     out.push_back(a);
   }
   return out;
@@ -181,7 +305,7 @@ std::vector<Modifier> stepsToModifiers(const std::vector<Step>& steps) {
     Modifier m;
     if (s.op == StepOp::Extrude) { m.type = MOD_EXTRUDE; m.mode = s.mode; m.length = s.length; }
     else if (s.op == StepOp::Revolve) { m.type = MOD_REVOLVE; m.radius = s.radius; m.axis = s.axis; }
-    else { m.type = MOD_ROTATE; m.i = s.i; m.j = s.j; m.angle = s.angle; }
+    else { m.type = MOD_RADIAL; m.i = s.i; m.j = s.j; m.count = 1; m.radius = 0; m.startAngle = s.angle; }  // old rotate step
     mods.push_back(m);
   }
   return mods;
@@ -232,17 +356,17 @@ static PrimitiveDef jPrim(const json& j) {
 
 static json modJ(const Modifier& m) {
   switch (m.type) {
-    case MOD_MIRROR: return {{"type", "mirror"}, {"axis", m.axis}};
+    case MOD_MIRROR: return {{"type", "mirror"}, {"axis", m.axis}, {"offset", m.offset}};
     case MOD_REPEAT: return {{"type", "repeat"}, {"axis", m.axis}, {"spacing", m.spacing}, {"count", m.count}};
     case MOD_EXTRUDE: return {{"type", "extrude"}, {"mode", modeName(m.mode)}, {"length", m.length}};
     case MOD_REVOLVE: return {{"type", "revolve"}, {"radius", m.radius}, {"axis", m.axis}};
-    default: return {{"type", "rotate"}, {"i", m.i}, {"j", m.j}, {"angle", m.angle}};
+    default: return {{"type", "radial"}, {"i", m.i}, {"j", m.j}, {"radius", m.radius}, {"count", m.count}, {"angle", m.angle}, {"startAngle", m.startAngle}};
   }
 }
 static Modifier jMod(const json& mj) {
   Modifier m;
   std::string t = mj.value("type", std::string("mirror"));
-  m.type = t == "repeat" ? MOD_REPEAT : t == "extrude" ? MOD_EXTRUDE : t == "revolve" ? MOD_REVOLVE : t == "rotate" ? MOD_ROTATE : MOD_MIRROR;
+  m.type = t == "repeat" ? MOD_REPEAT : t == "extrude" ? MOD_EXTRUDE : t == "revolve" ? MOD_REVOLVE : (t == "radial" || t == "rotate") ? MOD_RADIAL : MOD_MIRROR;
   m.axis = std::clamp(mj.value("axis", m.type == MOD_REVOLVE ? -1 : 0), -1, 3);
   if (m.type != MOD_REVOLVE && m.axis < 0) m.axis = 0;
   m.spacing = mj.value("spacing", 3.0);
@@ -252,17 +376,28 @@ static Modifier jMod(const json& mj) {
   m.radius = mj.value("radius", 0.0);
   m.i = std::clamp(mj.value("i", 0), 0, 3);
   m.j = std::clamp(mj.value("j", 1), 0, 3);
-  m.angle = mj.value("angle", 45.0);
+  m.angle = mj.value("angle", 60.0);
+  m.offset = std::max(0.0, mj.value("offset", 0.0));
+  m.startAngle = mj.value("startAngle", 0.0);
+  if (t == "rotate") {  // the removed Rotate modifier: one radial copy at its angle (same shape)
+    m.count = 1;
+    m.radius = 0;
+    m.startAngle = mj.value("angle", 45.0);
+    m.angle = 60;
+  }
+  if (m.type == MOD_RADIAL) m.count = std::max(1, m.count);
   return m;
 }
 
 static json nodeJ(const Node& n) {
-  json j = {{"id", n.id}, {"name", n.name}, {"kind", n.isLeaf() ? "leaf" : "group"},
+  json j = {{"id", n.id}, {"name", n.name}, {"kind", n.isLeaf() ? "leaf" : n.isCamera() ? "camera" : "group"},
             {"xf", {{"pos", v4j(n.xf.pos)}, {"rotm", m4j(n.xf.rot)}, {"scale", n.xf.scale}}}};
   json mods = json::array();
   for (auto& m : n.mods) mods.push_back(modJ(m));
   j["modifiers"] = mods;
   if (n.hidden) j["hidden"] = true;
+  if (n.locked) j["locked"] = true;
+  if (!n.linkId.empty()) j["link"] = n.linkId;
   if (n.anchor) j["anchor"] = {{"world", n.anchor->world}, {"basis", m4j(n.anchor->basis)}, {"reach", n.anchor->reach}};
   if (n.isLeaf()) {
     j["prim"] = n.prim;
@@ -272,8 +407,18 @@ static json nodeJ(const Node& n) {
     if (n.shell) j["shell"] = *n.shell;
     const Material& m = n.mat;
     j["material"] = {{"emissive", m.emissive}, {"texture", TEXTURE_NAMES[m.texture]}, {"texScale", m.texScale},
-                     {"texStrength", m.texStrength}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}}};
+                     {"texStrength", m.texStrength}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}},
+                     {"roughness", m.roughness}, {"specular", m.specular}, {"transparency", m.transparency}, {"ior", m.ior},
+                     {"metallic", m.metallic}};
     if (n.isCustom()) { j["code"] = n.code; j["codeBound"] = n.codeBound; }
+    if (n.isPolytope()) {
+      const PolyParams& p = n.poly;
+      j["poly"] = {{"type", POLY_NAMES[std::clamp(p.type, 0, POLY_COUNT - 1)]}, {"size", p.size}, {"style", p.style ? "cells" : "edges"},
+                   {"width", p.width}, {"alternate", p.alternate}};
+      if (n.isHoneycomb() && p.honey >= 0 && p.honey < (int)honeycombs().size()) j["poly"]["honeycomb"] = honeycombs()[p.honey].schlafli;
+    }
+  } else if (n.isCamera()) {
+    j["camera"] = {{"fov", n.camFov}, {"slider", n.camSlider}, {"aperture", n.camAperture}, {"focus", n.camFocus}};
   } else {
     j["op"] = BOOL_OP_NAMES[(int)n.op];
     j["k"] = n.k;
@@ -294,8 +439,8 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
   if (!j.is_object()) throw std::runtime_error("Invalid node");
   Node n;
   std::string kind = j.value("kind", std::string("leaf"));
-  if (kind != "leaf" && kind != "group") throw std::runtime_error("Unknown node kind: " + kind);
-  n.kind = kind == "leaf" ? NodeKind::Leaf : NodeKind::Group;
+  if (kind != "leaf" && kind != "group" && kind != "camera") throw std::runtime_error("Unknown node kind: " + kind);
+  n.kind = kind == "leaf" ? NodeKind::Leaf : kind == "camera" ? NodeKind::Camera : NodeKind::Group;
   n.id = j.value("id", newId());
   if (j.contains("xf")) {
     auto& x = j["xf"];
@@ -313,6 +458,8 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
   // before v3, mirror/repeat were listed outermost-first: reverse to innermost-first
   if (ctx.version < 3) std::reverse(n.mods.begin(), n.mods.end());
   n.hidden = j.value("hidden", false);
+  n.locked = j.value("locked", false);
+  n.linkId = j.value("link", std::string());
   if (j.contains("anchor") && j["anchor"].is_object()) {
     Anchor a;
     a.world = j["anchor"].value("world", std::string());
@@ -335,10 +482,27 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
       n.mat.texScale = mj.value("texScale", 1.0);
       n.mat.texStrength = mj.value("texStrength", 0.7);
       if (mj.contains("color2")) for (int i = 0; i < 3; i++) n.mat.color2[i] = mj["color2"][i].get<double>();
+      n.mat.roughness = std::clamp(mj.value("roughness", 0.75), 0.0, 1.0);
+      n.mat.specular = std::clamp(mj.value("specular", 0.35), 0.0, 2.0);
+      n.mat.transparency = std::clamp(mj.value("transparency", 0.0), 0.0, 1.0);
+      n.mat.ior = std::clamp(mj.value("ior", 1.45), 1.0, 3.0);
+      n.mat.metallic = std::clamp(mj.value("metallic", 0.0), 0.0, 1.0);
     }
     if (n.prim == "custom") {
       n.code = j.value("code", std::string(DEFAULT_CUSTOM_SDF));
       n.codeBound = j.value("codeBound", 1.5);
+    } else if (n.prim == "polyhedron" || n.prim == "honeycomb") {
+      if (j.contains("poly") && j["poly"].is_object()) {
+        auto& pj = j["poly"];
+        std::string t = pj.value("type", std::string("Cube"));
+        for (int i = 0; i < POLY_COUNT; i++) if (t == POLY_NAMES[i]) n.poly.type = i;
+        n.poly.size = std::max(1e-3, pj.value("size", 1.0));
+        n.poly.style = pj.value("style", std::string("edges")) == "cells" ? 1 : 0;
+        n.poly.width = std::max(0.0, pj.value("width", 0.05));
+        n.poly.alternate = pj.value("alternate", true);
+        std::string h = pj.value("honeycomb", std::string());
+        for (size_t i = 0; i < honeycombs().size(); i++) if (h == honeycombs()[i].schlafli) n.poly.honey = (int)i;
+      }
     } else if (n.prim != "point") {
       // old primitive types become a point with the recipe as innermost modifiers
       const PrimitiveDef* def = nullptr;
@@ -351,6 +515,13 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
       if (!n.shell && def->shell != 0) n.shell = def->shell;
       n.prim = "point";
     }
+  } else if (n.isCamera()) {
+    n.name = j.value("name", std::string("Camera"));
+    auto c = j.value("camera", json::object());
+    n.camFov = std::clamp(c.value("fov", 60.0), 5.0, 170.0);
+    n.camSlider = std::clamp(c.value("slider", 3), 0, 3);
+    n.camAperture = std::max(0.0, c.value("aperture", 0.0));
+    n.camFocus = std::max(0.01, c.value("focus", 5.0));
   } else {
     std::string op = j.value("op", std::string("union"));
     for (int i = 0; i < 6; i++) if (op == BOOL_OP_NAMES[i]) n.op = (BoolOp)i;
@@ -361,11 +532,180 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
   return n;
 }
 
-std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam) {
+static json camJ(const CameraState& c) {
+  return {{"target", v4j(c.target)}, {"distance", c.distance}, {"yaw", c.yaw}, {"pitch", c.pitch}, {"rot4", m4j(c.rot4)}, {"slider", c.slider}};
+}
+static CameraState jCam(const json& c) {
+  CameraState cs;
+  cs.target = jv4(c.value("target", json::array()));
+  cs.distance = c.value("distance", 8.0);
+  cs.yaw = c.value("yaw", 0.6);
+  cs.pitch = c.value("pitch", -0.35);
+  cs.rot4 = orthonormalize(jm4(c.value("rot4", json::array())));
+  cs.slider = std::clamp(c.value("slider", 3), 0, 3);
+  return cs;
+}
+static json marksJ(const std::vector<CameraBookmark>& b) {
+  json a = json::array();
+  for (auto& m : b) {
+    json o = {{"name", m.name}, {"camera", camJ(m.cam)}};
+    if (m.geo) o["geo"] = {{"pivot", v4j(m.geoPivot)}, {"frame", m4j(m.geoFrame)}};
+    a.push_back(o);
+  }
+  return a;
+}
+static std::vector<CameraBookmark> jMarks(const json& a) {
+  std::vector<CameraBookmark> out;
+  if (!a.is_array()) return out;
+  for (auto& o : a) {
+    if (!o.is_object()) continue;
+    CameraBookmark m;
+    m.name = o.value("name", std::string("View"));
+    if (o.contains("camera") && o["camera"].is_object()) m.cam = jCam(o["camera"]);
+    if (o.contains("geo") && o["geo"].is_object()) {
+      m.geo = true;
+      m.geoPivot = jv4(o["geo"].value("pivot", json::array()));
+      m.geoFrame = orthonormalize(jm4(o["geo"].value("frame", json::array())));
+    }
+    out.push_back(m);
+  }
+  return out;
+}
+std::string bookmarksToJson(const std::vector<CameraBookmark>& b) { return marksJ(b).dump(); }
+std::vector<CameraBookmark> bookmarksFromJson(const std::string& text) {
+  try { return jMarks(json::parse(text)); } catch (...) { return {}; }
+}
+
+static json lightsJ(const std::vector<PointLight>& l) {
+  json a = json::array();
+  for (auto& x : l)
+    a.push_back({{"id", x.id}, {"name", x.name}, {"pos", v4j(x.pos)}, {"color", {x.color[0], x.color[1], x.color[2]}}, {"intensity", x.intensity},
+                 {"range", x.range}, {"shadows", x.shadows}, {"enabled", x.enabled}});
+  return a;
+}
+static std::vector<PointLight> jLights(const json& a) {
+  std::vector<PointLight> out;
+  if (!a.is_array()) return out;
+  for (auto& o : a) {
+    if (!o.is_object()) continue;
+    PointLight l;
+    l.id = o.value("id", std::string());
+    if (l.id.empty()) l.id = newId("l");
+    l.name = o.value("name", std::string("Light"));
+    l.pos = jv4(o.value("pos", json::array()));
+    if (o.contains("color") && o["color"].is_array() && o["color"].size() == 3) for (int i = 0; i < 3; i++) l.color[i] = o["color"][i].get<double>();
+    l.intensity = std::max(0.0, o.value("intensity", 1.5));
+    l.range = std::max(0.01, o.value("range", 10.0));
+    l.shadows = o.value("shadows", true);
+    l.enabled = o.value("enabled", true);
+    out.push_back(l);
+  }
+  return out;
+}
+std::string lightsToJson(const std::vector<PointLight>& l) { return lightsJ(l).dump(); }
+std::vector<PointLight> lightsFromJson(const std::string& text) {
+  try { return jLights(json::parse(text)); } catch (...) { return {}; }
+}
+
+std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam,
+                        const std::vector<CameraBookmark>* bookmarks, const std::vector<PointLight>* lights,
+                        const std::string& activeCamera, const std::string* animationJson, const Space* space,
+                        const CurvedCamState* curvedCam) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   j["world"] = world.empty() ? json(nullptr) : json(world);
-  if (cam) j["camera"] = {{"target", v4j(cam->target)}, {"distance", cam->distance}, {"yaw", cam->yaw}, {"pitch", cam->pitch}, {"rot4", m4j(cam->rot4)}};
+  if (cam) j["camera"] = camJ(*cam);
+  if (bookmarks && !bookmarks->empty()) j["bookmarks"] = marksJ(*bookmarks);
+  if (!activeCamera.empty()) j["activeCamera"] = activeCamera;
+  if (animationJson && !animationJson->empty()) {
+    try { j["animation"] = json::parse(*animationJson); } catch (...) {}
+  }
+  if (lights && !lights->empty()) j["lights"] = lightsJ(*lights);
+  if (space && space->curved()) j["space"] = {{"type", SPACE_IDS[(int)space->kind]}, {"radius", space->radius}};
+  if (space && space->curved() && curvedCam) j["curvedCamera"] = {{"iso", std::vector<double>(curvedCam->iso.begin(), curvedCam->iso.end())}, {"distance", curvedCam->distance}};
   return j.dump(2);
+}
+
+// ============================================================ linked duplicates
+static void stripForDefinition(json& j, bool top) {
+  j.erase("id");
+  j.erase("link");
+  if (top) { j.erase("xf"); j.erase("name"); j.erase("hidden"); j.erase("locked"); j.erase("anchor"); }
+  if (j.contains("children")) for (auto& c : j["children"]) stripForDefinition(c, false);
+}
+std::string linkDefinition(const Node& n) {
+  json j = nodeJ(n);
+  stripForDefinition(j, true);
+  return j.dump();
+}
+
+static void copyDef(Node& d, const Node& s, bool top) {
+  if (!top) { d.xf = s.xf; d.name = s.name; d.hidden = s.hidden; d.locked = s.locked; d.anchor = s.anchor; }
+  d.kind = s.kind;
+  d.mods = s.mods;
+  d.prim = s.prim; d.color = s.color; d.thickness = s.thickness; d.round = s.round; d.shell = s.shell;
+  d.mat = s.mat; d.code = s.code; d.codeBound = s.codeBound; d.poly = s.poly;
+  d.op = s.op; d.k = s.k;
+  bool same = d.children.size() == s.children.size();
+  for (size_t i = 0; same && i < s.children.size(); i++) same = d.children[i].kind == s.children[i].kind;
+  if (same) for (size_t i = 0; i < s.children.size(); i++) copyDef(d.children[i], s.children[i], false);
+  else {  // structure changed: fresh copies (new ids, but nested links are kept)
+    d.children.clear();
+    for (auto& c : s.children) d.children.push_back(cloneFresh(c));
+  }
+}
+void copyDefinition(Node& dst, const Node& src) { copyDef(dst, src, true); }
+
+static std::map<std::string, std::vector<Node*>> linkGroups(Node& root) {
+  std::map<std::string, std::vector<Node*>> g;
+  walk(root, [&](Node& n, Node*, int) { if (!n.linkId.empty()) g[n.linkId].push_back(&n); });
+  return g;
+}
+
+void recordLinks(Node& root, std::map<std::string, std::string>& defs) {
+  defs.clear();
+  // inconsistent files (edited by hand): the first member defines the shared part
+  for (int pass = 0; pass < 8; pass++) {
+    bool changed = false;
+    for (auto& [id, members] : linkGroups(root)) {
+      std::string d0 = linkDefinition(*members[0]);
+      for (size_t i = 1; i < members.size() && !changed; i++)
+        if (!isAncestor(root, members[0]->id, members[i]->id) && !isAncestor(root, members[i]->id, members[0]->id) &&
+            linkDefinition(*members[i]) != d0) { copyDefinition(*members[i], *members[0]); changed = true; }
+      if (changed) break;
+    }
+    if (!changed) break;
+  }
+  for (auto& [id, members] : linkGroups(root)) defs[id] = linkDefinition(*members[0]);
+}
+
+bool syncLinks(Node& root, std::map<std::string, std::string>& defs) {
+  bool changed = false;
+  // a definition change can resize a parent's children (and move nodes), so re-scan after each copy
+  for (int pass = 0; pass < 8; pass++) {
+    bool again = false;
+    for (auto& [id, members] : linkGroups(root)) {
+      // a member inside another member of the same link would make the definition recursive: unlink it
+      bool nested = false;
+      for (Node* a : members)
+        for (Node* b : members)
+          if (a != b && isAncestor(root, a->id, b->id)) { b->linkId.clear(); nested = true; }
+      if (nested) { changed = true; again = true; break; }
+      if (members.size() < 2) { defs[id] = linkDefinition(*members[0]); continue; }
+      auto it = defs.find(id);
+      Node* src = nullptr;
+      std::string srcDef;
+      for (Node* m : members) {
+        std::string d = linkDefinition(*m);
+        if (it == defs.end() || d != it->second) { src = m; srcDef = d; break; }
+      }
+      if (!src) continue;
+      for (Node* m : members) if (m != src && linkDefinition(*m) != srcDef) { copyDefinition(*m, *src); changed = true; again = true; }
+      defs[id] = srcDef;
+      if (again) break;  // pointers may be stale now
+    }
+    if (!again) break;
+  }
+  return changed;
 }
 
 SceneFile sceneFromJson(const std::string& text) {
@@ -387,7 +727,25 @@ SceneFile sceneFromJson(const std::string& text) {
     cs.yaw = c.value("yaw", 0.6);
     cs.pitch = c.value("pitch", -0.35);
     cs.rot4 = orthonormalize(jm4(c.value("rot4", json::array())));
+    cs.slider = std::clamp(c.value("slider", 3), 0, 3);
     f.camera = cs;
+  }
+  if (j.contains("bookmarks")) f.bookmarks = jMarks(j["bookmarks"]);
+  f.activeCamera = j.value("activeCamera", std::string());
+  if (j.contains("animation") && j["animation"].is_object()) f.animation = j["animation"].dump();
+  if (j.contains("lights")) f.lights = jLights(j["lights"]);
+  if (j.contains("space") && j["space"].is_object()) {
+    std::string t = j["space"].value("type", std::string("flat"));
+    for (int i = 0; i < 3; i++) if (t == SPACE_IDS[i]) f.space.kind = (SpaceKind)i;
+    f.space.radius = std::max(0.05, j["space"].value("radius", 8.0));
+  }
+  if (f.space.curved() && j.contains("curvedCamera") && j["curvedCamera"].is_object()) {
+    CurvedCamState c;
+    auto& o = j["curvedCamera"];
+    c.iso = jm4(o.value("iso", json::array()));
+    c.distance = o.value("distance", 8.0);
+    c.iso = cs::renorm(f.space.k(), c.iso);
+    f.curvedCam = c;
   }
   return f;
 }
@@ -490,6 +848,29 @@ std::vector<LibraryFolder> builtinFolders() {
     o.node = nodeFromPrimitive(p, p.name);
     out[d <= 2 ? 0 : d == 3 ? 1 : 2].objects.push_back(o);
   }
+  // regular polyhedra with flat faces, and the regular honeycombs (tilings of the whole space)
+  LibraryFolder poly{"builtin-poly", "Polyhedra & tilings", true, {}};
+  for (int t = 0; t < POLY_COUNT; t++) {
+    LibraryObject o;
+    o.id = std::string("builtin-poly-") + POLY_NAMES[t];
+    o.name = POLY_NAMES[t];
+    o.node = makeLeaf("polyhedron", POLY_NAMES[t]);
+    o.node.poly.type = t;
+    o.node.poly.size = 0.7;
+    poly.objects.push_back(o);
+  }
+  {
+    LibraryObject o;
+    o.id = "builtin-honeycomb";
+    o.name = "Honeycomb (tiling)";
+    o.node = makeLeaf("honeycomb", "Honeycomb");
+    o.node.poly.honey = 0;
+    o.node.poly.size = 1.5;
+    o.node.color = {0.85, 0.75, 0.55};
+    o.node.mat.color2 = {0.35, 0.55, 0.85};
+    poly.objects.push_back(o);
+  }
+  out.push_back(poly);
   return out;
 }
 

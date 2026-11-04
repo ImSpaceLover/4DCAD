@@ -54,6 +54,16 @@ typedef std::ptrdiff_t GLsizeiptr;
 #define GL_SCISSOR_TEST 0x0C11
 #define GL_DEPTH_TEST 0x0B71
 #define GL_BLEND 0x0BE2
+#define GL_UNIFORM_BUFFER 0x8A11
+#define GL_RGBA16F 0x881A
+#define GL_HALF_FLOAT 0x140B
+#define GL_CONSTANT_ALPHA 0x8003
+#define GL_ONE_MINUS_CONSTANT_ALPHA 0x8004
+#define GL_DYNAMIC_DRAW 0x88E8
+#define GL_RGBA32F 0x8814
+#define GL_TEXTURE1 0x84C1
+#define GL_MAX_TEXTURE_SIZE 0x0D33
+#define GL_INVALID_INDEX 0xFFFFFFFFu
 
 #define FD_GL_FUNCS(X)                                                                                  \
   X(GLuint, CreateShader, (GLenum))                                                                     \
@@ -103,7 +113,16 @@ typedef std::ptrdiff_t GLsizeiptr;
   X(void, ReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*))                          \
   X(void, PixelStorei, (GLenum, GLint))                                                                 \
   X(void, Finish, (void))                                                                               \
-  X(const GLubyte*, GetString, (GLenum))
+  X(const GLubyte*, GetString, (GLenum))                                                                \
+  X(void, BindBufferBase, (GLenum, GLuint, GLuint))                                                     \
+  X(GLuint, GetUniformBlockIndex, (GLuint, const GLchar*))                                              \
+  X(void, UniformBlockBinding, (GLuint, GLuint, GLuint))                                                \
+  X(void, DeleteBuffers, (GLsizei, const GLuint*))                                                      \
+  X(void, DeleteVertexArrays, (GLsizei, const GLuint*))                                                 \
+  X(void, GetIntegerv, (GLenum, GLint*))                                                                \
+  X(void, Enable, (GLenum))                                                                             \
+  X(void, BlendFunc, (GLenum, GLenum))                                                                  \
+  X(void, BlendColor, (GLfloat, GLfloat, GLfloat, GLfloat))
 
 namespace gl {
 #define FD_DECL(ret, name, args) typedef ret(FD_APIENTRY* PFN_##name) args; extern PFN_##name name;
