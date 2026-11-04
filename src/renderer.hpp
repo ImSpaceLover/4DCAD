@@ -33,6 +33,7 @@ struct LightParam {
   std::array<float, 3> color;
   float range = 10;
   bool shadows = true;
+  bool emissive = false;  // an emissive object's light: casts shadows even when point-light shadows are off
 };
 
 struct FrameParams {

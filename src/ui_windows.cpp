@@ -86,6 +86,7 @@ void UI::qualityWindow() {
       Ff("Light W", q.lightW, -1, 1, "%.2f", "Component of the light direction along the 4th axis");
       Ff("Sun intensity", q.sunIntensity, 0, 3);
       ImGui::Checkbox("Point light shadows", &q.pointShadows);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Without shadows, lights shine through walls (emissive objects' lights always cast shadows)");
       ImGui::Checkbox("Emissive objects light the scene", &q.emissiveLights);
       ImGui::SliderInt("Bounces", &q.transparentLayers, 0, 6);
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflections / refractions followed per pixel (0 = mirrors and glass off)");
@@ -125,6 +126,7 @@ void UI::qualityWindow() {
         ImGui::Checkbox("Sun shadows##fast", &f.shadows);
         ImGui::BeginDisabled(!f.pointLights);
         ImGui::Checkbox("Point light shadows##fast", &f.pointShadows);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Without shadows, lights shine through walls (emissive objects' lights always cast shadows)");
         ImGui::EndDisabled();
         ImGui::SameLine(160);
         ImGui::Checkbox("Ambient occlusion##fast", &f.ao);

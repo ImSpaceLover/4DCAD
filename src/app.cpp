@@ -1765,6 +1765,7 @@ std::vector<LightParam> App::frameLights() {
       for (int i = 0; i < 3; i++) p.color[i] = (float)(n.color[i] * k);
       p.range = (float)std::max(1.5, r * 6);
       p.shadows = true;  // fine although the light sits inside the object: shadow rays ignore emissive objects
+      p.emissive = true;
       em.push_back({n.mat.emissive * (n.color[0] + n.color[1] + n.color[2]), p});
     });
     std::sort(em.begin(), em.end(), [](auto& a, auto& b) { return a.first > b.first; });

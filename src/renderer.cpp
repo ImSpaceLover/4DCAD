@@ -102,7 +102,8 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
     if (nl >= MAX_LIGHTS || !fp.prof.pointLights) break;
     put4(u.lpos[nl], l.pos);
     put3(u.lcol[nl], l.color, l.range);
-    if (l.shadows && fp.prof.pointShadows) mask |= 1 << nl;
+    // emissive objects' lights always cast shadows (they are what would shine through walls)
+    if (l.shadows && (fp.prof.pointShadows || l.emissive)) mask |= 1 << nl;
     nl++;
   }
   // debug ray: resampled to at most MAX_DEBUG_PTS points
