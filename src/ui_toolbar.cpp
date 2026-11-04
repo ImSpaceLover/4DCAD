@@ -91,6 +91,14 @@ void UI::menuBar() {
     ImGui::MenuItem("Settings...", nullptr, &showQuality_);
     ImGui::EndMenu();
   }
+  if (ImGui::BeginMenu("Render")) {
+    std::string k1 = app.keys.text(Action::RenderImage), k2 = app.keys.text(Action::RenderAnimation);
+    if (ImGui::MenuItem("Render image", k1.c_str(), false, !app.job.active)) startRender(false);
+    if (ImGui::MenuItem("Render animation", k2.c_str(), false, !app.job.active)) startRender(true);
+    ImGui::Separator();
+    ImGui::MenuItem("Render window...", nullptr, &showRender_);
+    ImGui::EndMenu();
+  }
   if (ImGui::MenuItem("Help")) showHelp_ = !showHelp_;
   ImGui::EndMainMenuBar();
 }

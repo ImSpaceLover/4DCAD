@@ -117,6 +117,53 @@ class App {
   bool showLights = false;              // Lights window
   double fps = 0, now = 0;
 
+  // --- offline renders (Render window; render_job.cpp) ---
+  struct RenderSettings {
+    int width = 1280, height = 720;
+    int aa = 2;        // supersampling factor (1..3)
+    int samples = 32;  // stochastic samples per pixel (1 = plain render)
+    int stillFormat = 0;  // STILL_FORMATS
+    int animFormat = 0;   // ANIM_FORMATS
+    std::string stillPath, animPath;  // "" = next to the scene file
+    bool sceneRange = true;           // frame range and fps from the timeline
+    int start = 1, end = 120;
+    double fps = 24;
+    int jpegQuality = 92;
+    std::string ffmpeg = "ffmpeg";
+  };
+  static constexpr const char* STILL_FORMATS[2] = {"PNG", "JPEG"};
+  static constexpr const char* ANIM_FORMATS[5] = {"GIF", "AVI (Motion JPEG)", "PNG sequence", "MP4 (H.264, ffmpeg)", "WebM (VP9, ffmpeg)"};
+  RenderSettings renderSet;
+  struct RenderJob {
+    bool active = false, animation = false, finished = false;
+    int first = 1, last = 1, frame = 1, sample = 0, samples = 1, aa = 1, w = 0, h = 0;
+    bool prepared = false;
+    RenderTarget rt;                    // the supersampled image being refined (also the preview)
+    std::unique_ptr<FrameWriter> writer;
+    std::string path, error;
+    double started = 0, fps = 24, seconds = 0;
+    bool usedCamera = false;
+    // what is rendered (snapshot at the start: editing meanwhile does not change the render)
+    Node sceneRoot, frameRoot;
+    std::vector<PointLight> sceneLights;
+    Animation sceneAnim;
+    std::string camera, world;
+    QualitySettings quality;
+    FrameParams fp;
+  };
+  RenderJob job;
+  /** Starts rendering a still image or the animation (from the active camera). */
+  bool startRender(bool animation, std::string& err);
+  /** Renders for about `budget` seconds (called every frame while a job runs). */
+  void renderStep(double budget);
+  void cancelRender();
+  /** 0..1 */
+  double renderProgress() const;
+  /** The output path a render would use (the chosen one, or next to the scene file; extension = format). */
+  std::string renderPath(bool animation) const;
+  /** The main settings as a render profile (what the viewport draws when idle). */
+  RenderProfile mainProfile() const;
+
   // --- lifecycle ---
   void init(std::unique_ptr<Renderer> r);
   void loadScene(SceneFile f);
@@ -255,6 +302,8 @@ class App {
   bool debugFrozen = false;  // keep the current debug ray instead of re-tracing it from the view
   RayTrace debugTrace;       // the debug ray (traced from the eye along the view direction)
   void renderFrame();
+  void prepareJobFrame();
+  void finishJobFrame();
   View thumbnailView();
   double sliceW() { return editCam.sliceW(); }
   void setSliceW(double w) { editCam.setSliceW(w); }

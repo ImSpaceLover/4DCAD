@@ -28,6 +28,7 @@ void UI::frame(double dt) {
   if (showHelp_) helpWindow();
   if (showSdf_) sdfWindow();
   if (app.showLights) lightsWindow();
+  if (showRender_) renderWindow();
   pathPrompt();
   unsavedPrompt();
   recoveryPrompt();
@@ -80,6 +81,7 @@ void UI::onKey(int key, int action, int mods) {
   if (P(Action::New)) { guarded([this] { app.newScene(); }); return; }
   if (P(Action::Copy)) { copy(); return; }
   if (P(Action::Paste)) { paste(); return; }
+  if (P(Action::RenderImage) || P(Action::RenderAnimation)) { startRender(P(Action::RenderAnimation)); return; }
   app.handleKey(key, shift, ctrl, alt);
 }
 

@@ -1524,6 +1524,21 @@ View App::thumbnailView() {
   return cam.view();
 }
 
+RenderProfile App::mainProfile() const {
+  const QualitySettings& q = quality;
+  RenderProfile prof;
+  prof.resolution = q.resolutionScale;
+  prof.maxSteps = q.maxSteps;
+  prof.bounces = q.transparentLayers;
+  prof.textures = prof.specular = prof.pointLights = true;
+  prof.shadows = q.shadows;
+  prof.pointShadows = q.pointShadows;
+  prof.ao = q.ao;
+  prof.aoSamples = 5;
+  prof.shadowSteps = 64;
+  return prof;
+}
+
 void App::renderFrame() {
   if (!renderer) return;
   View v = currentView();
@@ -1535,15 +1550,8 @@ void App::renderFrame() {
   RenderProfile prof;
   if (fast) prof = q.fast;
   else {
+    prof = mainProfile();
     prof.resolution = quality.resolutionScale * (moving ? quality.motionScale : 1.0f);
-    prof.maxSteps = q.maxSteps;
-    prof.bounces = q.transparentLayers;
-    prof.textures = prof.specular = prof.pointLights = true;
-    prof.shadows = q.shadows;
-    prof.pointShadows = q.pointShadows;
-    prof.ao = q.ao;
-    prof.aoSamples = 5;
-    prof.shadowSteps = 64;
   }
   float scale = std::clamp(prof.resolution, 0.1f, 2.0f);
   // progressive stochastic refinement while nothing changes (Edit mode, main settings)
@@ -1673,6 +1681,10 @@ void App::saveSettings() {
   j["explore"] = {{"fov", x.fov}, {"lookSpeed", x.lookSpeed}, {"showOwnBody", x.showOwnBody}, {"bodyRadius", x.bodyRadius},
                   {"moveSpeed", x.moveSpeed}, {"turn4Speed", x.turn4Speed}, {"collide", x.collide}, {"geoMoveSpeed", x.geoMoveSpeed},
                   {"geoCollide", x.geoCollide}};
+  const auto& o = renderSet;
+  j["output"] = {{"width", o.width}, {"height", o.height}, {"aa", o.aa}, {"samples", o.samples}, {"stillFormat", o.stillFormat},
+                 {"animFormat", o.animFormat}, {"stillPath", o.stillPath}, {"animPath", o.animPath}, {"sceneRange", o.sceneRange},
+                 {"start", o.start}, {"end", o.end}, {"fps", o.fps}, {"jpegQuality", o.jpegQuality}, {"ffmpeg", o.ffmpeg}};
   keys.toJson(j["keys"]);
   writeFile((std::filesystem::path(dataDir()) / "settings.json").string(), j.dump(2));
 }
@@ -1738,6 +1750,16 @@ void App::loadSettings() {
       get(r, "fov", x.fov); get(r, "lookSpeed", x.lookSpeed); get(r, "showOwnBody", x.showOwnBody); get(r, "bodyRadius", x.bodyRadius);
       get(r, "moveSpeed", x.moveSpeed); get(r, "turn4Speed", x.turn4Speed); get(r, "collide", x.collide); get(r, "geoMoveSpeed", x.geoMoveSpeed);
       get(r, "geoCollide", x.geoCollide);
+    }
+    if (j.contains("output")) {
+      auto& r = j["output"]; auto& o = renderSet;
+      get(r, "width", o.width); get(r, "height", o.height); get(r, "aa", o.aa); get(r, "samples", o.samples);
+      get(r, "stillFormat", o.stillFormat); get(r, "animFormat", o.animFormat); get(r, "stillPath", o.stillPath);
+      get(r, "animPath", o.animPath); get(r, "sceneRange", o.sceneRange); get(r, "start", o.start); get(r, "end", o.end);
+      get(r, "fps", o.fps); get(r, "jpegQuality", o.jpegQuality); get(r, "ffmpeg", o.ffmpeg);
+      o.stillFormat = std::clamp(o.stillFormat, 0, 1);
+      o.animFormat = std::clamp(o.animFormat, 0, 4);
+      o.aa = std::clamp(o.aa, 1, 3);
     }
     if (j.contains("keys")) keys.fromJson(j["keys"]);
   } catch (...) { /* bad settings file: keep defaults */ }

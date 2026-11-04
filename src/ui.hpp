@@ -19,7 +19,7 @@ class UI {
   void onScroll(double y) { wheel_ += y; }
   bool exitNow = false;  // set once quitting is confirmed
   void requestQuit();    // asks to save unsaved changes first
-  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
+  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
 
  private:
   App& app;
@@ -68,6 +68,11 @@ class UI {
   int captureAction_ = -1, captureSlot_ = 0;  // Settings > Keys: waiting for a key press
   void keysTab();
   void lightsWindow();
+  void renderWindow();
+  void startRender(bool animation);
+  bool showRender_ = false;
+  int ffmpegOk_ = -1;  // -1 = not checked, 0 / 1
+  std::string ffmpegChecked_;
   // timeline + graph editor (ui_timeline.cpp)
   void timelinePanel();
   void graphEditor(const std::vector<int>& trackIds, bool& changed, bool& commit);

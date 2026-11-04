@@ -12,7 +12,7 @@ namespace fd {
 
 enum class Action {
   // file / edit (Edit and Explore)
-  Undo, Redo, Save, SaveAs, Open, New, Copy, Paste,
+  Undo, Redo, Save, SaveAs, Open, New, Copy, Paste, RenderImage, RenderAnimation,
   ToggleMode, ToggleView,
   // Edit mode
   ToolSelect, ToolMove, ToolRotate, ToggleGlobal, ToggleSnap,

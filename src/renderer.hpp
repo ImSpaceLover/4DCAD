@@ -13,6 +13,7 @@
 
 #include "camera.hpp"
 #include "codegen.hpp"
+#include "media.hpp"
 #include "shaders.hpp"
 
 namespace fd {
@@ -84,6 +85,12 @@ class Renderer {
   /** OpenGL images are stored bottom-up: the UI flips their texture coordinates. */
   virtual bool flipY() const = 0;
   virtual void destroy(RenderTarget& rt) = 0;
+  /** The target's image as RGBA8, top row first (after its last render has finished). */
+  virtual bool readPixels(const RenderTarget& rt, Pixels& rgba) = 0;
+  /** Offline renders: each draw is executed at once (Vulkan; OpenGL draws immediately anyway). */
+  virtual void setImmediate(bool) {}
+  /** Waits until all drawing has finished (offline renders measure their time with it). */
+  virtual void finish() {}
   virtual const char* backendName() const = 0;
   std::string device;  // GPU / driver name
   std::string lastError;

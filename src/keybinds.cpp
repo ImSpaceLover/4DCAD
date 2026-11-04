@@ -18,6 +18,8 @@ static const ActionInfo INFO[(int)Action::Count] = {
     {"new", "New scene", "General", false},
     {"copy", "Copy", "General", false},
     {"paste", "Paste", "General", false},
+    {"renderImage", "Render image", "General", false},
+    {"renderAnimation", "Render animation", "General", false},
     {"toggleMode", "Edit / Explore", "General", false},
     {"toggleView", "Full 4D / Geodesic", "Edit", false},
     {"toolSelect", "Select tool", "Edit", false},
@@ -97,6 +99,8 @@ void KeyBindings::resetDefaults() {
   set(Action::Paste, C(GLFW_KEY_V));
   set(Action::ToggleMode, K(GLFW_KEY_TAB));
   set(Action::ToggleView, K(GLFW_KEY_V));
+  set(Action::RenderImage, K(GLFW_KEY_F12));
+  set(Action::RenderAnimation, C(GLFW_KEY_F12));
   set(Action::ToolSelect, K(GLFW_KEY_Q));
   set(Action::ToolMove, K(GLFW_KEY_W));
   set(Action::ToolRotate, K(GLFW_KEY_E));

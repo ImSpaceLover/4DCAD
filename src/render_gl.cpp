@@ -67,6 +67,22 @@ class GLRenderer : public Renderer {
   uint64_t texture(const RenderTarget& rt) override { return rt.id >= 0 ? targets_[rt.id].tex : 0; }
   bool flipY() const override { return true; }
   const char* backendName() const override { return "OpenGL"; }
+  void finish() override { gl::Finish(); }
+  bool readPixels(const RenderTarget& rt, Pixels& out) override {
+    if (rt.id < 0 || rt.id >= (int)targets_.size() || !targets_[rt.id].fbo) return false;
+    GLTarget& t = targets_[rt.id];
+    std::vector<float> f((size_t)t.w * t.h * 4);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+    gl::PixelStorei(GL_PACK_ALIGNMENT, 1);
+    gl::ReadPixels(0, 0, t.w, t.h, GL_RGBA, GL_FLOAT, f.data());
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+    out.resize(f.size());
+    for (int y = 0; y < t.h; y++)  // OpenGL rows are bottom-up
+      for (int i = 0; i < t.w * 4; i++)
+        out[(size_t)y * t.w * 4 + i] = (uint8_t)std::lround(std::clamp(f[(size_t)(t.h - 1 - y) * t.w * 4 + i], 0.f, 1.f) * 255);
+    return true;
+  }
+
   void destroy(RenderTarget& rt) override {
     if (rt.id < 0) return;
     GLTarget& t = targets_[rt.id];
