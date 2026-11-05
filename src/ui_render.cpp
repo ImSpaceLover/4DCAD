@@ -141,6 +141,14 @@ void UI::renderWindow() {
     ImGui::SetTooltip("Stochastic samples per pixel: soft shadows, rough reflections, glass\n"
                       "(reflect or refract at random), depth of field. 1 = the plain image.");
   ImGui::TextDisabled("Quality (steps, bounces, shadows, AO): Settings > Rendering");
+  ImGui::EndDisabled();
+  // priority can change while rendering
+  if (ImGui::Combo("Priority", &r.priority, App::PRIORITY_NAMES, 3)) changed = true;
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("How much of each frame goes to rendering (%g / %g / %g ms), in small tiles.\n"
+                      "Low keeps the app and the PC smooth (the viewport is paused while rendering);\nHigh renders fastest.",
+                      App::RENDER_BUDGET_MS[0], App::RENDER_BUDGET_MS[1], App::RENDER_BUDGET_MS[2]);
+  ImGui::BeginDisabled(busy);
 
   // --- still
   ImGui::SeparatorText("Still image");

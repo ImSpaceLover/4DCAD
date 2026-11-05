@@ -9,6 +9,7 @@
 #include "examples.hpp"
 #include "filedialog.hpp"
 #include "imgui.h"
+#include "imgui_internal.h"  // DockBuilder (default layout)
 #include "ui.hpp"
 
 namespace fd {

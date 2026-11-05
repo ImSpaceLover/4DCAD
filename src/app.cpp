@@ -171,11 +171,16 @@ void App::applyAnim() {
     for (auto& t : anim.tracks)
       if (t.target == "scene" && t.path == "space.radius" && !t.keys.empty()) space.radius = std::max(0.2, evalTrack(t, anim.frame));
   rebuild();
+  // objects with surface motion: placed from their rest pose by travel / heading / spin
+  bool surf = false;
+  walk(root, [&](Node& n, Node*, int) { if (n.anchor && n.anchor->hasRest) { applySurfacePose(n); surf = true; } });
+  if (surf) rebuild();
   // objects / cameras on a world surface: the interpolated point is put back on the surface and
   // their frame re-aligned to it (so they travel along the surface between keys)
   if (world.empty() || !ev) return;
   std::unordered_set<std::string> moved;
   for (auto& t : anim.tracks) if (t.path == "rot" || t.path.rfind("pos.", 0) == 0) moved.insert(t.target);
+  walk(root, [&](Node& n, Node*, int) { if (n.anchor && n.anchor->hasRest) moved.erase(n.id); });  // (placed above)
   bool any = false;
   auto f = field();
   for (auto& id : moved) {
@@ -227,7 +232,11 @@ void App::tickAnimation(double dt) {
 void App::insertKeys(bool transformOnly) {
   double fr = std::round(anim.frame);
   int n = 0;
-  for (auto& id : selection) if (Node* nd = findNode(root, id); nd && id != root.id) { keyNode(anim, *nd, fr, transformOnly); n++; }
+  for (auto& id : selection)
+    if (Node* nd = findNode(root, id); nd && id != root.id) {
+      keyNode(anim, *nd, fr, transformOnly);  // (attached objects with surface motion key Travel / Heading / Spin)
+      n++;
+    }
   if (n) commit();
   else toast("Select objects to key them", true);
 }
@@ -242,6 +251,7 @@ void App::deleteKeys() {
 void App::toggleValueKey(const std::string& target, const std::string& path) {
   double fr = std::round(anim.frame);
   if (hasKeyAt(anim, target, path, fr)) { deleteKey(anim, target, path, fr); commit(); return; }
+  if (path.rfind("surf.", 0) == 0) if (Node* n = findNode(root, target)) ensureRest(*n);
   if (target == "scene") { if (path == "space.radius") setKey(anim, target, path, fr, space.radius); }
   else if (target.rfind("light:", 0) == 0) {
     for (auto& l : lights) if ("light:" + l.id == target) { double v; if (getLightValue(l, path, v)) setKey(anim, target, path, fr, v); }
@@ -367,6 +377,82 @@ void App::rebuild() {
     walk(viewRoot_, [&](Node& m, Node*, int) { if (!keep.count(m.id)) m.hidden = true; });
   }
   ev = std::make_unique<SceneEvaluator>(isolate.empty() ? root : viewRoot_, reg, world, space);
+  updateFollowPaths();
+}
+
+// ============================================================ objects on world surfaces
+void App::ensureRest(Node& n) {
+  if (!n.anchor || n.anchor->hasRest) return;
+  Anchor& a = *n.anchor;
+  a.hasRest = true;
+  a.restPos = n.xf.pos;
+  a.restFrame = mul(a.basis, n.xf.rot);
+  a.travel = a.heading = a.spin = 0;
+}
+
+void App::applySurfacePose(Node& n) {
+  if (!n.anchor || !n.anchor->hasRest || !ev || !findNode(root, n.anchor->world)) return;
+  Anchor& a = *n.anchor;
+  auto f = worldField(*ev, a.world);
+  // turn by heading (about local Y), walk travel along local X (geodesic, frame carried), roll by spin
+  M4 F0 = rotateFrame(a.restFrame, 0, 2, a.heading * PI / 180);
+  auto r = std::abs(a.travel) > 1e-12 ? shoot(f, a.restPos, F0, {1, 0, 0}, a.travel, quality.geoMaxStep * 0.5) : GeoResult{a.restPos, F0};
+  M4 F = rotateFrame(r.frame, 1, 2, a.spin * PI / 180);
+  n.xf.pos = r.pos;
+  a.basis = F;
+  n.xf.rot = identity();
+  a.reach = curvatureRadius(f, r.pos, F);
+}
+
+void App::setRestFromPose(Node& n) {
+  if (!n.anchor || !n.anchor->hasRest || !ev || !findNode(root, n.anchor->world)) return;
+  Anchor& a = *n.anchor;
+  auto f = worldField(*ev, a.world);
+  M4 F1 = rotateFrame(mul(a.basis, n.xf.rot), 1, 2, -a.spin * PI / 180);
+  auto r = std::abs(a.travel) > 1e-12 ? shoot(f, n.xf.pos, F1, {1, 0, 0}, -a.travel, quality.geoMaxStep * 0.5) : GeoResult{n.xf.pos, F1};
+  a.restPos = r.pos;
+  a.restFrame = rotateFrame(r.frame, 0, 2, -a.heading * PI / 180);
+}
+
+void App::updateFollowPaths() {
+  // the geodesic through each follow-surface object's anchor along its local X, with the object's
+  // frame carried along it: NPATH + 1 samples over the object's length (packNodes / the evaluator)
+  if (!ev || space.curved()) return;
+  bool any = false;
+  walk(root, [&](Node& n, Node*, int) { if (n.anchor && n.anchor->follow) any = true; });
+  if (!any) return;
+  auto bounds = computeBounds(root, reg);
+  auto fill = [&](Node& n) {
+    Anchor& a = *n.anchor;
+    a.path.clear();
+    if (!a.follow || !findNode(root, a.world)) return;
+    auto f = worldField(*ev, a.world);
+    auto b = bounds.find(n.id);
+    double len = b != bounds.end() && std::isfinite(b->second.r) ? std::max(0.2, (b->second.r - 0.1) / 1.5 * 1.1) : 5.0;
+    double ds = 2 * len / NPATH, step = quality.geoMaxStep * 0.5;
+    M4 F = mul(a.basis, n.xf.rot);
+    std::vector<Anchor::PathPt> pts(NPATH + 1);
+    auto put = [&](int k, const V4& p, const M4& fr) { pts[k] = {p, col(fr, 1), col(fr, 2), col(fr, 3)}; };
+    int mid = NPATH / 2;
+    put(mid, n.xf.pos, F);
+    for (int dirn : {1, -1}) {
+      V4 p = n.xf.pos;
+      M4 fr = F;
+      for (int k = 1; k <= mid; k++) {
+        auto r = shoot(f, p, fr, {1, 0, 0}, dirn * ds, step);
+        p = r.pos;
+        fr = r.frame;
+        put(mid + dirn * k, p, fr);
+      }
+    }
+    a.path = pts;
+    a.pathLen = len;
+  };
+  walk(root, [&](Node& n, Node*, int) { if (n.anchor) fill(n); });
+  if (!isolate.empty())  // the drawn copy gets the same paths
+    walk(viewRoot_, [&](Node& m, Node*, int) {
+      if (Node* o = m.anchor ? findNode(root, m.id) : nullptr; o && o->anchor) { m.anchor->path = o->anchor->path; m.anchor->pathLen = o->anchor->pathLen; }
+    });
 }
 
 void App::commit() {
@@ -1084,6 +1170,7 @@ void App::translateNodes(const std::vector<std::string>& ids, const V4& delta) {
       n->xf.pos = r.pos;
       n->anchor->basis = r.frame;
       n->anchor->reach = curvatureRadius(f, r.pos, r.frame);
+      setRestFromPose(*n);  // with surface motion: the whole motion moves along
     } else {
       double s;
       M4 pr = parentWorldRotation(id, &s);
@@ -1126,6 +1213,7 @@ void App::rotateNodes(const std::vector<std::string>& ids, const M4& q) {
     if (n->anchor) {
       const M4& b = n->anchor->basis;
       n->xf.rot = orthonormalize(mul(mul(mul(transpose(b), local), b), n->xf.rot));
+      setRestFromPose(*n);
     } else n->xf.rot = orthonormalize(mul(local, n->xf.rot));
   }
 }
@@ -1765,6 +1853,7 @@ std::vector<LightParam> App::frameLights() {
       for (int i = 0; i < 3; i++) p.color[i] = (float)(n.color[i] * k);
       p.range = (float)std::max(1.5, r * 6);
       p.shadows = true;  // fine although the light sits inside the object: shadow rays ignore emissive objects
+      p.emissive = true;
       em.push_back({n.mat.emissive * (n.color[0] + n.color[1] + n.color[2]), p});
     });
     std::sort(em.begin(), em.end(), [](auto& a, auto& b) { return a.first > b.first; });
@@ -1849,6 +1938,7 @@ RenderProfile App::mainProfile() const {
 
 void App::renderFrame() {
   if (!renderer) return;
+  if (job.active) return;  // an image / video is rendering: the viewport keeps its last picture
   View v = currentView();
   bool interacting = drag_ != Drag::None && drag_ != Drag::Click;
   bool moving = (now - lastChange_) < 0.25 || interacting || modal != Modal::None || mode == Mode::Explore;
@@ -2003,7 +2093,7 @@ nlohmann::json qualityToJson(const QualitySettings& q) {
                       {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}, {"sunIntensity", q.sunIntensity},
                       {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
                       {"relaxedMarching", q.relaxedMarching}, {"fastWhileMovingInEdit", q.fastWhileMovingInEdit},
-                      {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius}};
+                      {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"frameLimit", q.frameLimit}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius}};
   const RenderProfile& f = q.fast;
   r["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
                {"specular", f.specular}, {"pointLights", f.pointLights}, {"shadows", f.shadows}, {"pointShadows", f.pointShadows},
@@ -2023,6 +2113,7 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
   getKey(r, "sunIntensity", q.sunIntensity); getKey(r, "pointShadows", q.pointShadows); getKey(r, "emissiveLights", q.emissiveLights);
   getKey(r, "transparentLayers", q.transparentLayers); getKey(r, "relaxedMarching", q.relaxedMarching);
   getKey(r, "fastWhileMovingInEdit", q.fastWhileMovingInEdit);
+  getKey(r, "frameLimit", q.frameLimit);
   getKey(r, "stochastic", q.stochastic); getKey(r, "viewportSamples", q.viewportSamples); getKey(r, "sunSize", q.sunSize); getKey(r, "lightRadius", q.lightRadius);
   auto& f = q.fast;
   if (r.contains("fast") && r["fast"].is_object()) {
@@ -2044,7 +2135,7 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
 nlohmann::json outputToJson(const App::RenderSettings& o, bool paths) {
   nlohmann::json j = {{"width", o.width}, {"height", o.height}, {"aa", o.aa}, {"samples", o.samples}, {"stillFormat", o.stillFormat},
                       {"animFormat", o.animFormat}, {"sceneRange", o.sceneRange}, {"start", o.start}, {"end", o.end}, {"fps", o.fps},
-                      {"jpegQuality", o.jpegQuality}};
+                      {"jpegQuality", o.jpegQuality}, {"priority", o.priority}};
   if (paths) { j["stillPath"] = o.stillPath; j["animPath"] = o.animPath; j["ffmpeg"] = o.ffmpeg; }
   return j;
 }
@@ -2055,6 +2146,8 @@ void outputFromJson(const nlohmann::json& r, App::RenderSettings& o) {
   getKey(r, "stillFormat", o.stillFormat); getKey(r, "animFormat", o.animFormat); getKey(r, "stillPath", o.stillPath);
   getKey(r, "animPath", o.animPath); getKey(r, "sceneRange", o.sceneRange); getKey(r, "start", o.start); getKey(r, "end", o.end);
   getKey(r, "fps", o.fps); getKey(r, "jpegQuality", o.jpegQuality); getKey(r, "ffmpeg", o.ffmpeg);
+  getKey(r, "priority", o.priority);
+  o.priority = std::clamp(o.priority, 0, 2);
   o.stillFormat = std::clamp(o.stillFormat, 0, 1);
   o.animFormat = std::clamp(o.animFormat, 0, 4);
   o.aa = std::clamp(o.aa, 1, 3);

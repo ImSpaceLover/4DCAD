@@ -11,6 +11,7 @@ void UI::frame(double dt) {
   ImGuiIO& io = ImGui::GetIO();
   menuBar();
   toolbar();
+  dockSpace();
   libraryPanel();
   treePanel();
   propertiesPanel();
@@ -135,6 +136,43 @@ void UI::doFileAction(int action, const std::string& path) {
       break;
     }
   }
+}
+
+// The panels dock into a space under the toolbar: they can be resized, moved, tabbed, closed
+// (Window menu) and floated. The layout is saved in the settings folder (layout.ini).
+void UI::dockSpace() {
+  ImGuiViewport* vp = ImGui::GetMainViewport();
+  float top = ImGui::GetFrameHeight() + TOOLBAR_H;
+  ImVec2 pos = {vp->Pos.x, vp->Pos.y + top}, size = {vp->Size.x, std::max(50.f, vp->Size.y - top)};
+  ImGui::SetNextWindowPos(pos);
+  ImGui::SetNextWindowSize(size);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+  ImGui::Begin("##dockhost", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                          ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings);
+  ImGui::PopStyleVar(2);
+  ImGuiID id = ImGui::GetID("MainDock");
+  if (resetLayout_ || !ImGui::DockBuilderGetNode(id)) {
+    // the default layout: library left, scene + properties right, timeline under the viewport
+    resetLayout_ = false;
+    ImGui::DockBuilderRemoveNode(id);
+    ImGui::DockBuilderAddNode(id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(id, size);
+    ImGuiID rest = id, left, right, rightTop, rightBottom, bottom, centre;
+    left = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Left, LEFT_W / size.x, nullptr, &rest);
+    right = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, RIGHT_W / std::max(1.f, size.x - LEFT_W), nullptr, &rest);
+    rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.55f, nullptr, &rightTop);
+    bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 190.f / size.y, nullptr, &centre);
+    ImGui::DockBuilderDockWindow("Library", left);
+    ImGui::DockBuilderDockWindow("Scene", rightTop);
+    ImGui::DockBuilderDockWindow("Properties", rightBottom);
+    ImGui::DockBuilderDockWindow("Timeline", bottom);
+    ImGui::DockBuilderDockWindow("Viewport", centre);
+    ImGui::DockBuilderFinish(id);
+    showLibrary_ = showScene_ = showProperties_ = showTimelineWin_ = true;
+  }
+  ImGui::DockSpace(id, {0, 0}, ImGuiDockNodeFlags_None);
+  ImGui::End();
 }
 
 // File > New: the kind of space the scene lives in

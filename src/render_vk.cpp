@@ -375,6 +375,7 @@ class VKRenderer : public Renderer {
       vkCmdSetBlendConstants(cmd, bc);
       VkViewport vpt{0, 0, (float)img.w, (float)img.h, 0, 1};
       VkRect2D sc{{0, 0}, {(uint32_t)img.w, (uint32_t)img.h}};
+      if (scissor_[2] > 0) sc = {{scissor_[0], scissor_[1]}, {(uint32_t)scissor_[2], (uint32_t)scissor_[3]}};  // one tile
       vkCmdSetViewport(cmd, 0, 1, &vpt);
       vkCmdSetScissor(cmd, 0, 1, &sc);
       vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ((VKProgram*)prog)->pipeline);

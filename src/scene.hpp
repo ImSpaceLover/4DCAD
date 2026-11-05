@@ -53,7 +53,21 @@ struct Anchor {
   std::string world;     // id of the world node
   M4 basis = identity(); // columns: tangent1, tangent2, tangent3, normal at xf.pos
   double reach = 1e4;    // validity radius of the tangent-space approximation
+  // Follow surface: the object's local X axis bends along the surface geodesic through its
+  // anchor (a long rod lies along the surface, through a wormhole's throat ...)
+  bool follow = false;
+  // Surface motion (animatable): from a rest pose, turn by Heading (degrees, about local Y), walk
+  // Travel along the surface (local X, geodesic, frame carried along), roll by Spin (about local X)
+  bool hasRest = false;
+  V4 restPos{0, 0, 0, 0};
+  M4 restFrame = identity();  // object frame at rest (basis * rotation; columns X, Y, Z, normal)
+  double travel = 0, heading = 0, spin = 0;
+  // cache (not saved, rebuilt by App::rebuild): the follow path, NPATH+1 samples from -len to +len
+  struct PathPt { V4 pos, y, z, n; };
+  std::vector<PathPt> path;
+  double pathLen = 0;
 };
+constexpr int NPATH = 32;  // follow-surface path: segments
 
 // Surface material of a leaf. Textures are procedural 4D solid textures evaluated in
 // the object's local coordinates, so they move and rotate with the object.
@@ -184,6 +198,7 @@ struct QualitySettings {
   // fast mode: used in Explore (keep it smooth) and optionally while moving in Edit mode
   RenderProfile fast = RenderProfile::preset(RenderProfile::Fast);
   bool fastWhileMovingInEdit = false;
+  int frameLimit = 0;             // frames per second at most (0 = the display's rate); lower = less GPU load
   float geoMaxStep = 0.25f;
   int geoProjectIters = 1;
 };

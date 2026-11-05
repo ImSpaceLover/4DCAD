@@ -359,7 +359,7 @@ void main() {
   vec4 hp = p, n = vec4(0.0);
   float nv[5];
   float occ = 0.0, aow = 1.0;
-  vec4 sp = vec4(0.0), sdir = vec4(0.0);
+  vec4 sp = vec4(0.0), sdir = vec4(0.0), slp = vec4(0.0);  // shadow ray: point, direction, point light it homes in on
   float st = 0.0, sh = 1.0, shMax = 0.0;
   int sSteps = 0;
   vec3 rayWorldCol = u_skyCol;  // Geodesic: world surface colour where the primary ray currently is
@@ -491,8 +491,22 @@ void main() {
     } else {  // SHADOW toward light li
       sh = stoch ? (d < 0.002 ? 0.0 : sh) : min(sh, u_shadowK * d / st);  // stochastic: hard per sample, soft on average
       sSteps++;
-      if (sh < 0.02 || st > shMax || sSteps > u_shadowSteps) {
+#ifdef VIEW_GEO
+      // point lights in the Geodesic view: the ray homes in on the light along the surface; it
+      // has to *arrive* (within the light's ball) to be lit, and the light fades with the distance
+      // travelled along the surface (another sheet of the world, or a light far round a fold, is dark)
+      bool arrived = li > 0 && length(slp - sp) < max(u_lightRadius, 0.15);
+      if (arrived) { float a = clamp(1.0 - st / max(u_lcol[li - 1].w, 1e-3), 0.0, 1.0); lc = u_lcol[li - 1].rgb * a * a; }
+      bool outOfSteps = sSteps > u_shadowSteps * (li > 0 ? 4 : 1);
+#else
+      bool arrived = false, outOfSteps = sSteps > u_shadowSteps;
+#endif
+      if (sh < 0.02 || st > shMax || outOfSteps || arrived) {
         // this light is done: add its contribution
+#ifdef VIEW_GEO
+        // a ray that ran out of steps (or path) before reaching its light cannot confirm it: dark
+        if (!arrived && (li > 0 || outOfSteps)) sh = 0.0;
+#endif
         float shv = clamp(sh, 0.0, 1.0);
         diffAcc += lc * dif * shv;
         vec4 H = mnorm(Ll - dir);
@@ -501,9 +515,13 @@ void main() {
         startLights = true;
       } else {
 #ifdef VIEW_GEO
-        h = clamp(d, 0.03, u_geoMaxStep);
+        h = clamp(d, 0.03, u_geoMaxStep);  // (larger steps would leave the curved surface)
+        if (li > 0) h = min(h, max(length(slp - sp) * 0.5, 0.03));  // do not overshoot the light
 #else
-        h = clamp(d, 0.02, 0.4);
+        // adaptive: the step bound grows so the ray can always cover what is left to its light within
+        // its step budget (a fixed bound let distant walls leak); steps never exceed the free distance d
+        float remain = max(shMax - st, 0.0);
+        h = clamp(d, 0.02, max(0.4, remain / float(max(u_shadowSteps - sSteps, 1))));
 #endif
         ap = sp; adir = sdir; advance = true; st += h;
       }
@@ -525,6 +543,9 @@ void main() {
           sdir = mnorm(tproj(Ll, sp));
 #endif
           st = 0.02; sh = 1.0; sSteps = 0; shMax = min(lmax, li == 0 ? u_shadowMax : 1e9);
+#ifdef VIEW_GEO
+          if (li > 0) { slp = u_lpos[li - 1]; shMax = u_lcol[li - 1].w; }  // home in on it, up to its range
+#endif
           phase = SHADOW;
           break;
         }
@@ -613,7 +634,9 @@ void main() {
 #ifdef VIEW_GEO
       ap += adir * h;
       vec4 nn = projectToWorld(ap);   // the only world-projection site
-      adir = normalize(adir - dot(adir, nn) * nn);
+      if (phase == SHADOW && li > 0) adir = slp - ap;  // homing toward the point light along the surface
+      adir = adir - dot(adir, nn) * nn;
+      adir = dot(adir, adir) > 1e-12 ? normalize(adir) : sdir;
 #elif defined(VIEW_CURVED)
       // exact geodesics: the primary segment from its start (over-relaxation may step back)
       // (no re-normalisation of far points: there the form cancels catastrophically in floats)

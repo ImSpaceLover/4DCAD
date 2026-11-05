@@ -53,6 +53,8 @@ inline double attachCut(double reach, double radius) {
   return bend + 0.05;
 }
 
+/** Follow surface: the local coordinates of p for an attached object bent along its path (false: not bent). */
+bool followLocal(const Node& n, const V4& p, V4& q);
 /** Curved scenes: local axes along which a leaf extends forever unchanged (infinite extrusions). */
 std::vector<int> symmetryAxes(const Node& n, const PrimitiveRegistry& reg);
 /** A frame change for an infinite object (plane, rod, infinite repeat) that brings its origin next to

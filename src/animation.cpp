@@ -39,6 +39,11 @@ std::vector<AnimValue> animatableValues(const Node& n) {
   std::vector<AnimValue> v;
   for (int i = 0; i < 4; i++) v.push_back({std::string("pos.") + AX[i], std::string("Position ") + (char)std::toupper(AX[i])});
   v.push_back({"rot", "Rotation"});
+  if (n.anchor) {  // attached to a world surface: motion along the surface (opt-in, see keyNode)
+    v.push_back({"surf.travel", "Travel (along the surface)"});
+    v.push_back({"surf.heading", "Heading"});
+    v.push_back({"surf.spin", "Spin"});
+  }
   if (n.isCamera()) {
     v.push_back({"cam.fov", "Field of view"});
     v.push_back({"cam.slider", "Slider axis", true});
@@ -106,6 +111,13 @@ static bool access(Node& n, const std::string& p, double& v, bool put) {
   if (p.rfind("pos.", 0) == 0) { int a = axisOf(p, 4); return a >= 0 && D(n.xf.pos[a]); }
   if (p == "scale") { if (put) n.xf.scale = std::max(1e-3, v); else v = n.xf.scale; return true; }
   if (p == "hidden") return B(n.hidden);
+  if (p.rfind("surf.", 0) == 0) {  // surface motion of attached objects
+    if (!n.anchor) return false;
+    if (p == "surf.travel") return D(n.anchor->travel);
+    if (p == "surf.heading") return D(n.anchor->heading);
+    if (p == "surf.spin") return D(n.anchor->spin);
+    return false;
+  }
   if (p == "cam.fov") return n.isCamera() && D(n.camFov);
   if (p == "cam.slider") return n.isCamera() && I(n.camSlider);
   if (p == "cam.aperture") return n.isCamera() && D(n.camAperture);
@@ -208,8 +220,24 @@ static size_t keyIndex(const Track& t, double frame) {
 
 double evalTrack(const Track& t, double frame) {
   if (t.keys.empty()) return 0;
-  if (frame <= t.keys.front().frame) return t.keys.front().value;
-  if (frame >= t.keys.back().frame) return t.keys.back().value;
+  size_t n = t.keys.size();
+  bool lin = t.linearExtrap && n >= 2 && !isSteppedPath(t.path);
+  if (frame <= t.keys.front().frame) {
+    if (!lin) return t.keys.front().value;
+    // the slope the first segment starts with (any interpolation; constant / eased ends are flat)
+    const Key &a = t.keys[0], &b = t.keys[1];
+    double e = std::min(0.01, (b.frame - a.frame) * 0.5);
+    double slope = e > 1e-12 ? (segment(a, b, a.frame + e) - a.value) / e : 0;
+    return a.value + slope * (frame - a.frame);
+  }
+  if (frame >= t.keys.back().frame) {
+    if (!lin) return t.keys.back().value;
+    const Key &a = t.keys[n - 2], &b = t.keys[n - 1];
+    double e = std::min(0.01, (b.frame - a.frame) * 0.5);
+    double slope = e > 1e-12 ? (b.value - segment(a, b, b.frame - e)) / e : 0;
+    if (a.interp == Interp::Constant) slope = 0;
+    return b.value + slope * (frame - b.frame);
+  }
   size_t i = keyIndex(t, frame);
   double v = segment(t.keys[i], t.keys[i + 1], frame);
   return isSteppedPath(t.path) ? t.keys[i].value : v;
@@ -249,8 +277,9 @@ static void jacobi4(double A[4][4], double w[4], double V[4][4]) {
 }
 
 M4 interpolateRotation(const M4& a, const M4& b, double u) {
-  if (u <= 0) return a;
-  if (u >= 1) return b;
+  // (u outside 0..1 extrapolates: the plane angles are scaled past the keys, see evalRotation)
+  if (u == 0) return a;
+  if (u == 1) return b;
   // relative rotation Q = a^T b turns two orthogonal planes by angles t1, t2 (0..180 degrees).
   // The symmetric part C = (Q + Q^T) / 2 has eigenvalues cos t1, cos t2 (each twice): each
   // eigenvector pair spans one rotation plane. The path scales both angles by u.
@@ -285,8 +314,21 @@ M4 interpolateRotation(const M4& a, const M4& b, double u) {
 
 M4 evalRotation(const Track& t, double frame) {
   if (t.keys.empty()) return identity();
-  if (frame <= t.keys.front().frame) return t.keys.front().rot;
-  if (frame >= t.keys.back().frame) return t.keys.back().rot;
+  size_t n = t.keys.size();
+  bool lin = t.linearExtrap && n >= 2;
+  // linear extrapolation: keep turning at the end segment's average speed (same rotation planes)
+  if (frame <= t.keys.front().frame) {
+    if (!lin || t.keys[0].interp == Interp::Constant) return t.keys.front().rot;
+    const Key &a = t.keys[0], &b = t.keys[1];
+    double span = b.frame - a.frame;
+    return span > 1e-12 ? orthonormalize(interpolateRotation(a.rot, b.rot, (frame - a.frame) / span)) : a.rot;
+  }
+  if (frame >= t.keys.back().frame) {
+    const Key &a = t.keys[n > 1 ? n - 2 : 0], &b = t.keys[n - 1];
+    if (!lin || a.interp == Interp::Constant) return b.rot;
+    double span = b.frame - a.frame;
+    return span > 1e-12 ? orthonormalize(interpolateRotation(a.rot, b.rot, 1 + (frame - b.frame) / span)) : b.rot;
+  }
   size_t i = keyIndex(t, frame);
   const Key &a = t.keys[i], &b = t.keys[i + 1];
   double span = b.frame - a.frame;
@@ -311,6 +353,10 @@ void autoHandles(Track& t) {
       double pv = t.keys[i - 1].value, nv = t.keys[i + 1].value;
       bool extreme = (k.value >= pv && k.value >= nv) || (k.value <= pv && k.value <= nv);
       slope = extreme ? 0 : (nv - pv) / std::max(nf - pf, 1e-9);  // flat at peaks / valleys (no overshoot)
+    } else if (t.linearExtrap && n >= 2) {
+      // linear extrapolation: the end keys point along their segment, so the motion carries on
+      const Key& o = i == 0 ? t.keys[1] : t.keys[n - 2];
+      slope = (o.value - k.value) / ((o.frame - k.frame) != 0 ? (o.frame - k.frame) : 1e-9);
     }
     k.lx = -lspan;
     k.ly = -slope * lspan;
@@ -357,10 +403,18 @@ Track& setRotKey(Animation& a, const std::string& target, double frame, const M4
 
 void keyNode(Animation& a, const Node& n, double frame, bool transformOnly) {
   std::vector<AnimValue> vals;
-  if (transformOnly) {
+  bool surf = n.anchor && (isAnimated(a, n.id, "surf.travel") || isAnimated(a, n.id, "surf.heading") || isAnimated(a, n.id, "surf.spin"));
+  if (transformOnly && surf) {  // attached and moving along the surface: its surface motion and scale
+    for (const char* p : {"surf.travel", "surf.heading", "surf.spin"}) vals.push_back({p, p});
+    if (!n.isCamera()) vals.push_back({"scale", "scale"});
+  } else if (transformOnly) {
     for (auto& p : transformPaths()) if (!(n.isCamera() && p == "scale")) vals.push_back({p, p});
     if (n.isCamera()) vals.push_back({"cam.fov", ""});
-  } else vals = animatableValues(n);
+  } else {
+    vals = animatableValues(n);
+    if (!surf) vals.erase(std::remove_if(vals.begin(), vals.end(), [](const AnimValue& v) { return v.path.rfind("surf.", 0) == 0; }), vals.end());
+    else vals.erase(std::remove_if(vals.begin(), vals.end(), [](const AnimValue& v) { return v.path == "rot" || v.path.rfind("pos.", 0) == 0; }), vals.end());
+  }
   for (auto& v : vals) {
     if (v.path == "rot") { setRotKey(a, n.id, frame, nodeRotation(n)); continue; }
     double x;
@@ -443,7 +497,9 @@ std::string animationToJson(const Animation& a) {
       }
       keys.push_back(kj);
     }
-    tr.push_back({{"target", t.target}, {"path", t.path}, {"keys", keys}});
+    json tj = {{"target", t.target}, {"path", t.path}, {"keys", keys}};
+    if (t.linearExtrap) tj["extrap"] = "linear";
+    tr.push_back(tj);
   }
   return json({{"fps", a.fps}, {"start", a.start}, {"end", a.end}, {"frame", a.frame}, {"tracks", tr}}).dump();
 }
@@ -462,6 +518,7 @@ Animation animationFromJson(const std::string& text) {
     Track t;
     t.target = tj.value("target", std::string());
     t.path = tj.value("path", std::string());
+    t.linearExtrap = tj.value("extrap", std::string()) == "linear";
     for (auto& kj : tj.value("keys", json::array())) {
       Key k;
       k.frame = kj.value("f", 1.0);

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 namespace fd {
 
@@ -101,7 +102,8 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
     if (nl >= MAX_LIGHTS || !fp.prof.pointLights) break;
     put4(u.lpos[nl], l.pos);
     put3(u.lcol[nl], l.color, l.range);
-    if (l.shadows && fp.prof.pointShadows) mask |= 1 << nl;
+    // emissive objects' lights always cast shadows (they are what would shine through walls)
+    if (l.shadows && (fp.prof.pointShadows || l.emissive)) mask |= 1 << nl;
     nl++;
   }
   // debug ray: resampled to at most MAX_DEBUG_PTS points
@@ -137,7 +139,12 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
     return false;
   }
   std::vector<float> nodes = packNodes(root, reg, p->cs, highlight, &fp.space, &fp.camIso);
-  draw(rt, rw, rh, p->handle, u, nodes, (int)p->cs.nodeIds.size());
+  for (int i = 0; i < 4; i++) scissor_[i] = fp.tile[i];
+  if (scissor_[2] > 0) {  // clamp to the target
+    scissor_[0] = std::clamp(scissor_[0], 0, rw); scissor_[1] = std::clamp(scissor_[1], 0, rh);
+    scissor_[2] = std::clamp(scissor_[2], 1, rw - scissor_[0]); scissor_[3] = std::clamp(scissor_[3], 1, rh - scissor_[1]);
+  }
+  draw(rt, rw, rh, p->handle, u, nodes, (int)(nodes.size() / (NODE_VEC4S * 4)));  // (+ extra rows: follow paths)
   return true;
 }
 

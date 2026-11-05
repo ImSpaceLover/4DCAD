@@ -21,6 +21,7 @@ void UI::keyable(const std::string& target, const std::vector<std::string>& path
     if (ImGui::MenuItem(keyed ? "Replace keyframe" : "Insert keyframe", app.keys.text(Action::InsertKey).c_str())) {
       Animation& W = app.anim;
       for (auto& p : paths) {
+        if (p.rfind("surf.", 0) == 0) if (Node* sn = findNode(app.root, target)) app.ensureRest(*sn);  // surface motion starts here
         if (target == "scene") { if (p == "space.radius") setKey(W, target, p, fr, app.space.radius); }
         else if (target.rfind("light:", 0) == 0) {
           for (auto& l : app.lights) { double v; if ("light:" + l.id == target && getLightValue(l, p, v)) setKey(W, target, p, fr, v); }
@@ -104,12 +105,8 @@ void UI::cameraProperties(Node& n, bool& live, bool& done) {
 }
 
 void UI::propertiesPanel() {
-  ImGuiIO& io = ImGui::GetIO();
-  float top = ImGui::GetFrameHeight() + TOOLBAR_H;
-  float h = (io.DisplaySize.y - top) * 0.45f;
-  ImGui::SetNextWindowPos({io.DisplaySize.x - RIGHT_W, top + h});
-  ImGui::SetNextWindowSize({RIGHT_W, io.DisplaySize.y - top - h});
-  ImGui::Begin("Properties", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+  if (!showProperties_) return;
+  if (!ImGui::Begin("Properties", &showProperties_)) { ImGui::End(); return; }
   Node* n = app.selected();
   if (!n) {
     ImGui::TextWrapped("Nothing selected. Click an object in the viewport or the scene tree.");
@@ -398,9 +395,10 @@ void UI::propertiesPanel() {
     std::string title = MOD_NAMES[m.type];
     if (m.raises() && axes[i].valid) title += std::string(" -> ") + AXIS[axes[i].newAxis];
     ImGui::TextColored(m.raises() ? ImVec4(0.6f, 0.85f, 1, 1) : ImVec4(0.9f, 0.9f, 0.9f, 1), "%s", title.c_str());
-    ImGui::SameLine(RIGHT_W - 75);
+    float ww = ImGui::GetWindowWidth();
+    ImGui::SameLine(ww - 75);
     if (i > 0 && ImGui::SmallButton("^")) moveUp = (int)i;
-    ImGui::SameLine(RIGHT_W - 50);
+    ImGui::SameLine(ww - 50);
     if (ImGui::SmallButton("x")) remove = (int)i;
     ImGui::Indent(10);
     switch (m.type) {
@@ -530,6 +528,29 @@ void UI::propertiesPanel() {
     Node* w = findNode(app.root, n->anchor->world);
     ImGui::TextWrapped("Attached to \"%s\".", w ? w->name.c_str() : "missing world");
     if (ImGui::Button("Detach from surface")) { app.detach(nid); ImGui::End(); return; }
+    Anchor& an = *n->anchor;
+    if (ImGui::Checkbox("Follow surface", &an.follow)) done = true;
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Bend the object's X axis along the surface (the geodesic through its anchor):\n"
+                        "a long rod lies along a curved world, and through a wormhole's throat");
+    ImGui::SeparatorText("Surface motion");
+    ImGui::TextDisabled("Turn by Heading, walk Travel along the surface, roll by Spin");
+    float tv = (float)an.travel, hd = (float)an.heading, sp = (float)an.spin;
+    bool sm = false;
+    if (ImGui::DragFloat("Travel", &tv, 0.02f)) { app.ensureRest(*n); an.travel = tv; sm = true; }
+    keyable(nid, {"surf.travel"});
+    if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distance walked along the surface (along the object's X axis), from its rest pose.\nRight-click: keyframes (smooth, undistorted motion, also through a wormhole)");
+    if (ImGui::DragFloat("Heading", &hd, 0.5f, -3600, 3600, "%.1f deg")) { app.ensureRest(*n); an.heading = hd; sm = true; }
+    keyable(nid, {"surf.heading"});
+    if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turn about the object's Y axis before walking (the direction it travels in)");
+    if (ImGui::DragFloat("Spin", &sp, 0.5f, -36000, 36000, "%.1f deg")) { app.ensureRest(*n); an.spin = sp; sm = true; }
+    keyable(nid, {"surf.spin"});
+    if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Roll about the object's X axis (its length)");
+    if (sm) { app.applySurfacePose(*n); live = true; }
+    if (an.hasRest) ImGui::TextDisabled("Moving it by hand moves its rest pose (the whole motion)");
   } else if (!app.world.empty() && n->id != app.world && !isRoot && dim <= 3) {
     if (ImGui::Button("Attach to world surface")) { app.attachToWorld(nid); ImGui::End(); return; }
   }

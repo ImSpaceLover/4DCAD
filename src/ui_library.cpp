@@ -7,9 +7,9 @@ namespace fd {
 void UI::libraryPanel() {
   ImGuiIO& io = ImGui::GetIO();
   float top = ImGui::GetFrameHeight() + TOOLBAR_H;
-  ImGui::SetNextWindowPos({0, top});
-  ImGui::SetNextWindowSize({LEFT_W, io.DisplaySize.y - top});
-  ImGui::Begin("Library", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+  (void)top;
+  if (!showLibrary_) return;
+  if (!ImGui::Begin("Library", &showLibrary_)) { ImGui::End(); return; }
   if (ImGui::Button("+ Folder")) { std::string id = app.lib.addFolder("New folder"); renameId_ = "f:" + id; std::snprintf(renameBuf_, sizeof renameBuf_, "New folder"); }
   ImGui::SameLine();
   if (ImGui::Button("Import")) fileAction(3);

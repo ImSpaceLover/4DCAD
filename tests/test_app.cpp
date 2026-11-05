@@ -747,6 +747,54 @@ int main() {
     CHECK(std::abs(length(pm) - 3) < 1e-3 && length(pm - p0) > 0.3 && length(pm - p1) > 0.3, "in between, on the surface (|p| = %.4f)", length(pm));
     app.anim = Animation{};
   }
+  // surface motion: travel walks along the surface (a great circle of the planet's 3-sphere of radius 3)
+  {
+    std::string red = app.root.children[1].id;
+    Node* rn = findNode(app.root, red);
+    V4 p0 = rn->xf.pos;
+    app.ensureRest(*rn);
+    rn->anchor->travel = 2.0;
+    app.applySurfacePose(*rn);
+    V4 p1 = rn->xf.pos;
+    double arc = 3 * std::acos(clampd(dot(p0, p1) / 9, -1, 1));
+    CHECK(std::abs(length(p1) - 3) < 1e-3 && std::abs(arc - 2.0) < 0.03, "travel 2 along the surface (arc %.4f)", arc);
+    M4 B = rn->anchor->basis;
+    CHECK(std::abs(std::abs(dot(col(B, 3), normalize(p1))) - 1) < 1e-2 && std::abs(dot(col(B, 0), normalize(p1))) < 1e-2, "frame stays on the surface");
+    // animated: halfway round the planet (3 pi) between frames 1 and 21
+    rn->anchor->travel = 0;
+    app.applySurfacePose(*rn);
+    app.toggleValueKey(red, "surf.travel");  // key travel 0 at frame 1
+    app.anim.frame = 21;
+    findNode(app.root, red)->anchor->travel = 3 * PI;
+    app.toggleValueKey(red, "surf.travel");
+    findNode(app.root, red)->anchor->travel = 0;
+    for (auto& t : app.anim.tracks) for (auto& k : t.keys) k.interp = Interp::Linear;
+    app.setFrame(21);
+    V4 ph = findNode(app.root, red)->xf.pos;
+    CHECK(length(ph + p0) < 0.1, "halfway round: the antipode (%.3f)", length(ph + p0));
+    app.setFrame(11);
+    V4 pq = findNode(app.root, red)->xf.pos;
+    CHECK(std::abs(dot(pq, p0)) < 0.2 && std::abs(length(pq) - 3) < 1e-3, "a quarter of the way at the middle frame");
+    // follow surface: a point further along the path has local x = the arc length and no offset
+    app.anim = Animation{};
+    Node* fn = findNode(app.root, red);
+    fn->anchor->hasRest = false;
+    fn->anchor->follow = true;
+    app.rebuild();
+    fn = findNode(app.root, red);
+    CHECK(fn->anchor->path.size() == (size_t)NPATH + 1, "follow path computed");
+    double want = fn->anchor->pathLen * 0.8;  // (world units, inside the path)
+    auto r = shoot(worldField(*app.ev, fn->anchor->world), fn->xf.pos, mul(fn->anchor->basis, fn->xf.rot), {1, 0, 0}, want, 0.05);
+    V4 q;
+    CHECK(followLocal(*fn, r.pos, q) && std::abs(q[0] * fn->xf.scale - want) < 0.02 && std::abs(q[1]) + std::abs(q[2]) + std::abs(q[3]) < 0.02,
+          "bent coordinates along the path (x %.4f of %.4f, off %.4f %.4f %.4f, len %.3f scale %.3f)", q[0] * fn->xf.scale, want, q[1], q[2], q[3], fn->anchor->pathLen, fn->xf.scale);
+    // saved and loaded
+    SceneFile sf = sceneFromJson(app.serialize());
+    Node* ln = findNode(sf.root, red);
+    CHECK(ln && ln->anchor && ln->anchor->follow, "follow saved");
+    fn->anchor->follow = false;
+    app.rebuild();
+  }
   // Geodesic camera: attached to the world surface, slides along it
   {
     std::string gc = app.addCamera();

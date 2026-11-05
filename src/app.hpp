@@ -103,6 +103,16 @@ class App {
   void setCurvatureRadius(double r);
   /** The point reached from p along tangent vector v (its length = distance): p + v in flat space, a geodesic in curved. */
   V4 along(const V4& p, const V4& v) const;
+  // --- objects attached to a world surface: surface motion (Travel / Heading / Spin from a rest
+  // pose) and Follow surface (bent along the surface geodesic through the anchor) ---
+  /** Makes the current pose the rest pose (travel / heading / spin 0) if there is none yet. */
+  void ensureRest(Node& n);
+  /** Places the object from its rest pose and its travel / heading / spin. */
+  void applySurfacePose(Node& n);
+  /** After a manual move: the rest pose that gives the current pose with the current values. */
+  void setRestFromPose(Node& n);
+  /** Recomputes the follow-surface paths (called by rebuild). */
+  void updateFollowPaths();
   /** Curved overview: the outside camera looking at the ball, and a point's place in the ball
    *  (Poincare ball / stereographic projection: p.xyz / (1 + p.w)). */
   View ballView() const;
@@ -161,13 +171,18 @@ class App {
     double fps = 24;
     int jpegQuality = 92;
     std::string ffmpeg = "ffmpeg";
+    int priority = 0;  // 0 low, 1 normal, 2 high: render work per frame (RENDER_BUDGET_MS)
   };
+  static constexpr const char* PRIORITY_NAMES[3] = {"Low (smooth PC)", "Normal", "High (fastest)"};
+  static constexpr double RENDER_BUDGET_MS[3] = {15, 40, 100};
+  double renderBudget() const { return RENDER_BUDGET_MS[std::clamp(renderSet.priority, 0, 2)] / 1000.0; }
   static constexpr const char* STILL_FORMATS[2] = {"PNG", "JPEG"};
   static constexpr const char* ANIM_FORMATS[5] = {"GIF", "AVI (Motion JPEG)", "PNG sequence", "MP4 (H.264, ffmpeg)", "WebM (VP9, ffmpeg)"};
   RenderSettings renderSet;
   struct RenderJob {
     bool active = false, animation = false, finished = false;
     int first = 1, last = 1, frame = 1, sample = 0, samples = 1, aa = 1, w = 0, h = 0;
+    int tile = 0;  // next tile of the current sample (tiles of TILE pixels, row by row)
     bool prepared = false;
     RenderTarget rt;                    // the supersampled image being refined (also the preview)
     std::unique_ptr<FrameWriter> writer;
