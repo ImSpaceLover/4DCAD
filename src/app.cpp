@@ -1826,7 +1826,7 @@ void App::updateExplore(const InputState& in, double dt) {
 }
 
 // ============================================================ rendering
-std::vector<LightParam> App::frameLights() {
+std::vector<LightParam> App::frameLights(bool pathTrace) {
   std::vector<LightParam> out;
   for (auto& l : lights) {
     if (!l.enabled || out.size() >= (size_t)MAX_LIGHTS) continue;
@@ -1837,7 +1837,36 @@ std::vector<LightParam> App::frameLights() {
     p.shadows = l.shadows;
     out.push_back(p);
   }
-  if (quality.emissiveLights) {
+  if (pathTrace) {
+    // path tracing: every glowing object is an area light; the shader samples directions within its
+    // bounding sphere and counts only those reaching its glowing surface (so its shape matters)
+    Node& top = isolate.empty() ? root : viewRoot_;
+    auto bounds = computeBounds(top, reg);
+    std::vector<std::pair<double, LightParam>> em;
+    walk(top, [&](Node& n, Node*, int) {
+      if (!n.isLeaf() || n.mat.emissive <= 0 || n.mat.emissionStrength <= 0) return;
+      auto path = pathTo(top, n.id);
+      double sAnc = 1;
+      for (Node* a : path) {
+        if (a->hidden) return;
+        if (a != &n) sAnc *= a->xf.scale;
+      }
+      auto b = bounds.find(n.id);
+      if (b == bounds.end() || !std::isfinite(b->second.r)) return;  // unbounded (planes...): found by the paths alone
+      V4 off = b->second.c - n.xf.pos;
+      if (space.curved()) off[3] = 0;
+      LightParam p;
+      p.pos = nodeWorldPos(n.id);
+      p.radius = (float)((b->second.r + length(off)) * sAnc);  // (conservative: about the object's origin)
+      double k = n.mat.emissive * n.mat.emissionStrength;
+      for (int i = 0; i < 3; i++) p.color[i] = (float)(n.color[i] * k);
+      p.range = 1e9f;
+      p.area = p.emissive = true;
+      em.push_back({k * (n.color[0] + n.color[1] + n.color[2]) * p.radius * p.radius, p});
+    });
+    std::sort(em.begin(), em.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    for (auto& [w, p] : em) if (out.size() < (size_t)MAX_LIGHTS) out.push_back(p);
+  } else if (quality.emissiveLights) {
     // emissive objects light their surroundings: a point light at the object's centre,
     // reaching a few times its size (brightest first, up to the light limit)
     auto bounds = computeBounds(isolate.empty() ? root : viewRoot_, reg);
@@ -2025,11 +2054,14 @@ void App::renderFrame() {
   fp.quality = &quality;
   fp.light = light();
   fp.skyCol = worldColor();
-  fp.lights = frameLights();
+  // path tracing where the image is refined (the idle viewport); moving / fast views stay simple
+  fp.pathTrace = q.lighting == 1 && refine;
+  fp.lights = frameLights(fp.pathTrace);
   fp.prof = prof;
-  for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows; }
+  for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows << l.radius; }
   key << prof.maxSteps << prof.bounces << prof.textures << prof.specular << prof.pointLights << prof.shadows << prof.pointShadows << prof.ao
-      << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching << refine << q.sunSize << q.lightRadius;
+      << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching << refine << q.sunSize << q.lightRadius << '|' << q.lighting
+      << q.skyIntensity << fp.pathTrace;
   if (inCameraView()) {  // depth of field of the camera looked through (stochastic only)
     Node* c = findNode(root, activeCamera);
     fp.aperture = (float)c->camAperture;
@@ -2163,7 +2195,8 @@ nlohmann::json qualityToJson(const QualitySettings& q) {
                       {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}, {"sunIntensity", q.sunIntensity},
                       {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
                       {"relaxedMarching", q.relaxedMarching}, {"fastWhileMovingInEdit", q.fastWhileMovingInEdit},
-                      {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"frameLimit", q.frameLimit}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius}};
+                      {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"frameLimit", q.frameLimit}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius},
+                      {"lighting", q.lighting}, {"skyIntensity", q.skyIntensity}};
   const RenderProfile& f = q.fast;
   r["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
                {"specular", f.specular}, {"pointLights", f.pointLights}, {"shadows", f.shadows}, {"pointShadows", f.pointShadows},
@@ -2185,6 +2218,8 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
   getKey(r, "fastWhileMovingInEdit", q.fastWhileMovingInEdit);
   getKey(r, "frameLimit", q.frameLimit);
   getKey(r, "stochastic", q.stochastic); getKey(r, "viewportSamples", q.viewportSamples); getKey(r, "sunSize", q.sunSize); getKey(r, "lightRadius", q.lightRadius);
+  getKey(r, "lighting", q.lighting); getKey(r, "skyIntensity", q.skyIntensity);
+  q.lighting = std::clamp(q.lighting, 0, 1);
   auto& f = q.fast;
   if (r.contains("fast") && r["fast"].is_object()) {
     auto& o = r["fast"];
@@ -2254,6 +2289,7 @@ std::vector<App::RenderPreset> App::builtinPresets() {
     q.ao = p.ao;
     q.stochastic = i > 0;
     q.viewportSamples = i == 0 ? 8 : i == 1 ? 32 : 128;
+    q.lighting = i == 2 ? 1 : 0;  // Full: path traced
     RenderSettings o;
     o.width = i == 0 ? 640 : i == 1 ? 1280 : 1920;
     o.height = i == 0 ? 360 : i == 1 ? 720 : 1080;
@@ -2261,7 +2297,7 @@ std::vector<App::RenderPreset> App::builtinPresets() {
     o.samples = i == 0 ? 1 : i == 1 ? 16 : 128;
     nlohmann::json j = {{"name", names[i]}, {"quality", qualityToJson(q)}, {"output", outputToJson(o, false)}};
     // the look (light, sky, fog) and the output format stay as they are
-    for (const char* k : {"lightYaw", "lightPitch", "lightW", "skyTop", "skyBottom", "fog", "ambient", "sunIntensity", "grid"}) j["quality"].erase(k);
+    for (const char* k : {"lightYaw", "lightPitch", "lightW", "skyTop", "skyBottom", "fog", "ambient", "sunIntensity", "grid", "skyIntensity"}) j["quality"].erase(k);
     for (const char* k : {"stillFormat", "animFormat", "sceneRange", "start", "end", "fps", "jpegQuality"}) j["output"].erase(k);
     out.push_back({names[i], true, j.dump(2)});
   }

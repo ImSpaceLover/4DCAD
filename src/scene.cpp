@@ -177,6 +177,7 @@ void propagateEdit(const Node& B, const Node& A, Node& T, bool stacksMatch, cons
       ch(B.mat.transparency, A.mat.transparency, T.mat.transparency);
       ch(B.mat.ior, A.mat.ior, T.mat.ior);
       ch(B.mat.metallic, A.mat.metallic, T.mat.metallic);
+      ch(B.mat.emissionStrength, A.mat.emissionStrength, T.mat.emissionStrength);
       if (B.isCustom() && T.isCustom()) { ch(B.code, A.code, T.code); ch(B.codeBound, A.codeBound, T.codeBound); }
     } else {
       ch(B.op, A.op, T.op);
@@ -416,7 +417,7 @@ static json nodeJ(const Node& n) {
     j["material"] = {{"emissive", m.emissive}, {"texture", TEXTURE_NAMES[m.texture]}, {"texScale", m.texScale},
                      {"texStrength", m.texStrength}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}},
                      {"roughness", m.roughness}, {"specular", m.specular}, {"transparency", m.transparency}, {"ior", m.ior},
-                     {"metallic", m.metallic}};
+                     {"metallic", m.metallic}, {"emissionStrength", m.emissionStrength}};
     if (n.isCustom()) { j["code"] = n.code; j["codeBound"] = n.codeBound; }
     if (n.isPolytope()) {
       const PolyParams& p = n.poly;
@@ -504,6 +505,7 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
       n.mat.transparency = std::clamp(mj.value("transparency", 0.0), 0.0, 1.0);
       n.mat.ior = std::clamp(mj.value("ior", 1.45), 1.0, 3.0);
       n.mat.metallic = std::clamp(mj.value("metallic", 0.0), 0.0, 1.0);
+      n.mat.emissionStrength = std::clamp(mj.value("emissionStrength", 4.0), 0.0, 1000.0);
     }
     if (n.prim == "custom") {
       n.code = j.value("code", std::string(DEFAULT_CUSTOM_SDF));

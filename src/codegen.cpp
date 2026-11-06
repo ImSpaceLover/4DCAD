@@ -430,7 +430,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       }
       L << "  vec4 x12 = " << D(i, 12) << ";\n  d -= x12.w * s;\n";  // rounding
       L << "  if (u_textures == 1 && x12.y > 0.5) col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), q0 * m9.y) * m9.z);\n";
-      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
+      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
       L << "  return d;\n}\n";
     } else if (n.isLeaf()) {
       // exact in curved space (as the CPU evaluator): infinite extrusions measured from the point's
@@ -459,7 +459,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       L << "  if (u_textures == 1 && x12.y > 0.5) {\n    vec4 tq = q0 * m9.y;\n";
       for (int a = nodeDim(n, reg); a < 4; a++) L << "    tq." << C[a] << " = 0.5;\n";
       L << "    col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), tq) * m9.z);\n  }\n";
-      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
+      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
       L << "  return d * s * " << D(i, 8) << ".w;\n}\n";  // .w: spherical safety factor
     } else {
       if (!n.mods.empty()) L << "  int mrow = int(" << D(i, 12) << ".x);\n";
@@ -587,7 +587,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       L << "  if (u_textures == 1 && x12.y > 0.5) {\n    vec4 tq = q0 * m9.y;\n";
       for (int a = nodeDim(n, reg); a < 4; a++) L << "    tq." << C[a] << " = 0.5;\n";
       L << "    col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), tq) * m9.z);\n  }\n";
-      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
+      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
       // attached to a surface: the shape is extruded along the surface normal, so keep it to its
       // own sheet (two-sided, within its size): other sheets of the world (e.g. the other room of a
       // double wormhole) must not show it
@@ -687,6 +687,7 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       slot(13)[1] = n.mat.emissive > 0 ? 1.f : 0.f;
       slot(13)[2] = (float)n.poly.style;
       slot(13)[3] = n.poly.alternate ? 1.f : 0.f;
+      slot(14)[0] = (float)n.mat.emissionStrength;  // path tracing: emitted radiance = colour x emissive x strength
     } else slot(6)[3] = (float)reach;  // groups: colour unused, store reach
     auto b = bounds.find(n.id);
     slot(8)[0] = 1e9f;

@@ -86,6 +86,7 @@ struct Material {
   double transparency = 0;   // 0 = opaque, 1 = invisible (see-through surfaces)
   double ior = 1.45;         // index of refraction of transparent materials (1 = no bending)
   double metallic = 0;       // 0 = plain, 1 = mirror (reflections tinted by the colour)
+  double emissionStrength = 4;  // path-traced lighting: emitted light = colour x emissive x this
 };
 
 /** Default code of a custom SDF leaf (GLSL). */
@@ -201,6 +202,12 @@ struct QualitySettings {
   int frameLimit = 0;             // frames per second at most (0 = the display's rate); lower = less GPU load
   float geoMaxStep = 0.25f;
   int geoProjectIters = 1;
+  // lighting model: 0 = simple (sun, point lights, ambient light; emissive objects shine as point
+  // lights), 1 = path traced (physically based: light bounces, glowing objects are area lights,
+  // no ambient light). Path tracing is used where images are refined (idle viewport, renders);
+  // moving / fast views use the simple model.
+  int lighting = 0;
+  float skyIntensity = 1.0f;      // path traced: brightness of the sky's light (0 = black)
 };
 
 std::string newId(const char* prefix = "n");

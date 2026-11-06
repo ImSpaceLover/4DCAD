@@ -37,8 +37,10 @@ inline const char* FRAME_BLOCK = R"(
   ivec4 f_k;         // point light shadow mask, bounces, over-relaxation, AO samples
   ivec4 f_l;         // shadow ray steps, specular on, stochastic on, sample index
   vec4 f_e;          // lens aperture, focus distance, (accumulation weight: used by the renderer), curvature radius
+  vec4 f_f;          // sky intensity (path tracing), 0, 0, 0
   vec4 u_lpos[8];    // point lights: 4D position
   vec4 u_lcol[8];    // rgb * intensity, range
+  vec4 u_lext[8];    // radius, area light (emissive object, path tracing) / point light
   vec4 u_dbg[48];    // debug ray polyline (Explore)
 )";
 
@@ -74,6 +76,7 @@ inline const char* FRAME_DEFINES = R"(
 #define u_aperture f_e.x
 #define u_focus f_e.y
 #define u_curvR f_e.w
+#define u_skyI f_f.x
 #define u_lightShadowMask f_k.x
 #define u_maxLayers f_k.y
 #define u_relax f_k.z
@@ -120,7 +123,7 @@ inline std::string vertexShader(ShaderTarget t) {
          "void main() { vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2) * 2.0 - 1.0; v_uv = vec2(p.x, -p.y); gl_Position = vec4(p, 0.0, 1.0); }\n";
 }
 
-inline const char* RAYMARCH_MAIN = R"(
+inline const char* RAYMARCH_COMMON = R"(
 // ---- metric helpers: Euclidean, or the curved model's form (see space.hpp) ----
 #ifdef VIEW_CURVED
 float mdot(vec4 a, vec4 b) { return dot(a.xyz, b.xyz) + KAPPA * a.w * b.w; }
@@ -239,7 +242,11 @@ vec4 projectToWorld(inout vec4 p) {
 
 // surf: Geodesic only, the colour of the world surface where the ray ended
 // p: where the direction is (curved spaces: the sky is fixed in the world, u_axes = camera isometry)
-vec3 sky(vec4 p, vec4 dir, vec3 surf) {
+vec3 skyBase(vec4 p, vec4 dir, vec3 surf);
+// the sky's colour x the sky intensity setting (0 = black: in the Geodesic view this is the world
+// surface's colour that rays reaching far show, so it also darkens the fog there)
+vec3 sky(vec4 p, vec4 dir, vec3 surf) { return skyBase(p, dir, surf) * u_skyI; }
+vec3 skyBase(vec4 p, vec4 dir, vec3 surf) {
 #ifdef VIEW_GEO
   // the sky of a world surface has the colour of the surface the ray travelled to
   return surf * (0.9 + 0.1 * dot(dir, normalize(u_light)));
@@ -323,6 +330,63 @@ void lightAt(int li, vec4 hp, vec4 wn, vec4 dir, out vec4 L, out vec3 lc, out fl
 #endif
 }
 
+)";
+
+inline const char* RAYMARCH_GRID = R"(
+// ground grid over the image (Edit mode): gro / grd = the primary ray, tGrid = where it hit something
+vec3 groundGrid(vec3 col, vec4 gro, vec4 grd, float tGrid) {
+
+#ifdef VIEW_CURVED
+  // ground grid on the geodesic plane y = 0 of the world (normal coordinates x, z)
+  if (u_grid == 1) {
+    mat4 G = mat4(1.0); G[3][3] = KAPPA;
+    vec4 nu = G * transpose(u_axes) * G * vec4(0.0, 1.0, 0.0, 0.0);  // the plane's normal, camera-relative
+    float a = mdot(gro, nu), b = mdot(grd, nu), th = -1.0;
+    if (abs(b) > 1e-6) {
+      float r = -a / b;
+      if (KAPPA > 0.0) { th = atan(r); if (th < 0.0) th += 3.14159265; }
+      else if (abs(r) < 1.0) th = 0.5 * log((1.0 + r) / (1.0 - r));
+    }
+    float tg = th * u_curvR;
+    if (th > 0.0 && tg < tGrid && tg < u_maxDist) {
+      vec4 gp = gro, gd = grd;
+      geoMove(gp, gd, tg);
+      vec4 g = clogO(u_axes * gp);
+      float fade = exp(-tg * 0.05);
+      float gl = max(gridLine(g.x), gridLine(g.z)) * 0.25;
+      float ax = 1.0 - smoothstep(0.0, fwidth(g.z) * 1.5, abs(g.z));
+      float az = 1.0 - smoothstep(0.0, fwidth(g.x) * 1.5, abs(g.x));
+      col = mix(col, vec3(0.8) * gl + col * 0.5, gl * fade);
+      col = mix(col, axisCol(vec4(1.0, 0.0, 0.0, 0.0)), ax * fade * 0.8);
+      col = mix(col, axisCol(vec4(0.0, 0.0, 1.0, 0.0)), az * fade * 0.8);
+    }
+  }
+#elif !defined(VIEW_GEO)
+  // ground grid in display coordinates (the shown axes: X, up, Z; lines along the slider axis)
+  vec4 rod = gro * u_axes, rdd = grd * u_axes;
+  if (u_grid == 1 && abs(rdd.y) > 1e-4) {
+    float tg = -rod.y / rdd.y;
+    if (tg > 0.0 && tg < tGrid) {
+      vec4 g = rod + rdd * tg;
+      float fade = exp(-tg * 0.05);
+      float gl = max(gridLine(g.x), gridLine(g.z)) * 0.25;
+      float gw = gridLine(g.w) * 0.25;
+      vec3 gc = vec3(0.8) * gl + axisCol(u_axes[3]) * gw;
+      float ax = 1.0 - smoothstep(0.0, fwidth(g.z) * 1.5, abs(g.z));
+      float az = 1.0 - smoothstep(0.0, fwidth(g.x) * 1.5, abs(g.x));
+      col = mix(col, gc + col * 0.5, max(gl, gw) * fade);
+      col = mix(col, axisCol(u_axes[0]), ax * fade * 0.8);
+      col = mix(col, axisCol(u_axes[2]), az * fade * 0.8);
+    }
+  }
+#endif
+
+  return col;
+}
+)";
+
+inline const char* SIMPLE_MAIN = R"(
+// ---- simple lighting: sun, point lights, ambient light, AO ----
 const int MARCH = 0, NORMAL = 1, AO = 2, SHADOW = 3, DONE = 4;
 
 void main() {
@@ -562,11 +626,13 @@ void main() {
         vec4 V = -dir;
         float fre = pow(1.0 - max(mdot(n, V), 0.0), 3.0);
 #ifdef VIEW_GEO
-        vec3 rim = rayWorldCol;
+        vec3 rim = rayWorldCol * u_skyI;
 #else
         vec3 rim = sky(hp, n, rayWorldCol);
 #endif
-        vec3 lit = base * (u_ambient * ao + 0.9 * diffAcc) + specAcc + 0.12 * fre * ao * rim;
+        // the rim light (the sky / world colour on grazing surfaces) is ambient light: it follows the
+        // ambient setting (0.18 = default), so ambient 0 leaves only what the lights reach
+        vec3 lit = base * (u_ambient * ao + 0.9 * diffAcc) + specAcc + 0.12 * fre * ao * rim * (u_ambient / 0.18);
         vec3 c = mix(lit, base, emissive);  // emissive: always fully lit, unshadowed
         c = mix(c, vec3(1.0, 0.6, 0.15), hm[0].a * (0.25 + 0.5 * fre));  // selection highlight
         float f = t / u_maxDist;
@@ -659,56 +725,433 @@ void main() {
   vec3 col = accum;
   if (toSky) col += thr * sky(p, dir, rayWorldCol);  // the ray (or what continued of it) ended in the sky
   float tGrid = firstT >= 0.0 ? firstT : 1e9;
-
-#ifdef VIEW_CURVED
-  // ground grid on the geodesic plane y = 0 of the world (normal coordinates x, z)
-  if (u_grid == 1) {
-    mat4 G = mat4(1.0); G[3][3] = KAPPA;
-    vec4 nu = G * transpose(u_axes) * G * vec4(0.0, 1.0, 0.0, 0.0);  // the plane's normal, camera-relative
-    float a = mdot(gro, nu), b = mdot(grd, nu), th = -1.0;
-    if (abs(b) > 1e-6) {
-      float r = -a / b;
-      if (KAPPA > 0.0) { th = atan(r); if (th < 0.0) th += 3.14159265; }
-      else if (abs(r) < 1.0) th = 0.5 * log((1.0 + r) / (1.0 - r));
-    }
-    float tg = th * u_curvR;
-    if (th > 0.0 && tg < tGrid && tg < u_maxDist) {
-      vec4 gp = gro, gd = grd;
-      geoMove(gp, gd, tg);
-      vec4 g = clogO(u_axes * gp);
-      float fade = exp(-tg * 0.05);
-      float gl = max(gridLine(g.x), gridLine(g.z)) * 0.25;
-      float ax = 1.0 - smoothstep(0.0, fwidth(g.z) * 1.5, abs(g.z));
-      float az = 1.0 - smoothstep(0.0, fwidth(g.x) * 1.5, abs(g.x));
-      col = mix(col, vec3(0.8) * gl + col * 0.5, gl * fade);
-      col = mix(col, axisCol(vec4(1.0, 0.0, 0.0, 0.0)), ax * fade * 0.8);
-      col = mix(col, axisCol(vec4(0.0, 0.0, 1.0, 0.0)), az * fade * 0.8);
-    }
-  }
-#elif !defined(VIEW_GEO)
-  // ground grid in display coordinates (the shown axes: X, up, Z; lines along the slider axis)
-  vec4 rod = gro * u_axes, rdd = grd * u_axes;
-  if (u_grid == 1 && abs(rdd.y) > 1e-4) {
-    float tg = -rod.y / rdd.y;
-    if (tg > 0.0 && tg < tGrid) {
-      vec4 g = rod + rdd * tg;
-      float fade = exp(-tg * 0.05);
-      float gl = max(gridLine(g.x), gridLine(g.z)) * 0.25;
-      float gw = gridLine(g.w) * 0.25;
-      vec3 gc = vec3(0.8) * gl + axisCol(u_axes[3]) * gw;
-      float ax = 1.0 - smoothstep(0.0, fwidth(g.z) * 1.5, abs(g.z));
-      float az = 1.0 - smoothstep(0.0, fwidth(g.x) * 1.5, abs(g.x));
-      col = mix(col, gc + col * 0.5, max(gl, gw) * fade);
-      col = mix(col, axisCol(u_axes[0]), ax * fade * 0.8);
-      col = mix(col, axisCol(u_axes[2]), az * fade * 0.8);
-    }
-  }
-#endif
-
+  col = groundGrid(col, gro, grd, tGrid);
   col = pow(col, vec3(0.4545));
   fragColor = vec4(col, 1.0);
 }
 )";
+
+inline const char* PATHTRACE_MAIN = R"(
+// ---- path tracing: physically based lighting ----
+// Each sample follows one random light path. At every surface, the light arriving straight from one
+// randomly chosen light (the sun, a point light or a glowing object) is added (next-event
+// estimation); then the path continues in a direction drawn from the surface's BSDF (Lambert
+// diffuse + GGX microfacet specular, or rough glass). Glowing objects are area lights: directions
+// toward one are drawn in the cone of its bounding sphere and count only where the shadow ray
+// reaches a glowing surface, so they shine with their real shape. A path that hits a glowing
+// surface by itself is weighted against that (multiple importance sampling, balance heuristic), so
+// the two ways add up without counting light twice. No ambient light: with the sky off and nothing
+// glowing, everything is black. Directions live in 4D (Full 4D) or 3D (curved spaces, the Geodesic
+// view's surface), which changes the normalisations below.
+#if defined(VIEW_GEO) || defined(VIEW_CURVED)
+#define PT_DIM3
+const float COS_NORM = 3.14159265;  // integral of cos over a hemisphere of directions: 3D pi
+#else
+const float COS_NORM = 4.18879020;  // 4D: 4 pi / 3
+#endif
+const float PT_PI = 3.14159265;
+
+// material of the current surface
+vec3 g_base = vec3(0.0), g_F0 = vec3(0.04);
+float g_alpha = 0.5, g_kd = 1.0, g_ps = 0.5;
+
+float rndGauss() { return sqrt(-2.0 * log(max(rnd(), 1e-9))) * cos(6.2831853 * rnd()); }
+// a random unit direction (uniform) perpendicular to the unit tangent a at x; Geodesic view: also
+// along the surface (perpendicular to its normal wn)
+vec4 perpDir(vec4 x, vec4 a, vec4 wn) {
+  vec4 g = vec4(0.0);
+  for (int i = 0; i < 3; i++) {
+    g = vec4(rndGauss(), rndGauss(), rndGauss(), rndGauss());
+#ifdef VIEW_CURVED
+    g = tproj(g, x);
+#endif
+#ifdef VIEW_GEO
+    g -= dot(g, wn) * wn;
+#endif
+    g -= mdot(g, a) * a;
+    if (mdot(g, g) > 1e-8) break;
+  }
+  return mnorm(g);
+}
+// cosine-weighted direction around n: a uniform point of the (D-1)-ball lifted onto the hemisphere
+vec4 cosineDir(vec4 x, vec4 n, vec4 wn) {
+#ifdef PT_DIM3
+  float r = sqrt(rnd());
+#else
+  float r = pow(rnd(), 1.0 / 3.0);
+#endif
+  return mnorm(perpDir(x, n, wn) * r + n * sqrt(max(1.0 - r * r, 0.0)));
+}
+// solid angle of a cone of half-angle a (4D: 2 pi (a - sin a cos a); series for small cones)
+float cap4(float a) { return a < 0.1 ? a * a * a * (2.0 / 3.0 - a * a * (2.0 / 15.0)) : a - sin(a) * cos(a); }
+float capPdf(float a) {
+#ifdef PT_DIM3
+  float s = sin(a * 0.5);
+  return 1.0 / (4.0 * PT_PI * max(s * s, 1e-9));
+#else
+  return 1.0 / (2.0 * PT_PI * max(cap4(a), 1e-12));
+#endif
+}
+// uniform direction in the cone of half-angle a around the unit tangent c
+vec4 coneDir(vec4 x, vec4 c, float a, vec4 wn) {
+#ifdef PT_DIM3
+  float th = 2.0 * asin(clamp(sqrt(rnd()) * sin(a * 0.5), 0.0, 1.0));
+#else
+  float xi = rnd(), target = xi * cap4(a), th = a * pow(xi, 1.0 / 3.0);
+  for (int i = 0; i < 4; i++) th = clamp(th - (cap4(th) - target) / max(2.0 * sin(th) * sin(th), 1e-7), 0.0, a);
+#endif
+  return mnorm(c * cos(th) + perpDir(x, c, wn) * sin(th));
+}
+// the cone of area light j's bounding sphere seen from x (false: x is inside it / it is behind the world)
+bool lightCone(int j, vec4 x, out vec4 c, out float a, out float dist) {
+  vec4 lp = u_lpos[j];
+  float r = u_lext[j].x, s;
+  c = vec4(0.0); a = 0.0;
+#ifdef VIEW_CURVED
+  dist = cdist(x, lp);
+  vec4 tl = tproj(lp, x);
+  if (mdot(tl, tl) < 1e-14 || dist <= r) return false;
+  c = mnorm(tl);
+  s = KAPPA < 0.0 ? sinh(r / u_curvR) / sinh(dist / u_curvR) : sin(r / u_curvR) / sin(dist / u_curvR);
+#else
+  vec4 dv = lp - x;
+  dist = length(dv);
+  if (dist <= r) return false;
+  c = dv / dist;
+  s = r / dist;
+#endif
+  if (s <= 0.0 || s >= 0.9999) return false;
+  a = asin(s);
+  return true;
+}
+// probability density of light sampling choosing direction w at x (all cones containing it)
+float lightPdf(vec4 x, vec4 w, int nl, float ncand) {
+  float p = 0.0;
+  for (int j = 0; j < 8; j++) {
+    if (j >= nl) break;
+    if (u_lext[j].y < 0.5) continue;
+    vec4 c; float a, dist;
+    if (lightCone(j, x, c, a, dist) && mdot(w, c) >= cos(a)) p += capPdf(a);
+  }
+  return p / max(ncand, 1.0);
+}
+float G1(float x, float a2) { return 2.0 * x / (x + sqrt(a2 + (1.0 - a2) * x * x)); }
+vec3 fresnel(vec3 F0, float c) { return F0 + (1.0 - F0) * pow(1.0 - clamp(c, 0.0, 1.0), 5.0); }
+// BSDF x cos for light arriving from L, seen from V (both lobes; delta lights)
+vec3 evalBsdfCos(vec4 n, vec4 V, vec4 L) {
+  float nl = mdot(n, L), nv = mdot(n, V);
+  if (nl <= 0.0 || nv <= 0.0) return vec3(0.0);
+  vec4 H = mnorm(L + V);
+  float nh = max(mdot(n, H), 0.0), vh = max(mdot(V, H), 0.0), a2 = g_alpha * g_alpha;
+  float dd = nh * nh * (a2 - 1.0) + 1.0;
+  vec3 spec = fresnel(g_F0, vh) * (a2 / (PT_PI * dd * dd)) * G1(nv, a2) * G1(nl, a2) / (4.0 * nv * nl);
+  return (g_kd * g_base / COS_NORM + spec * float(u_specular)) * nl;
+}
+// a GGX microfacet normal around n (drawn from the distribution D(m) cos)
+vec4 ggxNormal(vec4 x, vec4 n, vec4 wn, out float cm) {
+  float xi = rnd(), t2 = g_alpha * g_alpha * xi / max(1.0 - xi, 1e-6);
+  cm = inversesqrt(1.0 + t2);
+  return mnorm(n * cm + perpDir(x, n, wn) * sqrt(max(1.0 - cm * cm, 0.0)));
+}
+
+const int MARCH = 0, NORMAL = 1, SHADOW = 3, DONE = 4;
+
+void main() {
+  g_seed = pcg(uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(u_sample) * 26699u) | 1u;
+  vec2 jit = (vec2(rnd(), rnd()) - 0.5) * 2.0 / u_res.y;  // a random point inside the pixel
+  vec2 uv = v_uv * vec2(u_res.x / u_res.y, 1.0) + jit;
+  vec4 ro = u_eye;
+  vec4 rd = normalize(u_frame * vec4(uv * u_tanHalf, 1.0, 0.0));
+#if defined(VIEW_CURVED)
+  if (u_aperture > 0.0) {
+    vec4 fp = geoPoint(ro, rd, u_focus / max(rd.z, 1e-3));
+    float a = 6.2831853 * rnd(), r = u_aperture * sqrt(rnd());
+    ro = geoPoint(ro, vec4(cos(a), sin(a), 0.0, 0.0), r);
+    rd = mnorm(tproj(fp, ro));
+  }
+#elif !defined(VIEW_GEO)
+  if (u_aperture > 0.0) {
+    vec4 fp = ro + rd * (u_focus / max(dot(rd, u_frame[2]), 1e-3));
+    float a = 6.2831853 * rnd(), r = u_aperture * sqrt(rnd());
+    ro += (u_frame[0] * cos(a) + u_frame[1] * sin(a)) * r;
+    rd = normalize(fp - ro);
+  }
+#endif
+
+  vec4 p = ro, dir = rd;
+  float t = 0.0;
+  int steps = 0;
+  vec4 wn = u_frame[3];
+  int phase = MARCH, k = 0;
+  bool inside = false, exiting = false, toSky = true, glass = false;
+  MAT hm = MAT(0.0);
+  vec4 hp = p, n = vec4(0.0);
+  float nv[5];
+  vec4 sp = vec4(0.0), sdir = vec4(0.0);
+  float st = 0.0, shMax = 0.0;
+  int sSteps = 0;
+  vec3 rayWorldCol = u_skyCol;
+  vec3 accum = vec3(0.0), thr = vec3(1.0);
+  int bounces = 0, depth = 0;
+  float firstT = -1.0;
+  vec4 gro = ro, grd = rd;
+  float t0 = 0.0;
+  float omega = u_relax == 1 ? 1.4 : 1.0, prevR = 0.0, stepLen = 0.0;
+  // next-event estimation in flight: toward an area light?, its contribution before visibility / emission
+  bool neeArea = false;
+  vec3 neeF = vec3(0.0);
+  // after a diffuse bounce: the light-sampling and the BSDF densities of the direction taken (MIS)
+  bool lastDiffuse = false;
+  float misPL = 0.0, misPB = 1.0;
+#ifdef VIEW_GEO
+  int nLights = 0;  // the Geodesic view: the sun only (light travels along the surface)
+#else
+  int nLights = u_nLights;
+#endif
+  float ncand = float((u_sunI > 0.0 ? 1 : 0) + nLights);
+
+  for (int it = 0; it < 3000; it++) {
+    if (phase == DONE) break;
+    vec4 q = p;
+#ifdef VIEW_CURVED
+    if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); }
+#else
+    if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3; }
+#endif
+    else if (phase == SHADOW) q = sp;
+
+    MAT mm;
+    g_exact = phase == SHADOW;
+    g_noEmissive = false;  // glowing objects are physical here: they block light and are found by shadow rays
+    g_noBody = phase == MARCH && t < u_markerSkip;
+    g_noDbg = phase == MARCH && t < 0.12;
+    float d = map(q, mm);   // the only scene evaluation site
+
+    bool advance = false, bounce = false;
+    vec4 ap = vec4(0.0), adir = vec4(0.0);
+    float h = 0.0;
+
+    if (phase == MARCH) {
+      if (inside) {  // through a transparent object until its far side
+        if (d > -u_eps * 0.5) { exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = 1; }
+        else {
+          h = max(-d, u_eps * 2.0);
+#ifdef VIEW_GEO
+          h = min(h, u_geoMaxStep);
+#endif
+          ap = p; adir = dir; advance = true; t += h; steps++;
+          if (steps >= u_maxSteps || t > u_maxDist) { phase = DONE; toSky = false; }
+        }
+      } else {
+#ifdef VIEW_GEO
+        bool sorFail = false;
+#else
+        bool sorFail = omega > 1.0 && (abs(d) + prevR) < stepLen;
+#endif
+        if (!sorFail && d < u_eps * (1.0 + t * 0.02)) {
+          hm = mm; hp = p; nv[0] = d;
+          if (firstT < 0.0) firstT = t;
+          phase = NORMAL; k = 1;
+        } else if (t > u_maxDist || steps >= u_maxSteps) {
+          phase = DONE;
+        } else {
+#ifdef VIEW_GEO
+          h = min(d * u_stepScale, u_geoMaxStep);
+#else
+          if (sorFail) { stepLen -= omega * stepLen; omega = 1.0; }
+          else stepLen = d * u_stepScale * omega;
+          prevR = abs(d);
+          h = stepLen;
+#endif
+          ap = p; adir = dir; advance = true;
+          t += h; steps++;
+        }
+      }
+    } else if (phase == NORMAL) {
+      nv[k] = d; k++;
+      if (k == 5) {
+        n = normalize(vec4(nv[1], nv[2], nv[3], nv[4]) - nv[0]);
+#ifdef VIEW_GEO
+        n = normalize(n - dot(n, wn) * wn + 1e-6);
+#endif
+#ifdef VIEW_CURVED
+        n = mnorm(tproj(vec4(n.xyz, KAPPA * n.w), hp));
+#endif
+        k = 0;
+        if (exiting) {  // leaving a transparent object: refract outward (total internal reflection stays inside)
+          exiting = false;
+          float ior = max(hm[2].y, 1.0);
+          vec4 nd2 = mrefract(dir, -n, ior);
+          phase = MARCH;
+          if (mdot(nd2, nd2) < 1e-6) { dir = mreflect(dir, -n); p = geoPoint(hp, n, -u_eps * 3.0); }
+          else { dir = mnorm(nd2); inside = false; p = geoPoint(hp, n, u_eps * 3.0); }
+#ifdef VIEW_CURVED
+          dir = mnorm(tproj(dir, p));
+#endif
+          ro = p; rd = dir; t0 = t;
+          omega = 1.0; prevR = 0.0; stepLen = 0.0;
+          continue;
+        }
+        // ---- a surface: its own light, then one light's direct light, then the path goes on ----
+        g_base = hm[0].rgb;
+        float emis = clamp(hm[1].x, 0.0, 1.0);
+        if (emis > 0.0) accum += thr * g_base * emis * max(hm[2].z, 0.0) * (lastDiffuse ? misPB / (misPB + misPL) : 1.0);
+        if (depth == 0 && hm[0].a > 0.0) accum += vec3(1.0, 0.6, 0.15) * hm[0].a * 0.3;  // selection highlight
+        float metal = clamp(hm[2].x, 0.0, 1.0);
+        g_alpha = max(clamp(hm[1].y, 0.02, 1.0) * clamp(hm[1].y, 0.02, 1.0), 0.002);
+        vec3 F0d = vec3(0.08 * clamp(hm[1].z, 0.0, 2.0));  // (specular 0.5: F0 = 0.04)
+        g_F0 = mix(F0d, g_base, metal);
+        float nvv = max(mdot(n, -dir), 1e-4);
+        g_kd = (1.0 - metal) * (1.0 - fresnel(F0d, nvv).x) * (1.0 - emis);
+        float ls = dot(fresnel(g_F0, nvv), vec3(1.0 / 3.0)) * float(u_specular), ld = g_kd * dot(g_base, vec3(1.0 / 3.0));
+        g_ps = ld < 1e-5 ? 1.0 : ls < 1e-6 ? 0.0 : clamp(ls / (ls + ld), 0.05, 0.95);
+        glass = rnd() < clamp(hm[1].w, 0.0, 1.0);
+        bounce = true;
+        if (!glass && ncand > 0.5) {
+          int pick = min(int(rnd() * ncand), int(ncand) - 1);
+          int li = u_sunI > 0.0 ? pick : pick + 1;  // 0 = the sun, 1.. = lights
+          neeArea = li > 0 && u_lext[li - 1].y > 0.5;
+          vec4 L = n;
+          float cosL = 0.0;
+          if (neeArea) {
+            vec4 c; float a, dist;
+            if (lightCone(li - 1, hp, c, a, dist)) {
+              L = coneDir(hp, c, a, wn);
+              cosL = mdot(n, L);
+              float pB = (1.0 - g_ps) * max(cosL, 0.0) / COS_NORM;
+              neeF = thr * (g_kd * g_base / COS_NORM) * cosL / max(lightPdf(hp, L, nLights, ncand) + pB, 1e-12);
+              shMax = dist + u_lext[li - 1].x;
+            }
+          } else {
+            vec3 lc; float lmax;
+            lightAt(li, hp, wn, dir, L, lc, lmax);
+            cosL = mdot(n, L);
+            // (delta lights: their brightness as in the simple model, where a white surface facing
+            // a light of intensity 1 is lit to 1)
+            neeF = thr * ncand * evalBsdfCos(n, -dir, L) * lc * COS_NORM;
+            shMax = min(lmax, li == 0 ? u_shadowMax : 1e9);
+          }
+          if (cosL > 0.0 && max(neeF.r, max(neeF.g, neeF.b)) > 1e-6) {
+            sp = geoPoint(hp, n, 0.01); sdir = L;
+#ifdef VIEW_CURVED
+            sdir = mnorm(tproj(L, sp));
+#endif
+            st = 0.02; sSteps = 0;
+            phase = SHADOW;
+            bounce = false;
+          }
+        }
+      }
+    } else {  // SHADOW: does the light get here?
+      sSteps++;
+      bool blocked = d < max(u_eps * 2.0, 0.002);
+      bool outOfSteps = sSteps > u_shadowSteps * (neeArea ? 2 : 1);
+      if (blocked || st > shMax || outOfSteps) {
+        if (neeArea) { if (blocked && mm[1].x > 0.0) accum += neeF * mm[0].rgb * clamp(mm[1].x, 0.0, 1.0) * max(mm[2].z, 0.0); }
+        else if (!blocked && !outOfSteps) accum += neeF;  // (a ray that ran out of steps cannot confirm its light)
+        bounce = true;
+      } else {
+#ifdef VIEW_GEO
+        h = clamp(d, 0.03, u_geoMaxStep);
+#else
+        float remain = max(shMax - st, 0.0);
+        h = clamp(d, 0.02, max(0.4, remain / float(max(u_shadowSteps - sSteps, 1))));
+#endif
+        ap = sp; adir = sdir; advance = true; st += h;
+      }
+    }
+
+    if (bounce) {
+      // the path goes on (Russian roulette after 3 bounces keeps long paths cheap and unbiased)
+      if (bounces >= u_maxLayers) { phase = DONE; toSky = false; }
+      else if (bounces >= 3) {
+        float qs = clamp(max(thr.r, max(thr.g, thr.b)), 0.05, 0.95);
+        if (rnd() > qs) { phase = DONE; toSky = false; } else thr /= qs;
+      }
+      if (phase != DONE) {
+        bool ok = true;
+        lastDiffuse = false;
+        if (glass) {
+          // rough glass: a microfacet normal, then Fresnel reflection or refraction about it
+          float cm, ior = max(hm[2].y, 1.0);
+          vec4 m = g_alpha > 0.003 ? ggxNormal(hp, n, wn, cm) : n;
+          float f0 = (ior - 1.0) / (ior + 1.0), c = clamp(-mdot(dir, m), 0.0, 1.0);
+          f0 *= f0;
+          if (rnd() < f0 + (1.0 - f0) * pow(1.0 - c, 5.0)) {
+            dir = mreflect(dir, m);
+            if (mdot(dir, n) <= 0.0) dir = mreflect(dir, n);
+            p = geoPoint(hp, n, u_eps * 4.0);
+          } else {
+            vec4 nd2 = mrefract(dir, m, 1.0 / ior);
+            if (mdot(nd2, nd2) < 1e-6) { dir = mreflect(dir, m); p = geoPoint(hp, n, u_eps * 4.0); }
+            else { dir = mnorm(nd2); inside = true; p = geoPoint(hp, n, -u_eps * 4.0); thr *= mix(vec3(1.0), g_base, 0.5); }
+          }
+        } else {
+          vec4 V = -dir;
+          float nvv = mdot(n, V);
+          if (rnd() < g_ps) {  // GGX: mirror the view about a microfacet normal
+            float cm;
+            vec4 m = ggxNormal(hp, n, wn, cm);
+            float vm = mdot(V, m);
+            vec4 L = mreflect(dir, m);
+            float nl = mdot(n, L), a2 = g_alpha * g_alpha;
+            if (vm <= 0.0 || nl <= 0.0 || nvv <= 0.0) ok = false;
+            else { thr *= fresnel(g_F0, vm) * G1(nvv, a2) * G1(nl, a2) * vm / (nvv * cm) / g_ps; dir = L; }
+          } else {  // diffuse
+            vec4 L = cosineDir(hp, n, wn);
+            thr *= g_kd * g_base / (1.0 - g_ps);
+            misPB = (1.0 - g_ps) * max(mdot(n, L), 0.0) / COS_NORM;
+            misPL = lightPdf(hp, L, nLights, ncand);
+            lastDiffuse = true;
+            dir = L;
+          }
+          p = geoPoint(hp, n, u_eps * 4.0);
+        }
+        if (!ok || max(thr.r, max(thr.g, thr.b)) < 1e-5) { phase = DONE; toSky = false; }
+        else {
+          phase = MARCH; bounces++; depth++;
+#ifdef VIEW_CURVED
+          dir = mnorm(tproj(dir, p));
+#endif
+          ro = p; rd = dir; t0 = t;
+          omega = 1.0; prevR = 0.0; stepLen = 0.0;
+        }
+      }
+    }
+
+    if (advance) {
+#ifdef VIEW_GEO
+      ap += adir * h;
+      vec4 nn = projectToWorld(ap);   // the only world-projection site
+      adir = adir - dot(adir, nn) * nn;
+      adir = dot(adir, adir) > 1e-12 ? normalize(adir) : sdir;
+#elif defined(VIEW_CURVED)
+      if (phase == MARCH) { ap = ro; adir = rd; geoMove(ap, adir, t - t0); }
+      else { geoMove(ap, adir, h); if (abs(ap.w) < 100.0) { ap = crenorm(ap); adir = mnorm(tproj(adir, ap)); } }
+#else
+      if (phase == MARCH) ap = ro + rd * (t - t0);
+      else ap += adir * h;
+#endif
+      if (phase == MARCH) {
+        p = ap; dir = adir;
+#ifdef VIEW_GEO
+        wn = nn;
+        if (u_geoIters > 0) rayWorldCol = g_projMat[0].rgb;
+#endif
+      } else { sp = ap; sdir = adir; }
+    }
+  }
+
+  vec3 col = accum;
+  if (toSky) col += thr * sky(p, dir, rayWorldCol);  // the sky's light (Geodesic: the world surface's colour)
+  if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
+  col = min(max(col, vec3(0.0)), vec3(32.0));  // (rare very bright samples would take long to average out)
+  col = groundGrid(col, gro, grd, firstT >= 0.0 ? firstT : 1e9);
+  col = pow(col, vec3(0.4545));
+  fragColor = vec4(col, 1.0);
+}
+)";
+
 
 // Overview of a curved space from outside: the Poincare ball (hyperbolic: the whole space in a
 // unit ball) or the stereographic projection (spherical: the half of the space around the origin
@@ -769,9 +1212,9 @@ void main() {
 }
 )";
 
-inline std::string buildFragmentShader(const std::string& sceneGLSL, bool geo, ShaderTarget t, int curved = 0, bool ball = false) {
+inline std::string buildFragmentShader(const std::string& sceneGLSL, bool geo, ShaderTarget t, int curved = 0, bool ball = false, bool pathTrace = false) {
   if (ball && curved) return shaderPrelude(t, false, curved) + sceneGLSL + BALL_MAIN;
-  return shaderPrelude(t, geo, curved) + sceneGLSL + RAYMARCH_MAIN;
+  return shaderPrelude(t, geo, curved) + sceneGLSL + RAYMARCH_COMMON + RAYMARCH_GRID + (pathTrace ? PATHTRACE_MAIN : SIMPLE_MAIN);
 }
 
 }  // namespace fd

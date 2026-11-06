@@ -141,7 +141,7 @@ void Renderer::pollCompiles() {
 }
 
 Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball,
-                                 bool& pending) {
+                                 bool pt, bool& pending) {
   pending = false;
   pollCompiles();
   if (space == SpaceKind::Flat) ball = false;
@@ -152,7 +152,8 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
     if (n.isCustom()) { checkCustomCode(n.code); if (pendingCode_.count(n.code)) codeWait = true; }
   });
   if (codeWait) { pending = true; return nullptr; }
-  std::string key = structureKey(root, reg, world, geo, space) + (ball ? "|ball" : "");
+  if (ball) pt = false;
+  std::string key = structureKey(root, reg, world, geo, space) + (ball ? "|ball" : "") + (pt ? "|pt" : "");
   auto it = cache_.find(key);
   if (it != cache_.end()) {
     lru_.remove(key);
@@ -163,7 +164,7 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
   if (pending_.count(key)) { pending = true; return nullptr; }
   auto t0 = std::chrono::steady_clock::now();
   CompiledScene cs = compileScene(root, reg, world, geo, &badCode_, space);
-  std::string src = buildFragmentShader(cs.glsl, geo, shaderTarget(), (int)space, ball);
+  std::string src = buildFragmentShader(cs.glsl, geo, shaderTarget(), (int)space, ball, pt);
   if (async_ && workerOk_) {
     pending_[key] = std::move(cs);
     enqueue({key, std::move(src), ""});
@@ -225,9 +226,12 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   // point lights
   int nl = 0, mask = 0;
   for (auto& l : fp.lights) {
-    if (nl >= MAX_LIGHTS || !fp.prof.pointLights) break;
+    if (nl >= MAX_LIGHTS) break;
+    if (!l.area && !fp.prof.pointLights) continue;  // (area lights: path tracing, always on)
     put4(u.lpos[nl], l.pos);
     put3(u.lcol[nl], l.color, l.range);
+    u.lext[nl][0] = l.area ? l.radius : q.lightRadius;
+    u.lext[nl][1] = l.area ? 1.f : 0.f;
     // emissive objects' lights always cast shadows (they are what would shine through walls)
     if (l.shadows && (fp.prof.pointShadows || l.emissive)) mask |= 1 << nl;
     nl++;
@@ -246,6 +250,7 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   int32_t ll[4] = {std::clamp(p.shadowSteps, 4, 256), p.specular ? 1 : 0, fp.stochastic ? 1 : 0, fp.sample};
   float ee[4] = {fp.stochastic ? fp.aperture : 0.f, std::max(0.01f, fp.focus), std::clamp(fp.blend, 0.f, 1.f), (float)fp.space.R()};
   std::memcpy(u.e, ee, sizeof ee);
+  u.f[0] = std::max(0.f, q.skyIntensity);
   std::memcpy(u.i, ii, sizeof ii);
   std::memcpy(u.j, jj, sizeof jj);
   std::memcpy(u.k, kk, sizeof kk);
@@ -257,7 +262,7 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
                       const std::unordered_set<std::string>& highlight, const FrameParams& fp) {
   int rw = std::max(1, (int)(w * fp.scale)), rh = std::max(1, (int)(h * fp.scale));
   bool pending = false;
-  Program* p = get(root, reg, world, fp.geo, fp.space.kind, fp.ballView, pending);
+  Program* p = get(root, reg, world, fp.geo, fp.space.kind, fp.ballView, fp.pathTrace, pending);
   compiling_ = pending;
   if (pending) {
     // the program is being compiled: keep the last image (a target that does not exist yet is

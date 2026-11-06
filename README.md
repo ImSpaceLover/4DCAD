@@ -185,7 +185,7 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
   * **Copy / paste** (Ctrl+C / Ctrl+V) uses the system clipboard, so objects can be moved between scenes (or between two running copies of 4DCAD). Pasted objects go to the scene root at the same place in the world.
 * **Cameras** are scene objects (View > Cameras > Add camera at the view): they appear in the scene tree, are drawn in the viewport as small frustums and move / rotate like any object. Each has a field of view and (Full 4D) a slider axis; one added in the Geodesic view is attached to the world surface and moves along it. The **active camera** (orange) is the one used for rendering. **Numpad 0** looks through the selected (or active) camera, **Ctrl+Alt+Numpad 0** moves it to your view. Camera bookmarks from older files become camera objects.
   * Drag rows onto groups (into), onto objects (union with it) or onto row edges (reorder).
-* **Materials** (Properties): colour, **rounding** (inflates the solid, rounding its edges), **shell** (hollows it into a skin of that half-thickness), **emissive** (always fully lit, casts no shadow, does not light other objects), and a **procedural 4D texture** (checker, stripes, grid, noise, rings, dots, waves, marble, wood, cells, bricks, gradient) with a second colour, scale and strength. Textures are solid 4D textures in the object's local space, so they move and rotate with it.
+* **Materials** (Properties): colour, **rounding** (inflates the solid, rounding its edges), **shell** (hollows it into a skin of that half-thickness), **emissive** (glows; with simple lighting it is always fully lit and lights its surroundings as a point light, with path-traced lighting it is a real light of its own shape, as bright as **emission strength** says), and a **procedural 4D texture** (checker, stripes, grid, noise, rings, dots, waves, marble, wood, cells, bricks, gradient) with a second colour, scale and strength. Textures are solid 4D textures in the object's local space, so they move and rotate with it.
   * **Roughness / Specular**: size and strength of highlights. **Metallic**: a mirror (1) that reflects the scene, tinted by the colour. **Transparency** with a **refraction index**: light bends entering and leaving (1 = none, 1.33 water, 1.5 glass); light can also be reflected inside (total internal reflection). Settings > Rendering > Bounces limits how many reflections / refractions a pixel follows.
 * **Stochastic sampling** (Settings > Rendering): while nothing moves, the view refines by averaging random samples ("Refining n / N" in the status line): glass reflects and refracts by its Fresnel ratio, rough mirrors give blurry reflections, the sun (Sun size) and point lights (Light radius) give soft shadows, ambient occlusion is sampled, edges are anti-aliased, and cameras with an Aperture show depth of field (Focus distance) when you look through them. As soon as anything moves, the normal fast shading is used again.
 * **Fast mode** (Settings > Rendering > Fast mode): the rendering used in Explore, adjustable separately from the normal settings, with Fast / Balanced / Full presets: resolution, march steps, **bounces** (reflections / refractions; with 0, mirrors and glass look like plain surfaces), textures, highlights, point lights, sun and point light shadows, ambient occlusion and its samples, shadow ray steps. "Also while moving in Edit mode" uses it whenever the view or objects move in Edit mode too.
@@ -220,6 +220,31 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
 * **In Explore**, **P** plays / pauses the animation while you walk around and **Shift+P** plays it from the first frame; it repeats indefinitely, starting over when it reaches the last keyframe.
 * **Camera view** (timeline button, or **Ctrl+Numpad 0**): the viewport shows the active camera, to preview the animation; navigating leaves it.
 * Animation is saved in the scene, and its changes can be undone.
+
+## Lighting models
+
+Settings > Rendering > **Lighting model** (saved, part of render presets):
+
+* **Simple:** the sun, point lights (View > Lights), ambient light and ambient occlusion. Glowing
+  objects light their surroundings as point lights at their centres. Fast and noise-free, so it is
+  always used while moving, in Explore and by the fast profile.
+* **Path traced (PBR):** physically based light transport, used where the image is refined (the
+  still viewport when "Refine the view when still" is on, and renders).
+  * Materials: Lambert diffuse plus GGX microfacet specular (roughness, specular = reflectance of
+    non-metals, metallic = tinted mirror), rough glass with Fresnel reflection and refraction.
+  * Glowing objects are **area lights of their own shape**: emitted light = colour × emissive ×
+    **emission strength** (Properties). Each bounce samples one light directly (directions within
+    the glowing object's bounding sphere, counted only where they reach its glowing surface), and
+    paths that hit a glowing surface themselves are weighted against that (multiple importance
+    sampling), so small and large lights both converge.
+  * Light bounces between surfaces (Bounces setting; Russian roulette after 3).
+  * No ambient light: with **Sky intensity** 0 and nothing glowing, the image is black.
+  * Works in Full 4D (directions in 4D), the Geodesic view (light travels along the world surface;
+    there the sun and glowing objects found by the paths light the scene) and curved spaces.
+* **Sky intensity** (both models): brightness of the sky. In the Geodesic view the "sky" is the
+  colour of the world surface that far rays reach, so it also darkens the fog there. With simple
+  lighting, the rim light on grazing surfaces now follows the ambient setting, so sun 0, ambient 0
+  and sky 0 give a black image too.
 
 ## Rendering images and videos
 

@@ -304,7 +304,8 @@ class App {
   /** Per-value keying from Properties / the Lights window: key, or remove the key at this frame. */
   void toggleValueKey(const std::string& target, const std::string& path);
   /** The point lights for a frame: enabled scene lights, then emissive objects (if enabled). */
-  std::vector<LightParam> frameLights();
+  /** Lights of a frame. pathTrace: emissive objects become area lights (bounding spheres) instead of point lights. */
+  std::vector<LightParam> frameLights(bool pathTrace = false);
   // cameras are scene objects (NodeKind::Camera); the active one is used for rendering
   std::string activeCamera;
   /** View, Geodesic flag and field of view of a camera object. */

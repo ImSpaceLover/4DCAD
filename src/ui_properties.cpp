@@ -251,7 +251,16 @@ void UI::propertiesPanel() {
     keyable(nid, {"mat.emissive"});
     track();
     mixed([](const Node& x) { return x.mat.emissive; });
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Always lit, casts no shadow, does not light other objects");
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Glows. Simple lighting: always lit, lights its surroundings as a point light.\n"
+                        "Path-traced lighting: a real light source of its own shape");
+    if (n->mat.emissive > 0) {
+      float es = (float)n->mat.emissionStrength;
+      if (ImGui::DragFloat("Emission strength", &es, 0.05f, 0.f, 200.f, "%.2f")) n->mat.emissionStrength = std::max(0.f, es);
+      track();
+      mixed([](const Node& x) { return x.mat.emissionStrength; });
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Path-traced lighting: how much light it gives (colour x emissive x strength)");
+    }
     int tex = n->mat.texture;
     if (ImGui::Combo("Texture", &tex, TEXTURE_NAMES, TEX_COUNT)) { n->mat.texture = tex; done = true; }
     mixed([](const Node& x) { return x.mat.texture; });

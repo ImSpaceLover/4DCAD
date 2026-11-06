@@ -67,6 +67,8 @@ int main(int argc, char** argv) {
   std::string sceneArg, example, screenshot;
   std::string selectName, toolName, openWindow;
   bool startGeo = false, startExplore = false, debugRayArg = false, forceAsync = false, forceThreads = false;
+  int lightOverride = -1;
+  double skyOverride = -1, sunOverride = -1, ambientOverride = -1, fogOverride = -1;
   double turnDeg = 0, strafe = 0;
   Backend forceBackend = Backend::Auto;
   int frames = 30, W = 1600, H = 900;
@@ -94,7 +96,14 @@ int main(int argc, char** argv) {
     else if (a == "--aa" && i + 1 < argc) renderAA = std::atoi(argv[++i]);
     else if (a == "--gl") forceBackend = Backend::OpenGL;
     else if (a == "--async") forceAsync = true;
-    else if (a == "--threads") forceThreads = true;  // render threads even for --screenshot (testing)  // background compiles even for --screenshot (testing)
+    else if (a == "--threads") forceThreads = true;  // render threads even for --screenshot (testing)
+    // lighting overrides for this run (testing; not saved): --path-trace, --simple-lighting, --sky-intensity X, --sun X, --ambient X, --fog X
+    else if (a == "--path-trace") lightOverride = 1;
+    else if (a == "--simple-lighting") lightOverride = 0;
+    else if (a == "--sky-intensity" && i + 1 < argc) skyOverride = std::atof(argv[++i]);
+    else if (a == "--sun" && i + 1 < argc) sunOverride = std::atof(argv[++i]);
+    else if (a == "--ambient" && i + 1 < argc) ambientOverride = std::atof(argv[++i]);
+    else if (a == "--fog" && i + 1 < argc) fogOverride = std::atof(argv[++i]);  // background compiles even for --screenshot (testing)
     else if (a == "--vulkan") forceBackend = Backend::Vulkan;
     else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &W, &H);
     else if (a[0] != '-') sceneArg = a;
@@ -224,6 +233,13 @@ int main(int argc, char** argv) {
     app.newScene(kind == "hyperbolic" ? SpaceKind::Hyperbolic : kind == "spherical" ? SpaceKind::Spherical : SpaceKind::Flat, r);
   }
   if (startGeo) app.setGeo(true);
+  QualitySettings savedQuality = app.quality;
+  bool qualityOverride = lightOverride >= 0 || skyOverride >= 0 || sunOverride >= 0 || ambientOverride >= 0 || fogOverride >= 0;
+  if (lightOverride >= 0) app.quality.lighting = lightOverride;
+  if (skyOverride >= 0) app.quality.skyIntensity = (float)skyOverride;
+  if (sunOverride >= 0) app.quality.sunIntensity = (float)sunOverride;
+  if (ambientOverride >= 0) app.quality.ambient = (float)ambientOverride;
+  if (fogOverride >= 0) app.quality.fog = (float)fogOverride;
   if (!selectName.empty()) walk(app.root, [&](Node& n, Node*, int) { if (n.name == selectName && app.selection.empty()) app.selection = {n.id}; });
   if (toolName == "move") app.tool = Tool::Move;
   if (toolName == "rotate") app.tool = Tool::Rotate;
@@ -370,6 +386,7 @@ int main(int argc, char** argv) {
                 frameTimes[frameTimes.size() * 95 / 100] * 1000, frameTimes.back() * 1000);
   }
   if (!renderOut.empty()) app.renderSet = savedRenderSet;
+  if (qualityOverride) app.quality = savedQuality;  // (the overrides are not saved)
   app.saveSettings();
   if (screenshot.empty() && renderOut.empty()) app.clearRecovery();  // quitting normally (unsaved changes were already asked about)
   g_ui = nullptr;

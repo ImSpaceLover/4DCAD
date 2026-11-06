@@ -40,6 +40,10 @@ struct LightParam {
   float range = 10;
   bool shadows = true;
   bool emissive = false;  // an emissive object's light: casts shadows even when point-light shadows are off
+  // path tracing: an emissive object as an area light, given by its bounding sphere (pos, radius);
+  // shadow rays toward it count only where they reach a glowing surface, so it shines with its own shape
+  bool area = false;
+  float radius = 0;
 };
 
 struct FrameParams {
@@ -74,6 +78,7 @@ struct FrameParams {
   // Offline renders draw in tiles so no single GPU job runs long on slow machines.
   int tile[4] = {0, 0, 0, 0};
   bool ballView = false;   // curved: the Poincare ball / stereographic overview (view = outside camera in the ball)
+  bool pathTrace = false;  // physically based path tracing (a separate shader; needs random samples)
 };
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */
@@ -84,7 +89,9 @@ struct FrameUniforms {
   float a[4], b[4], c[4], d[4];
   int32_t i[4], j[4], k[4], l[4];
   float e[4];  // aperture, focus distance, accumulation weight (backend blend), 0
+  float f[4];  // sky intensity (path tracing), 0, 0, 0
   float lpos[MAX_LIGHTS][4], lcol[MAX_LIGHTS][4];
+  float lext[MAX_LIGHTS][4];  // radius, area light (1) / point light (0), 0, 0
   float dbg[MAX_DEBUG_PTS][4];
 };
 
@@ -170,7 +177,7 @@ class Renderer {
   std::unordered_set<std::string> failed_;
   std::unordered_set<std::string> badCode_;
   std::unordered_map<std::string, std::string> codeErrors_;
-  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball, bool& pending);
+  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball, bool pt, bool& pending);
   void insert(const std::string& key, Program p);
 
   // ---- background compiles: jobs run on worker_, results are applied on the calling thread

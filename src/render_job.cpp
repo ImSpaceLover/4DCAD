@@ -153,7 +153,8 @@ void App::prepareJobFrame() {
     quality = j.quality;
     fp.light = light();
     fp.skyCol = worldColor();
-    fp.lights = frameLights();
+    fp.pathTrace = j.quality.lighting == 1;
+    fp.lights = frameLights(fp.pathTrace);
     fp.prof = mainProfile();
     quality = live;
   }
