@@ -1,0 +1,1276 @@
+{
+  "camera": {
+    "distance": 36.100053997736524,
+    "pitch": -0.016000000000000028,
+    "rot4": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "slider": 3,
+    "target": [
+      -1.8875020184539912,
+      -0.028463645260801806,
+      1.841878884798824,
+      -2.0837048811262875
+    ],
+    "yaw": 0.056
+  },
+  "format": "4dcad-scene",
+  "primitives": [],
+  "root": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "color": [
+                  0.8200000000000001,
+                  0.37999999999999995,
+                  0.42224
+                ],
+                "id": "n7b8dd9e",
+                "kind": "leaf",
+                "material": {
+                  "color2": [
+                    0.12,
+                    0.12,
+                    0.14
+                  ],
+                  "emissive": 0.0,
+                  "ior": 1.45,
+                  "metallic": 0.0,
+                  "roughness": 0.75,
+                  "specular": 0.35,
+                  "texScale": 1.0,
+                  "texStrength": 0.7,
+                  "texture": "None",
+                  "transparency": 0.0
+                },
+                "modifiers": [
+                  {
+                    "length": 25.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 0.5,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 25.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 25.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  }
+                ],
+                "name": "Limited 3D Space",
+                "prim": "point",
+                "thickness": 0.1,
+                "xf": {
+                  "pos": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "rotm": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": 1.0
+                }
+              },
+              {
+                "color": [
+                  0.8200000000000001,
+                  0.37999999999999995,
+                  0.42224
+                ],
+                "id": "n91e85a3",
+                "kind": "leaf",
+                "material": {
+                  "color2": [
+                    0.12,
+                    0.12,
+                    0.14
+                  ],
+                  "emissive": 0.0,
+                  "ior": 1.45,
+                  "metallic": 0.0,
+                  "roughness": 0.75,
+                  "specular": 0.35,
+                  "texScale": 1.0,
+                  "texStrength": 0.7,
+                  "texture": "None",
+                  "transparency": 0.0
+                },
+                "modifiers": [
+                  {
+                    "length": 25.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 0.5,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 25.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 25.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  }
+                ],
+                "name": "Limited 3D Space copy",
+                "prim": "point",
+                "thickness": 0.1,
+                "xf": {
+                  "pos": [
+                    0.0,
+                    4.4981607899633405,
+                    0.0,
+                    0.0
+                  ],
+                  "rotm": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": 1.0
+                }
+              },
+              {
+                "color": [
+                  0.37999999999999995,
+                  0.8200000000000001,
+                  0.4662400000000002
+                ],
+                "id": "n75be106",
+                "kind": "leaf",
+                "material": {
+                  "color2": [
+                    0.12,
+                    0.12,
+                    0.14
+                  ],
+                  "emissive": 0.0,
+                  "ior": 1.45,
+                  "metallic": 0.0,
+                  "roughness": 0.75,
+                  "specular": 0.35,
+                  "texScale": 1.0,
+                  "texStrength": 0.7,
+                  "texture": "None",
+                  "transparency": 0.0
+                },
+                "modifiers": [
+                  {
+                    "length": 2.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "axis": -1,
+                    "radius": 0.0,
+                    "type": "revolve"
+                  },
+                  {
+                    "axis": 0,
+                    "radius": 0.0,
+                    "type": "revolve"
+                  },
+                  {
+                    "length": 2.5,
+                    "mode": "finite",
+                    "type": "extrude"
+                  }
+                ],
+                "name": "Spherinder",
+                "prim": "point",
+                "thickness": 0.1,
+                "xf": {
+                  "pos": [
+                    -0.9214019414919621,
+                    2.0869079420096837,
+                    -3.1144399400038587,
+                    0.0
+                  ],
+                  "rotm": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    6.123031769111886e-17,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    -1.0,
+                    0.0,
+                    6.123031769111886e-17
+                  ],
+                  "scale": 1.0
+                }
+              }
+            ],
+            "id": "g974f55",
+            "k": 2.640000104904175,
+            "kind": "group",
+            "modifiers": [],
+            "name": "smoothUnion",
+            "op": "smoothUnion",
+            "xf": {
+              "pos": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotm": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": 1.0
+            }
+          },
+          {
+            "children": [
+              {
+                "color": [
+                  0.37999999999999995,
+                  0.5507200000000003,
+                  0.8200000000000001
+                ],
+                "id": "n8180cc0",
+                "kind": "leaf",
+                "material": {
+                  "color2": [
+                    0.12,
+                    0.12,
+                    0.14
+                  ],
+                  "emissive": 0.0,
+                  "ior": 1.45,
+                  "metallic": 0.0,
+                  "roughness": 0.75,
+                  "specular": 0.35,
+                  "texScale": 1.0,
+                  "texStrength": 0.7,
+                  "texture": "None",
+                  "transparency": 0.0
+                },
+                "modifiers": [
+                  {
+                    "length": 5.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "axis": -1,
+                    "radius": 0.0,
+                    "type": "revolve"
+                  },
+                  {
+                    "length": 25.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 25.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  }
+                ],
+                "name": "Disk",
+                "prim": "point",
+                "round": 0.0,
+                "thickness": 0.1,
+                "xf": {
+                  "pos": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "rotm": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": 1.0
+                }
+              },
+              {
+                "color": [
+                  0.37999999999999995,
+                  0.5507200000000003,
+                  0.8200000000000001
+                ],
+                "id": "n90b742f",
+                "kind": "leaf",
+                "material": {
+                  "color2": [
+                    0.12,
+                    0.12,
+                    0.14
+                  ],
+                  "emissive": 0.0,
+                  "ior": 1.45,
+                  "metallic": 0.0,
+                  "roughness": 0.75,
+                  "specular": 0.35,
+                  "texScale": 1.0,
+                  "texStrength": 0.7,
+                  "texture": "None",
+                  "transparency": 0.0
+                },
+                "modifiers": [
+                  {
+                    "length": 4.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "axis": -1,
+                    "radius": 0.0,
+                    "type": "revolve"
+                  },
+                  {
+                    "length": 25.040000915527344,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 25.219999313354492,
+                    "mode": "finite",
+                    "type": "extrude"
+                  }
+                ],
+                "name": "Disk copy",
+                "prim": "point",
+                "round": 0.0,
+                "thickness": 0.1,
+                "xf": {
+                  "pos": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "rotm": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": 1.0
+                }
+              },
+              {
+                "color": [
+                  0.6792000000000007,
+                  0.8200000000000001,
+                  0.37999999999999995
+                ],
+                "id": "n87439fe",
+                "kind": "leaf",
+                "material": {
+                  "color2": [
+                    0.12,
+                    0.12,
+                    0.14
+                  ],
+                  "emissive": 0.0,
+                  "ior": 1.45,
+                  "metallic": 0.0,
+                  "roughness": 0.75,
+                  "specular": 0.35,
+                  "texScale": 1.0,
+                  "texStrength": 0.7,
+                  "texture": "None",
+                  "transparency": 0.0
+                },
+                "modifiers": [
+                  {
+                    "length": 0.0,
+                    "mode": "infinite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 0.0,
+                    "mode": "half",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 0.0,
+                    "mode": "infinite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 0.0,
+                    "mode": "infinite",
+                    "type": "extrude"
+                  }
+                ],
+                "name": "Hyperplane",
+                "prim": "point",
+                "thickness": 0.1,
+                "xf": {
+                  "pos": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "rotm": [
+                    1.1102230246251565e-16,
+                    1.0,
+                    0.0,
+                    0.0,
+                    -1.0,
+                    1.1102230246251565e-16,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": 1.0
+                }
+              }
+            ],
+            "id": "g887794a",
+            "k": 0.3,
+            "kind": "group",
+            "modifiers": [],
+            "name": "Arc",
+            "op": "subtraction",
+            "xf": {
+              "pos": [
+                -12.487757092228055,
+                2.260265487517111,
+                0.0,
+                0.0
+              ],
+              "rotm": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": 1.0
+            }
+          }
+        ],
+        "id": "g98d1fc7",
+        "k": 0.009999999776482582,
+        "kind": "group",
+        "modifiers": [],
+        "name": "smoothUnion",
+        "op": "smoothUnion",
+        "xf": {
+          "pos": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      },
+      {
+        "children": [
+          {
+            "color": [
+              0.37999999999999995,
+              0.5507200000000003,
+              0.8200000000000001
+            ],
+            "id": "n1356f6b9",
+            "kind": "leaf",
+            "material": {
+              "color2": [
+                0.11999998986721039,
+                0.1377391368150711,
+                0.14000000059604645
+              ],
+              "emissive": 0.0,
+              "ior": 1.45,
+              "metallic": 0.0,
+              "roughness": 0.75,
+              "specular": 0.35,
+              "texScale": 4.0,
+              "texStrength": 0.7,
+              "texture": "Checker",
+              "transparency": 0.0
+            },
+            "modifiers": [
+              {
+                "length": 5.599999904632568,
+                "mode": "finite",
+                "type": "extrude"
+              },
+              {
+                "axis": -1,
+                "radius": 0.0,
+                "type": "revolve"
+              },
+              {
+                "length": 20.0,
+                "mode": "finite",
+                "type": "extrude"
+              },
+              {
+                "length": 20.0,
+                "mode": "finite",
+                "type": "extrude"
+              }
+            ],
+            "name": "Disk",
+            "prim": "point",
+            "round": 0.0,
+            "thickness": 0.1,
+            "xf": {
+              "pos": [
+                0.0,
+                0.0,
+                9.730330997118198,
+                0.0
+              ],
+              "rotm": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": 1.0
+            }
+          },
+          {
+            "color": [
+              0.6792000000000007,
+              0.8200000000000001,
+              0.37999999999999995
+            ],
+            "id": "n137d9848",
+            "kind": "leaf",
+            "material": {
+              "color2": [
+                0.12,
+                0.12,
+                0.14
+              ],
+              "emissive": 0.0,
+              "ior": 1.45,
+              "metallic": 0.0,
+              "roughness": 0.75,
+              "specular": 0.35,
+              "texScale": 1.0,
+              "texStrength": 0.7,
+              "texture": "None",
+              "transparency": 0.0
+            },
+            "modifiers": [
+              {
+                "length": 0.0,
+                "mode": "infinite",
+                "type": "extrude"
+              },
+              {
+                "length": 0.0,
+                "mode": "half",
+                "type": "extrude"
+              },
+              {
+                "length": 0.0,
+                "mode": "infinite",
+                "type": "extrude"
+              },
+              {
+                "length": 0.0,
+                "mode": "infinite",
+                "type": "extrude"
+              }
+            ],
+            "name": "Hyperplane",
+            "prim": "point",
+            "thickness": 0.1,
+            "xf": {
+              "pos": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotm": [
+                1.1102230246251565e-16,
+                1.0,
+                0.0,
+                0.0,
+                -1.0,
+                1.1102230246251565e-16,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": 1.0
+            }
+          },
+          {
+            "color": [
+              0.3803921639919281,
+              0.8196078538894653,
+              0.6313725709915161
+            ],
+            "id": "n2551b838",
+            "kind": "leaf",
+            "material": {
+              "color2": [
+                0.12,
+                0.12,
+                0.14
+              ],
+              "emissive": 0.0,
+              "ior": 1.45,
+              "metallic": 0.0,
+              "roughness": 0.75,
+              "specular": 0.35,
+              "texScale": 1.0,
+              "texStrength": 0.7,
+              "texture": "Checker",
+              "transparency": 0.0
+            },
+            "modifiers": [
+              {
+                "length": 8.0,
+                "mode": "finite",
+                "type": "extrude"
+              },
+              {
+                "length": 7.0,
+                "mode": "finite",
+                "type": "extrude"
+              },
+              {
+                "length": 19.0,
+                "mode": "finite",
+                "type": "extrude"
+              },
+              {
+                "length": 19.0,
+                "mode": "finite",
+                "type": "extrude"
+              }
+            ],
+            "name": "Tesseract copy",
+            "prim": "point",
+            "thickness": 0.1,
+            "xf": {
+              "pos": [
+                -1.427311260798248,
+                0.0,
+                9.692446698063483,
+                0.0
+              ],
+              "rotm": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": 1.0
+            }
+          }
+        ],
+        "id": "g13470452",
+        "k": 0.3,
+        "kind": "group",
+        "modifiers": [],
+        "name": "Arc",
+        "op": "subtraction",
+        "xf": {
+          "pos": [
+            -12.379531792698058,
+            2.2376699662429997,
+            -10.880002507816213,
+            -1.7763568394043906e-11
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "color": [
+                  0.2528040111064911,
+                  0.2842266857624054,
+                  0.8550724983215332
+                ],
+                "id": "n9a4fdf4",
+                "kind": "leaf",
+                "material": {
+                  "color2": [
+                    0.12,
+                    0.12,
+                    0.14
+                  ],
+                  "emissive": 0.0,
+                  "ior": 1.45,
+                  "metallic": 0.0,
+                  "roughness": 0.75,
+                  "specular": 0.35,
+                  "texScale": 1.0,
+                  "texStrength": 0.7,
+                  "texture": "None",
+                  "transparency": 0.0
+                },
+                "modifiers": [
+                  {
+                    "length": 2.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 2.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 2.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  }
+                ],
+                "name": "Cube",
+                "prim": "point",
+                "thickness": 0.10000000149011612,
+                "xf": {
+                  "pos": [
+                    0.0,
+                    -2.7100000381469727,
+                    0.0,
+                    0.0
+                  ],
+                  "rotm": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    6.123031769111886e-17,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    -1.0,
+                    0.0,
+                    6.123031769111886e-17
+                  ],
+                  "scale": 10.0
+                }
+              },
+              {
+                "color": [
+                  0.37999996542930603,
+                  0.8008695840835571,
+                  0.8199999928474426
+                ],
+                "id": "n9bea81e",
+                "kind": "leaf",
+                "material": {
+                  "color2": [
+                    0.12,
+                    0.12,
+                    0.14
+                  ],
+                  "emissive": 0.0,
+                  "ior": 1.45,
+                  "metallic": 0.0,
+                  "roughness": 0.75,
+                  "specular": 0.35,
+                  "texScale": 19.0,
+                  "texStrength": 0.7,
+                  "texture": "Checker",
+                  "transparency": 0.0
+                },
+                "modifiers": [
+                  {
+                    "length": 2.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 2.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  },
+                  {
+                    "length": 2.0,
+                    "mode": "finite",
+                    "type": "extrude"
+                  }
+                ],
+                "name": "Cube copy",
+                "prim": "point",
+                "thickness": 2.0,
+                "xf": {
+                  "pos": [
+                    0.0,
+                    3.6740167072557464,
+                    0.0,
+                    0.0
+                  ],
+                  "rotm": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "scale": 9.5
+                }
+              }
+            ],
+            "id": "g996b5f2",
+            "k": 0.3,
+            "kind": "group",
+            "modifiers": [
+              {
+                "axis": 1,
+                "offset": 5.0,
+                "type": "mirror"
+              }
+            ],
+            "name": "Room",
+            "op": "subtraction",
+            "xf": {
+              "pos": [
+                9.974343652149628,
+                -0.3136551012210522,
+                0.0656375451171014,
+                0.0
+              ],
+              "rotm": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": 1.0
+            }
+          },
+          {
+            "color": [
+              0.37999996542930603,
+              0.8199999928474426,
+              0.6325216293334961
+            ],
+            "id": "n209fe5b8",
+            "kind": "leaf",
+            "material": {
+              "color2": [
+                0.12,
+                0.12,
+                0.14
+              ],
+              "emissive": 0.0,
+              "ior": 1.45,
+              "metallic": 0.0,
+              "roughness": 0.75,
+              "specular": 0.35,
+              "texScale": 1.0,
+              "texStrength": 0.7,
+              "texture": "Checker",
+              "transparency": 0.0
+            },
+            "modifiers": [
+              {
+                "length": 7.0,
+                "mode": "finite",
+                "type": "extrude"
+              },
+              {
+                "length": 8.0,
+                "mode": "finite",
+                "type": "extrude"
+              },
+              {
+                "length": 19.0,
+                "mode": "finite",
+                "type": "extrude"
+              },
+              {
+                "length": 19.0,
+                "mode": "finite",
+                "type": "extrude"
+              }
+            ],
+            "name": "Tesseract",
+            "prim": "point",
+            "thickness": 0.1,
+            "xf": {
+              "pos": [
+                0.28660402529065365,
+                -0.11395022332044513,
+                0.07565877547110356,
+                0.0
+              ],
+              "rotm": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": 1.0
+            }
+          }
+        ],
+        "id": "g21d14e9d",
+        "k": 0.3,
+        "kind": "group",
+        "modifiers": [],
+        "name": "subtraction",
+        "op": "subtraction",
+        "xf": {
+          "pos": [
+            -12.434666790614308,
+            2.5502385705251642,
+            -1.2089859385023267,
+            0.1277992560169922
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      },
+      {
+        "code": "// Signed distance in the object's local 4D space.\n// Helpers: opExtrude(d, h), opRadial(v, r, n, start, step), sU/sI/sS(a, b, k) smooth booleans, INF.\nfloat sdf(vec4 p) {\n  // a hypersphere of radius 1 with a wavy surface\n  return length(p) - 1.0 + 0.05 * sin(8.0 * p.x) * sin(8.0 * p.y);\n}\n",
+        "codeBound": 1.5,
+        "color": [
+          0.441600000000001,
+          0.8200000000000001,
+          0.37999999999999995
+        ],
+        "id": "n2563fab",
+        "kind": "leaf",
+        "material": {
+          "color2": [
+            0.12,
+            0.12,
+            0.14
+          ],
+          "emissive": 0.0,
+          "ior": 1.45,
+          "metallic": 0.0,
+          "roughness": 0.75,
+          "specular": 0.35,
+          "texScale": 1.0,
+          "texStrength": 0.7,
+          "texture": "None",
+          "transparency": 0.0
+        },
+        "modifiers": [],
+        "name": "Custom SDF (GLSL)",
+        "prim": "custom",
+        "thickness": 0.1,
+        "xf": {
+          "pos": [
+            -14.366967087762177,
+            -3.538426931430521,
+            -8.155163202146532,
+            -2.0837048811262875
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      }
+    ],
+    "id": "root",
+    "k": 0.3,
+    "kind": "group",
+    "modifiers": [],
+    "name": "Scene",
+    "op": "union",
+    "xf": {
+      "pos": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotm": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": 1.0
+    }
+  },
+  "version": 3,
+  "world": "g98d1fc7"
+}
