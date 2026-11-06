@@ -227,8 +227,19 @@ class VKRenderer : public Renderer {
   ShaderTarget shaderTarget() const override { return ShaderTarget::Vulkan; }
 
   void* createProgram(const std::string& fs, std::string& err) override {
+    // the disk cache: SPIR-V by the source's hash (glslang is the slow part)
     std::vector<uint32_t> spv;
-    if (!compileGlsl(EShLangFragment, fs, spv, err)) return nullptr;
+    std::string path = cachePath("spirv-1.0\n" + fs, "spv");
+    std::vector<uint8_t> blob;
+    if (cacheRead(path, blob) && blob.size() % 4 == 0 && blob.size() >= 20) {
+      spv.resize(blob.size() / 4);
+      std::memcpy(spv.data(), blob.data(), blob.size());
+      if (spv[0] != 0x07230203u) spv.clear();  // (SPIR-V magic number)
+    }
+    if (spv.empty()) {
+      if (!compileGlsl(EShLangFragment, fs, spv, err)) return nullptr;
+      cacheWrite(path, spv.data(), spv.size() * 4);
+    }
     VkShaderModule frag = module(spv);
     auto* p = new VKProgram;
     p->pipeline = pipeline(frag, pipeLayout_, true);
@@ -285,7 +296,7 @@ class VKRenderer : public Renderer {
     pi.layout = layout;
     pi.renderPass = pass_;
     VkPipeline pl = VK_NULL_HANDLE;
-    if (vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &pi, nullptr, &pl) != VK_SUCCESS) return VK_NULL_HANDLE;
+    if (vkCreateGraphicsPipelines(ctx_.device, ctx_.pipelineCache, 1, &pi, nullptr, &pl) != VK_SUCCESS) return VK_NULL_HANDLE;
     return pl;
   }
   void destroyProgram(void* h) override {

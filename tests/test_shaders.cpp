@@ -57,7 +57,7 @@ static std::unordered_set<std::string> badCustomCode(Node& root) {
   std::unordered_set<std::string> bad;
   walk(root, [&](Node& n, Node*, int) {
     if (!n.isCustom()) return;
-    std::string src = shaderPrelude(ShaderTarget::Vulkan, false) + sdfHelpersGLSL() + renameCustomCode(n.code, "_t") +
+    std::string src = shaderPrelude(ShaderTarget::Vulkan, false) + sdfHelpersGLSL() + guardLoops(renameCustomCode(n.code, "_t")) +
                       "\nvoid main() { fragColor = vec4(sdf_t(vec4(v_uv, 0.0, 1.0))); }\n";
     std::string log;
     if (!compile(src, ShaderTarget::Vulkan, log)) bad.insert(n.code);

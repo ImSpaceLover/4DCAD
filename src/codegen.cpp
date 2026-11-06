@@ -1,6 +1,7 @@
 #include "codegen.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <map>
 #include <regex>
@@ -16,6 +17,8 @@ static const char* C = "xyzw";
 // SDF helpers available to generated code and to custom SDFs.
 static const char* SDF_HELPERS = R"(
 #define INF 1e9
+#define LOOP_GUARD 4096
+int g_loopGuard = 0;  // custom code's loop iterations in the current call (see guardLoops)
 float opExtrude(float d, float wy) {
   vec2 w = vec2(d, wy);
   return min(max(w.x, w.y), 0.0) + length(max(w, 0.0));
@@ -159,6 +162,50 @@ float texAny(int t, vec4 p) {
 )";
 
 const char* sdfHelpersGLSL() { return SDF_HELPERS; }
+
+// GPU watchdog for custom code: every for / while loop also stops after LOOP_GUARD iterations of
+// all loops in one call of the custom SDF (g_loopGuard is reset before each call), so a loop that
+// never ends makes a wrong shape instead of hanging the GPU (and resetting the driver)
+std::string guardLoops(const std::string& code) {
+  std::string out;
+  size_t i = 0, n = code.size();
+  auto ident = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
+  while (i < n) {
+    // comments are copied as they are
+    if (code.compare(i, 2, "//") == 0) { size_t e = code.find('\n', i); e = e == std::string::npos ? n : e; out += code.substr(i, e - i); i = e; continue; }
+    if (code.compare(i, 2, "/*") == 0) { size_t e = code.find("*/", i + 2); e = e == std::string::npos ? n : e + 2; out += code.substr(i, e - i); i = e; continue; }
+    bool isFor = code.compare(i, 3, "for") == 0 && (i + 3 >= n || !ident(code[i + 3]));
+    bool isWhile = code.compare(i, 5, "while") == 0 && (i + 5 >= n || !ident(code[i + 5]));
+    if ((isFor || isWhile) && (i == 0 || !ident(code[i - 1]))) {
+      size_t k = i + (isFor ? 3 : 5);
+      while (k < n && std::isspace((unsigned char)code[k])) k++;
+      if (k < n && code[k] == '(') {
+        // the matching ')' and, for a for loop, the two ';' at the top level
+        int depth = 0;
+        size_t close = std::string::npos, semi[2] = {std::string::npos, std::string::npos};
+        int ns = 0;
+        for (size_t j = k; j < n; j++) {
+          if (code[j] == '(') depth++;
+          else if (code[j] == ')') { if (--depth == 0) { close = j; break; } }
+          else if (code[j] == ';' && depth == 1 && ns < 2) semi[ns++] = j;
+        }
+        if (close != std::string::npos && (isWhile || ns == 2)) {
+          size_t cs = isFor ? semi[0] + 1 : k + 1, ce = isFor ? semi[1] : close;
+          std::string cond = code.substr(cs, ce - cs);
+          size_t a = cond.find_first_not_of(" \t\r\n"), b = cond.find_last_not_of(" \t\r\n");
+          bool empty = a == std::string::npos;
+          if (!empty) cond = cond.substr(a, b - a + 1);
+          std::string g = "(" + (empty ? std::string("true") : cond) + ") && (g_loopGuard++ < LOOP_GUARD)";
+          out += code.substr(i, cs - i) + (isFor ? " " : "") + g + code.substr(ce, close + 1 - ce);
+          i = close + 1;
+          continue;
+        }
+      }
+    }
+    out += code[i++];
+  }
+  return out;
+}
 
 std::string renameCustomCode(const std::string& code, const std::string& suffix) {
   // rename every top-level function defined in the code (e.g. sdf -> sdf_c3) so that
@@ -395,7 +442,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       std::string suffix = "_c" + std::to_string(index[n.id]);
       if (badCode && badCode->count(n.code))
         o << "float sdf" << suffix << "(vec4 p) { vec4 e = abs(p) - " << glslFloat(n.codeBound) << "; return length(max(e, 0.0)) + min(max(max(e.x, e.y), max(e.z, e.w)), 0.0); }\n";
-      else o << "// custom SDF: " << n.name << "\n" << renameCustomCode(n.code, suffix) << "\n";
+      else o << "// custom SDF: " << n.name << "\n" << guardLoops(renameCustomCode(n.code, suffix)) << "\n";
       return;
     }
     if (!n.isLeaf() || primFn.count(n.prim)) return;
@@ -470,7 +517,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       } else if (!n.mods.empty()) L << "  int mrow = int(" << D(i, 12) << ".x);\n";
       L << "  vec4 q = clogO(qm) / s;\n  vec4 q0 = q;\n";
       L << modifierCoordsGLSL(shape, ax, "q", "", "mrow");
-      if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
+      if (n.isCustom()) L << "  g_loopGuard = 0;\n  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
       L << extrudeGLSL(shape, ax, "", "mrow");
       L << "  vec4 x12 = " << D(i, 12) << ";\n  if (x12.z > 0.0) d = abs(d) - x12.z;\n  d -= x12.w;\n";  // shell, rounding (data)
@@ -527,7 +574,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       std::string suffix = "_c" + std::to_string(index[n.id]);
       if (badCode && badCode->count(n.code))
         o << "float sdf" << suffix << "(vec4 p) { vec4 e = abs(p) - " << glslFloat(n.codeBound) << "; return length(max(e, 0.0)) + min(max(max(e.x, e.y), max(e.z, e.w)), 0.0); }\n";
-      else o << "// custom SDF: " << n.name << "\n" << renameCustomCode(n.code, suffix) << "\n";
+      else o << "// custom SDF: " << n.name << "\n" << guardLoops(renameCustomCode(n.code, suffix)) << "\n";
       return;
     }
     if (!n.isLeaf() || primFn.count(n.prim)) return;
@@ -593,7 +640,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       L << "  float hpar = 0.0;\n";
       if (n.isPoly()) L << polyGLSL(n.poly.type, false, "q", D(i, 9) + ".w");
       else if (n.isHoneycomb()) L << "  float d = honey_f" << i << "(q, " << D(i, 9) << ".w, " << D(i, 10) << ".w, " << D(i, 13) << ".z, hpar);\n";
-      else if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
+      else if (n.isCustom()) L << "  g_loopGuard = 0;\n  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
       L << extrudeGLSL(n, ax, "", "mrow");
       // shell / rounding act on the shape itself, before its thickness along the unused axes (data: slot 12)

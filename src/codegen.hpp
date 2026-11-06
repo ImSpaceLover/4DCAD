@@ -26,6 +26,8 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
 const char* sdfHelpersGLSL();
 /** Renames the functions defined in custom SDF code by appending a suffix (sdf -> sdf<suffix>). */
 std::string renameCustomCode(const std::string& code, const std::string& suffix);
+/** Custom code with every for / while loop also bounded (LOOP_GUARD iterations per call). */
+std::string guardLoops(const std::string& code);
 /** Self-contained GLSL `float sdf(vec4 p)` of a node in its local space (for viewing / copying). */
 std::string standaloneGLSL(const Node& n, const PrimitiveRegistry& reg);
 

@@ -328,6 +328,15 @@ Settings > Rendering > **Lighting model** (saved, part of render presets):
   the UI always gets its turn. Offline renders and headless screenshots still
   render on the UI thread (`--threads` forces the threads in headless runs;
   `FD_FRAME_STATS=1` prints UI frame times at exit).
+* **Shader cache on disk** (settings folder, `shadercache/`, at most 400 files): Vulkan keeps the
+  compiled SPIR-V of each shader (glslang is the slow part) and a pipeline cache; OpenGL keeps
+  program binaries where the driver offers them. Reopening a scene does not compile it again.
+* **Unchanged scene data is reused:** the per-object data is packed (and, with OpenGL, uploaded)
+  only when the scene, the selection highlight or (curved spaces) the camera changed, not for
+  every tile, refinement sample or extra pass.
+* **Custom code watchdog:** every `for` / `while` loop in custom SDF code also stops after 4096
+  iterations per call, so a loop that never ends gives a wrong shape instead of freezing the GPU
+  (and resetting the driver).
 * **Bounding spheres.** Each node has a bounding hypersphere, so distant
   subtrees are skipped while marching.
 * **One `map()` call site.** The shader's main loop is a single state machine

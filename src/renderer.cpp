@@ -5,8 +5,53 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 namespace fd {
+
+// ---------------------------------------------------------------- shader disk cache
+std::string Renderer::cachePath(const std::string& key, const char* ext) const {
+  if (cacheDir_.empty()) return "";
+  uint64_t h = 1469598103934665603ull;  // FNV-1a
+  for (unsigned char c : key) { h ^= c; h *= 1099511628211ull; }
+  char name[40];
+  std::snprintf(name, sizeof name, "%016llx.%s", (unsigned long long)h, ext);
+  return (std::filesystem::path(cacheDir_) / name).string();
+}
+
+bool Renderer::cacheRead(const std::string& path, std::vector<uint8_t>& out) const {
+  if (path.empty()) return false;
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return false;
+  out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  return !out.empty();
+}
+
+void Renderer::cacheWrite(const std::string& path, const void* data, size_t bytes) const {
+  if (path.empty() || !bytes) return;
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::create_directories(cacheDir_, ec);
+  // written under a temporary name, then renamed: other threads / runs never read half a file
+  static std::atomic<unsigned> counter{0};
+  std::string tmp = path + ".tmp" + std::to_string(counter++);
+  {
+    std::ofstream out(tmp, std::ios::binary);
+    if (!out) return;
+    out.write((const char*)data, (std::streamsize)bytes);
+  }
+  fs::rename(tmp, path, ec);
+  if (ec) fs::remove(tmp, ec);
+  // keep the folder small: the oldest files go beyond 400
+  std::vector<std::pair<fs::file_time_type, fs::path>> files;
+  for (auto& e : fs::directory_iterator(cacheDir_, ec)) files.push_back({e.last_write_time(ec), e.path()});
+  if (files.size() > 400) {
+    std::sort(files.begin(), files.end());
+    for (size_t i = 0; i + 400 < files.size(); i++) fs::remove(files[i].second, ec);
+  }
+}
 
 UiFrameClock& uiFrames() {
   static UiFrameClock c;
@@ -17,7 +62,7 @@ constexpr size_t PROGRAM_CACHE = 16;  // programs kept (values are node data: en
 
 std::string Renderer::codeCheckSource(const std::string& code) {
   // a tiny fragment shader using the code (same prelude as the real shader)
-  return shaderPrelude(shaderTarget(), false) + sdfHelpersGLSL() + renameCustomCode(code, "_t") +
+  return shaderPrelude(shaderTarget(), false) + sdfHelpersGLSL() + guardLoops(renameCustomCode(code, "_t")) +
          "\nvoid main() { fragColor = vec4(sdf_t(vec4(v_uv, 0.0, 1.0))); }\n";
 }
 
@@ -297,7 +342,30 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
     draw(rt, rw, rh, nullptr, u, {}, 0);  // clears the target to an error colour
     return false;
   }
-  std::vector<float> nodes = packNodes(root, reg, p->cs, highlight, &fp.space, &fp.camIso);
+  // the node data: the same as for the previous draw when nothing it depends on changed (tiles of a
+  // render, refinement samples, the guide pass): the scene, the program's node order, the
+  // highlighted objects and, in curved spaces, the camera (the data is camera-relative there)
+  uint64_t key = 0;
+  if (fp.sceneVersion) {
+    auto mix = [&](uint64_t v) { key ^= v + 0x9e3779b97f4a7c15ull + (key << 6) + (key >> 2); };
+    mix(fp.sceneVersion);
+    mix((uint64_t)(uintptr_t)p);
+    uint64_t hl = 0;
+    for (auto& id : highlight) hl ^= std::hash<std::string>()(id);  // (order independent)
+    mix(hl);
+    mix((uint64_t)fp.space.kind);
+    if (fp.space.curved()) {
+      mix(std::hash<double>()(fp.space.radius));
+      for (double x : fp.camIso) mix(std::hash<double>()(x));
+    }
+    mix(1);  // (never 0)
+  }
+  nodesChanged_ = !key || key != lastNodesKey_;
+  if (nodesChanged_) {
+    lastNodes_ = packNodes(root, reg, p->cs, highlight, &fp.space, &fp.camIso);
+    lastNodesKey_ = key;
+  }
+  const std::vector<float>& nodes = lastNodes_;
   for (int i = 0; i < 4; i++) scissor_[i] = fp.tile[i];
   if (scissor_[2] > 0) {  // clamp to the target
     scissor_[0] = std::clamp(scissor_[0], 0, rw); scissor_[1] = std::clamp(scissor_[1], 0, rh);

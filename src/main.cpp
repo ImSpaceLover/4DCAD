@@ -123,6 +123,7 @@ int main(int argc, char** argv) {
   if (want != Backend::OpenGL) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     win = glfwCreateWindow(W, H, "4DCAD", nullptr, nullptr);
+    vk.pipelineCachePath = (std::filesystem::path(dataDir()) / "shadercache" / "vulkan-pipelines.bin").string();
     if (win && vk.init(win, vkErr)) useVulkan = true;
     else {
       std::fprintf(stderr, "Vulkan not available (%s): using OpenGL\n", vkErr.c_str());
@@ -199,6 +200,9 @@ int main(int argc, char** argv) {
   // interactive use compiles in the background; screenshots and command-line renders wait for it
   renderer->setAsync(forceAsync || (screenshot.empty() && renderOut.empty()));
   std::printf("%s\n", renderer->device.c_str());
+  // compiled shaders are kept between runs (settings folder)
+  std::string shaderCache = (std::filesystem::path(dataDir()) / "shadercache").string();
+  renderer->setCacheDir(shaderCache);
 
   app.init(std::move(renderer));
   // the viewport and the thumbnail render on their own threads (interactive use; headless runs
@@ -207,7 +211,7 @@ int main(int argc, char** argv) {
     std::function<std::unique_ptr<Renderer>()> make;
     std::function<bool(bool)> ctx[2];
 #ifdef FD_HAVE_VULKAN
-    if (useVulkan) make = [&vk] { return makeVulkanRenderer(vk, true); };
+    if (useVulkan) make = [&vk, shaderCache] { auto r = makeVulkanRenderer(vk, true); if (r) r->setCacheDir(shaderCache); return r; };
 #endif
     if (!useVulkan) {
       glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -221,7 +225,7 @@ int main(int argc, char** argv) {
         if (w) ctx[i] = [w](bool on) { glfwMakeContextCurrent(on ? w : nullptr); return true; };
       }
       glfwDefaultWindowHints();
-      make = [] { return makeGLRenderer(); };
+      make = [shaderCache] { auto r = makeGLRenderer(); r->setCacheDir(shaderCache); return r; };
     }
     if (useVulkan || (glThreadWin[0] && glThreadWin[1])) app.startRenderThreads(make, ctx[0], ctx[1]);
   }

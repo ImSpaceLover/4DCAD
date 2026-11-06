@@ -154,6 +154,8 @@ void App::prepareJobFrame() {
     fp.light = light();
     fp.skyCol = worldColor();
     fp.pathTrace = j.quality.lighting == 1;
+    static uint64_t jobFrames = 0;
+    fp.sceneVersion = (1ull << 63) | ++jobFrames;  // (each prepared frame is a scene of its own)
     fp.lights = frameLights(fp.pathTrace);
     fp.prof = mainProfile();
     quality = live;

@@ -732,6 +732,14 @@ int main() {
     CHECK(text.find("\"space\"") == std::string::npos && sceneFromJson(text).space.kind == SpaceKind::Flat, "flat space is the default");
   }
 
+  {  // custom code's loops are bounded (GPU watchdog)
+    std::string g = guardLoops("float sdf(vec4 p) { // for (x) in a comment\n float d = 0.0; int format = 1;\n"
+                               "  for (int i = 0; i < f(min(2, 3)); i++) d += 1.0;\n  while (d > 0.0) d -= 0.5;\n  for (;;) { break; }\n  return d; }");
+    CHECK(g.find("for (int i = 0; (i < f(min(2, 3))) && (g_loopGuard++ < LOOP_GUARD); i++)") != std::string::npos, "for loop guarded: %s", g.c_str());
+    CHECK(g.find("while ((d > 0.0) && (g_loopGuard++ < LOOP_GUARD))") != std::string::npos, "while loop guarded");
+    CHECK(g.find("for (; (true) && (g_loopGuard++ < LOOP_GUARD);)") != std::string::npos, "endless for guarded");
+    CHECK(g.find("// for (x) in a comment") != std::string::npos && g.find("int format = 1;") != std::string::npos, "comments / names untouched");
+  }
   {  // the regular 4D polytopes
     const int counts[6] = {5, 8, 16, 24, 120, 600};
     const double ratio[6] = {4.0, 2.0, 2.0, std::sqrt(2.0), 1 / 0.9256147, 1 / 0.9256147};  // circumradius / inradius (120- / 600-cell: r / R = 0.92561...)

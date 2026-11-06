@@ -2135,6 +2135,11 @@ void App::renderFrame() {
   fp.skyCol = worldColor();
   // path tracing where the image is refined (the idle viewport); moving / fast views stay simple
   fp.pathTrace = q.lighting == 1 && refine;
+  {  // the scene's content (see FrameParams::sceneVersion): edits and isolation
+    std::string sv = std::to_string(version_);
+    for (auto& s : isolate) sv += "|" + s;
+    fp.sceneVersion = std::hash<std::string>()(sv) | 1;
+  }
   fp.lights = frameLights(fp.pathTrace);
   fp.prof = prof;
   for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows << l.radius; }
@@ -2226,6 +2231,7 @@ void App::renderFrame() {
     double br = std::max(0.012, 0.03 * (space.kind == SpaceKind::Hyperbolic ? (1 - dot(eb, eb)) : 1.0));
     tp.markerCol = {1.0f, 0.85f, 0.2f, (float)br};
     tp.scale = 1;
+    tp.sceneVersion = fp.sceneVersion;
     std::ostringstream tk;
     tk << k << "|ball" << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
     if (tk.str() != lastThumbKey_) {
@@ -2255,6 +2261,7 @@ void App::renderFrame() {
     if (auto it = bounds.find(world); it != bounds.end() && std::isfinite(it->second.r)) R = it->second.r;
     tp.markerCol = {1.0f, 0.85f, 0.2f, (float)std::max(0.08, R * 0.07)};
     tp.scale = 1;
+    tp.sceneVersion = fp.sceneVersion;
     std::ostringstream tk;
     tk << k << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
     if (tk.str() != lastThumbKey_) {

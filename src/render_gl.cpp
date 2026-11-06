@@ -1,6 +1,7 @@
 // OpenGL 3.3 backend: programs, render targets (FBO + texture), frame uniform buffer and
 // the node data texture (one RGBA32F row of 12 texels per node).
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 #include "gl.hpp"
@@ -156,12 +157,27 @@ class GLRenderer : public Renderer {
   ShaderTarget shaderTarget() const override { return ShaderTarget::OpenGL; }
 
   void* createProgram(const std::string& fs, std::string& err) override {
+    // the disk cache: the driver's compiled program (key: the driver and both sources)
+    bool bin = binaries();
+    std::string path = bin ? cachePath(device + "\n" + vertexShader(ShaderTarget::OpenGL) + fs, "glbin") : "";
+    std::vector<uint8_t> blob;
+    if (bin && cacheRead(path, blob) && blob.size() > 4) {
+      GLuint id = gl::CreateProgram();
+      GLenum fmt;
+      std::memcpy(&fmt, blob.data(), 4);
+      gl::ProgramBinary(id, fmt, blob.data() + 4, (GLsizei)(blob.size() - 4));
+      GLint ok = 0;
+      gl::GetProgramiv(id, GL_LINK_STATUS, &ok);
+      if (ok) return finishProgram(id);
+      gl::DeleteProgram(id);  // (another driver version: compiled again below, and stored anew)
+    }
     GLuint v = compileShader(GL_VERTEX_SHADER, vertexShader(ShaderTarget::OpenGL), err);
     GLuint f = v ? compileShader(GL_FRAGMENT_SHADER, fs, err) : 0;
     if (!v || !f) { if (v) gl::DeleteShader(v); return nullptr; }
     GLuint id = gl::CreateProgram();
     gl::AttachShader(id, v);
     gl::AttachShader(id, f);
+    if (bin) gl::ProgramParameteri(id, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
     gl::LinkProgram(id);
     gl::DeleteShader(v);
     gl::DeleteShader(f);
@@ -174,6 +190,29 @@ class GLRenderer : public Renderer {
       gl::DeleteProgram(id);
       return nullptr;
     }
+    if (bin) {
+      GLint len = 0;
+      gl::GetProgramiv(id, GL_PROGRAM_BINARY_LENGTH, &len);
+      if (len > 0) {
+        std::vector<uint8_t> out(4 + (size_t)len);
+        GLenum fmt = 0;
+        GLsizei got = 0;
+        gl::GetProgramBinary(id, len, &got, &fmt, out.data() + 4);
+        std::memcpy(out.data(), &fmt, 4);
+        if (got > 0) cacheWrite(path, out.data(), 4 + (size_t)got);
+      }
+    }
+    return finishProgram(id);
+  }
+  bool binaries() {
+    if (binaries_ < 0) {
+      GLint n = 0;
+      if (gl::GetProgramBinary && gl::ProgramBinary && gl::ProgramParameteri) gl::GetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &n);
+      binaries_ = n > 0 ? 1 : 0;
+    }
+    return binaries_ == 1 && !cacheDir_.empty();
+  }
+  void* finishProgram(GLuint id) {
     GLuint block = gl::GetUniformBlockIndex(id, "Frame");
     if (block != GL_INVALID_INDEX) gl::UniformBlockBinding(id, block, 0);
     auto* p = new GLProgram{id, gl::GetUniformLocation(id, "u_nodes")};
@@ -210,7 +249,10 @@ class GLRenderer : public Renderer {
     gl::BindBufferBase(GL_UNIFORM_BUFFER, 0, ubo_);
     gl::ActiveTexture(GL_TEXTURE1);
     gl::BindTexture(GL_TEXTURE_2D, nodeTex_);
-    gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, NODE_VEC4S, std::max(1, nodeCount), 0, GL_RGBA, GL_FLOAT, nodes.data());
+    if (nodesChanged_ || nodeTexRows_ != nodeCount) {  // (unchanged data stays on the GPU)
+      gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, NODE_VEC4S, std::max(1, nodeCount), 0, GL_RGBA, GL_FLOAT, nodes.data());
+      nodeTexRows_ = nodeCount;
+    }
     gl::Uniform1i(p->nodesLoc, 1);
     gl::Disable(GL_DEPTH_TEST);
     if (scissor_[2] > 0) {  // one tile (OpenGL rows are bottom-up)
@@ -235,6 +277,8 @@ class GLRenderer : public Renderer {
 
  private:
   GLuint vao_ = 0, ubo_ = 0, nodeTex_ = 0;
+  int binaries_ = -1;
+  int nodeTexRows_ = -1;  // program binaries usable (driver + a cache folder): -1 = not checked yet
   struct PostProg { GLuint id = 0; GLint a = -1, b = -1, p0 = -1, p1 = -1; };
   PostProg post_[POST_COUNT];
   std::function<bool(bool)> workerCtx_;

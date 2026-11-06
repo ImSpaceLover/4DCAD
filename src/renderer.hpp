@@ -80,6 +80,9 @@ struct FrameParams {
   bool ballView = false;   // curved: the Poincare ball / stereographic overview (view = outside camera in the ball)
   bool pathTrace = false;  // physically based path tracing (a separate shader; needs random samples)
   bool ptGuide = false;    // path tracing: the denoiser's guide image (first hit's colour and depth), no jitter
+  // identifies the scene's content (changes with every edit); 0 = unknown. With it, the node data
+  // of an unchanged scene is reused instead of being packed (and uploaded) again
+  uint64_t sceneVersion = 0;
 };
 
 /** Full-screen post passes (path tracing). */
@@ -136,6 +139,8 @@ class Renderer {
   bool async() const { return async_; }
   /** The last render() waited for a program that is still being compiled. */
   bool compiling() const { return compiling_; }
+  /** Compiled shaders are kept in this folder between runs (empty: no disk cache). */
+  void setCacheDir(const std::string& dir) { cacheDir_ = dir; }
   /** Programs (and custom code checks) still being compiled. */
   int pendingCompiles() const { return (int)pending_.size() + (int)pendingCode_.size(); }
   /** The target's image for ImGui::Image (ImTextureID). */
@@ -186,7 +191,13 @@ class Renderer {
   virtual void workerEnd() {}
   /** Call first in the backend destructor: stops the compile worker (before its context goes). */
   void stopWorker();
+  // ---- the shader disk cache (any thread): files named by a hash of the key (source + driver)
+  std::string cacheDir_;
+  std::string cachePath(const std::string& key, const char* ext) const;
+  bool cacheRead(const std::string& path, std::vector<uint8_t>& out) const;
+  void cacheWrite(const std::string& path, const void* data, size_t bytes) const;
   int scissor_[4] = {0, 0, 0, 0};  // the current draw's rectangle (x, y top-left, w, h; w = 0: all)
+  bool nodesChanged_ = true;       // the current draw's node data differs from the previous draw's
   /** Call from the backend destructor: frees all cached programs. */
   void clearPrograms();
 
@@ -196,6 +207,8 @@ class Renderer {
     CompiledScene cs;
   };
   std::unordered_map<std::string, Program> cache_;
+  std::vector<float> lastNodes_;
+  uint64_t lastNodesKey_ = 0;
   std::list<std::string> lru_;
   std::unordered_set<std::string> failed_;
   std::unordered_set<std::string> badCode_;
