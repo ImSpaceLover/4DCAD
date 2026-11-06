@@ -16,7 +16,8 @@ fields (SDFs) and drawn by ray marching on the GPU. It has two rendering methods
 
 ## Running
 
-**Windows:** run `release/4DCAD.exe`. No installation is needed. It draws with
+**Windows:** download `4DCAD.exe` from the repository's **Releases** page (or the latest CI
+run's artifact, below) and run it. No installation is needed. It draws with
 **Vulkan** when the graphics driver supports it (better on AMD cards) and otherwise with
 **OpenGL 3.3+**; Settings > Rendering > Graphics API (or `--vulkan` / `--gl`) chooses. Keep the
 driver up to date.
@@ -24,6 +25,7 @@ driver up to date.
 **CI builds:** every push is built and tested by GitHub Actions (`.github/workflows/build.yml`).
 The latest Windows exe can be downloaded from the run's **4DCAD-windows** artifact
 (Actions tab → the run → Artifacts). Pushing a tag such as `v1.2` also attaches the exe to a GitHub Release.
+Executables are not committed to the repository (they would grow its history with every build).
 
 **Building from source** (Windows or Linux) needs CMake ≥ 3.16, a C++17
 compiler and git. Dependencies (GLFW, Dear ImGui, nlohmann/json) are downloaded
@@ -40,7 +42,9 @@ cmake --build build --config Release
 The executable is `build/4DCAD` (or `build/Release/4DCAD.exe` with Visual
 Studio). On Linux, install the X11/GL development packages first:
 `sudo apt install libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev`.
-Run the tests with `ctest --test-dir build`.
+Run the tests with `ctest --test-dir build`: `fdtests` (core: geometry, SDFs, scene files, animation),
+`fdapptests` (editor logic) and `fdshadertests` (the generated shader of every example and test scene,
+in every view and lighting model, compiles with glslang for Vulkan and OpenGL; no GPU needed).
 
 To cross-compile the Windows exe on Linux (MinGW-w64):
 

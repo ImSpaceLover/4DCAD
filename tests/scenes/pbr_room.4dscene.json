@@ -1,0 +1,14 @@
+{"format": "4dcad-scene", "version": 3,
+ "camera": {"distance": 7.5, "pitch": -0.35, "yaw": 0.5, "target": [0, 0.8, 0, 0], "rot4": [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]},
+ "root": {"id": "root", "name": "Scene", "kind": "group", "op": "union", "k": 0.3, "children": [
+  {"id": "ground", "name": "Ground", "kind": "leaf", "prim": "hyperplane", "color": [0.7, 0.7, 0.72], "thickness": 0.1,
+   "material": {"roughness": 0.9}, "xf": {"pos": [0, 0, 0, 0], "rot": [0,0,0,0,0,0], "scale": 1}, "modifiers": []},
+  {"id": "lamp", "name": "Lamp", "kind": "leaf", "prim": "hypersphere", "color": [1.0, 0.85, 0.6], "thickness": 0.1,
+   "material": {"emissive": 1, "emissionStrength": 6}, "xf": {"pos": [0, 2.6, 0, 0], "rot": [0,0,0,0,0,0], "scale": 0.45}, "modifiers": []},
+  {"id": "box", "name": "Box", "kind": "leaf", "prim": "tesseract", "color": [0.85, 0.25, 0.2], "thickness": 0.1,
+   "material": {"roughness": 0.7}, "xf": {"pos": [-1.8, 0.75, 0.4, 0], "rot": [0,0,25,0,0,0], "scale": 0.75}, "modifiers": []},
+  {"id": "metal", "name": "Metal", "kind": "leaf", "prim": "hypersphere", "color": [0.95, 0.8, 0.5], "thickness": 0.1,
+   "material": {"metallic": 1, "roughness": 0.25}, "xf": {"pos": [1.6, 0.8, 0.3, 0], "rot": [0,0,0,0,0,0], "scale": 0.8}, "modifiers": []},
+  {"id": "glass", "name": "Glass", "kind": "leaf", "prim": "hypersphere", "color": [0.85, 0.95, 1.0], "thickness": 0.1,
+   "material": {"transparency": 1, "roughness": 0.05, "ior": 1.5}, "xf": {"pos": [0.1, 0.6, -1.4, 0], "rot": [0,0,0,0,0,0], "scale": 0.6}, "modifiers": []}
+ ], "xf": {"pos": [0, 0, 0, 0], "rot": [0,0,0,0,0,0], "scale": 1}, "modifiers": []}}

@@ -1,2 +1,4 @@
 build*/
 *.ppm
+node_modules/
+release/

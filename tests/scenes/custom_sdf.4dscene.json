@@ -1,0 +1,261 @@
+{
+  "camera": {
+    "distance": 7.0,
+    "pitch": -0.35,
+    "rot4": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "slider": 3,
+    "target": [
+      1.2,
+      1.0,
+      0.0,
+      0.0
+    ],
+    "yaw": 0.3
+  },
+  "format": "4dcad-scene",
+  "primitives": [],
+  "root": {
+    "children": [
+      {
+        "color": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "id": "n3a9f2b",
+        "kind": "leaf",
+        "material": {
+          "color2": [
+            0.12,
+            0.12,
+            0.14
+          ],
+          "emissive": 0.0,
+          "ior": 1.45,
+          "metallic": 0.0,
+          "roughness": 0.75,
+          "specular": 0.35,
+          "texScale": 1.0,
+          "texStrength": 0.7,
+          "texture": "None",
+          "transparency": 0.0
+        },
+        "modifiers": [
+          {
+            "length": 0.0,
+            "mode": "infinite",
+            "type": "extrude"
+          },
+          {
+            "length": 0.0,
+            "mode": "half",
+            "type": "extrude"
+          },
+          {
+            "length": 0.0,
+            "mode": "infinite",
+            "type": "extrude"
+          }
+        ],
+        "name": "Ground",
+        "prim": "point",
+        "thickness": 0.1,
+        "xf": {
+          "pos": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      },
+      {
+        "code": "// Signed distance in the object's local 4D space.\n// Helpers: opExtrude(d, h), opRadial(v, r, n, start, step), sU/sI/sS(a, b, k) smooth booleans, INF.\nfloat sdf(vec4 p) {\n  // a hypersphere of radius 1 with a wavy surface\n  return length(p) - 1.0 + 0.05 * sin(8.0 * p.x) * sin(8.0 * p.y);\n}\n",
+        "codeBound": 1.5,
+        "color": [
+          0.4,
+          0.7,
+          0.9
+        ],
+        "id": "n1f3331",
+        "kind": "leaf",
+        "material": {
+          "color2": [
+            0.12,
+            0.12,
+            0.14
+          ],
+          "emissive": 0.0,
+          "ior": 1.45,
+          "metallic": 0.0,
+          "roughness": 0.75,
+          "specular": 0.35,
+          "texScale": 1.0,
+          "texStrength": 0.7,
+          "texture": "None",
+          "transparency": 0.0
+        },
+        "modifiers": [],
+        "name": "Wavy hypersphere",
+        "prim": "custom",
+        "thickness": 0.1,
+        "xf": {
+          "pos": [
+            0.0,
+            1.2,
+            0.0,
+            0.0
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      },
+      {
+        "code": "float sdf(vec4 p) { return oops; }",
+        "codeBound": 1.5,
+        "color": [
+          0.8,
+          0.5,
+          0.3
+        ],
+        "id": "n264083",
+        "kind": "leaf",
+        "material": {
+          "color2": [
+            0.12,
+            0.12,
+            0.14
+          ],
+          "emissive": 0.0,
+          "ior": 1.45,
+          "metallic": 0.0,
+          "roughness": 0.75,
+          "specular": 0.35,
+          "texScale": 1.0,
+          "texStrength": 0.7,
+          "texture": "None",
+          "transparency": 0.0
+        },
+        "modifiers": [],
+        "name": "Broken",
+        "prim": "custom",
+        "thickness": 0.1,
+        "xf": {
+          "pos": [
+            3.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      }
+    ],
+    "id": "g4cb1d",
+    "k": 0.3,
+    "kind": "group",
+    "modifiers": [],
+    "name": "Scene",
+    "op": "union",
+    "xf": {
+      "pos": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotm": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": 1.0
+    }
+  },
+  "version": 3,
+  "world": null
+}
