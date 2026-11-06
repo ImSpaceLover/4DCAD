@@ -362,13 +362,19 @@ src/codegen.*, shaders.hpp    scene → GLSL, ray-marching shader
 src/renderer.*, gl.*          renderer (shared part), OpenGL / Vulkan backends, function loader
 src/media.*                   PNG / JPEG / GIF / AVI writers, ffmpeg pipe
 src/render_job.cpp            offline renders (Render window)
+src/render_thread.*           viewport / thumbnail render threads
+src/vk_context.*, render_vk   Vulkan device, frame loop, backend; render_gl.cpp: OpenGL backend
 src/space.*                   curved spaces: hyperboloid / 3-sphere model, isometries, geodesics
-src/polytope.*                regular polyhedra and honeycombs
-src/app.*                     state, tools, undo, explore movement, thumbnail
+src/polytope.*                regular polyhedra, 4D polytopes and honeycombs
+src/app.*                     state, scene lifecycle, undo, animation, selection, placement
+src/app_camera.cpp            camera objects, views and modes
+src/app_edit.cpp              transforms, gizmos, snapping, viewport input
+src/app_render.cpp            frame parameters, lights, what the viewport / thumbnail draw
+src/app_settings.cpp          per-user settings, render presets
 src/ui*.cpp, ui_common.hpp    ImGui interface (ui.cpp core, ui_toolbar / ui_library / ui_tree /
                               ui_properties / ui_viewport / ui_windows / ui_timeline / ui_render panels)
 src/filedialog.*, main.cpp    native file dialogs, window
-tests/                        core and app-level unit tests (ctest)
+tests/                        core, app-level and shader-compile tests (ctest); tests/scenes: test scenes
 ```
 
 ## Files
