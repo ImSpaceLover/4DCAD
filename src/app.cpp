@@ -1055,6 +1055,10 @@ int App::itemDim(const std::string& id) {
 bool App::canPlace(const std::string& id, std::string* reason) {
   if (mode != Mode::Edit) { if (reason) *reason = "Switch to Edit mode to place objects"; return false; }
   if (geo && itemDim(id) > 3) { if (reason) *reason = "Geodesic view: only 3D (or lower) objects can be placed on the world surface"; return false; }
+  if (const LibraryObject* o = lib.find(id); o && space.curved() && o->node.isPoly() && polyIs4D(o->node.poly.type)) {
+    if (reason) *reason = "4D polytopes exist in flat 4D scenes (curved spaces are 3D)";
+    return false;
+  }
   return true;
 }
 

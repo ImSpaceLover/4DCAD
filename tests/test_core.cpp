@@ -6,6 +6,7 @@
 #include "animation.hpp"
 #include "camera.hpp"
 #include "codegen.hpp"
+#include "polytope.hpp"
 #include "shaders.hpp"
 #include "evaluator.hpp"
 #include "examples.hpp"
@@ -187,7 +188,7 @@ int main() {
   // library: built-in folders hold modifier-built shapes
   {
     auto fs = builtinFolders();
-    CHECK(fs.size() == 4 && fs[3].objects.size() == 6 && fs[1].objects.size() >= 5 && fs[2].objects.size() >= 9, "builtin folders");
+    CHECK(fs.size() == 4 && fs[3].objects.size() == POLY_COUNT + 1 && fs[1].objects.size() >= 5 && fs[2].objects.size() >= 9, "builtin folders");
     LibraryObject o = makeLibraryObject(makeShape("torus", "T"), reg, "My torus");
     LibraryFolder f{"custom", "Custom", false, {o}};
     auto imp = importLibraryJson(libraryToJson({f}));
@@ -729,6 +730,34 @@ int main() {
     Space flat;
     std::string text = sceneToJson(root, reg, "", nullptr, nullptr, nullptr, "", nullptr, &flat);
     CHECK(text.find("\"space\"") == std::string::npos && sceneFromJson(text).space.kind == SpaceKind::Flat, "flat space is the default");
+  }
+
+  {  // the regular 4D polytopes
+    const int counts[6] = {5, 8, 16, 24, 120, 600};
+    const double ratio[6] = {4.0, 2.0, 2.0, std::sqrt(2.0), 1 / 0.9256147, 1 / 0.9256147};  // circumradius / inradius (120- / 600-cell: r / R = 0.92561...)
+    for (int i = 0; i < 6; i++) {
+      int t = POLY_5CELL + i;
+      CHECK((int)polyFaces(t).size() == counts[i], "%s: %d cells", POLY_NAMES[t], (int)polyFaces(t).size());
+      CLOSE(polyCircumRatio(t), ratio[i], 1e-5);
+      for (auto& f : polyFaces(t)) CLOSE(length(f), 1.0, 1e-9);
+      CLOSE(polyDistFlat(t, 0.8, {0, 0, 0, 0}), -0.8, 1e-9);
+      // the folded distance equals the plain one (largest facet distance over all cells)
+      uint32_t seed = 7;
+      auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) * (1.0 / 16777216.0) * 4 - 2; };
+      for (int k = 0; k < 20; k++) {
+        V4 u{rnd(), rnd(), rnd(), rnd()};
+        double full = -1e30;
+        for (auto& f : polyFaces(t)) full = std::max(full, dot(u, f) - 0.8);
+        CLOSE(polyDistFlat(t, 0.8, u), full, 1e-9);
+      }
+    }
+    CHECK(polyIs4D(POLY_24CELL) && !polyIs4D(POLY_ICOSA) && !polySignSymmetric(POLY_5CELL), "4D polytope flags");
+    PrimitiveRegistry reg;
+    Node n = makeLeaf("polyhedron", "p");
+    n.poly.type = POLY_120CELL;
+    CHECK(nodeDim(n, reg) == 4, "4D polytopes are 4D");
+    Node back = nodeFromJson(nodeToJson(n));
+    CHECK(back.poly.type == POLY_120CELL, "polytope type saved");
   }
 
   std::printf("%d checks, %d failures\n", checks, failures);

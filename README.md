@@ -175,6 +175,10 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
   Examples: Point → Extrude → Extrude → Extrude → Extrude is a tesseract. Point → Extrude → Revolve → Extrude (infinite) is an infinite rod. A whole group can be extruded or revolved into the next dimension.
 * **Library** (left):
   * Built-in folders (Basic, 3D shapes, 4D shapes) are read-only. Their items are just points with modifiers, so you can tweak them after placing.
+  * **Polyhedra & tilings** also holds the six **regular 4D polytopes** (flat 4D scenes): 5-cell,
+    8-cell (tesseract), 16-cell, 24-cell, 120-cell and 600-cell, solids bounded by flat 3D cells
+    (tetrahedra, cubes, octahedra, dodecahedra), sized by their inradius. The view shows their 3D
+    cross-section; move along W or rotate them in 4D to see it change.
   * "Save to library" (scene tree button or right-click) stores the selected object in **Custom**.
   * **+ Folder** adds folders. Right-click folders and items to rename, move, export or delete.
   * Drag items onto a folder to move them (built-ins are copied). Drag scene-tree rows onto a folder to save them there.

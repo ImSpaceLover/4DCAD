@@ -261,8 +261,28 @@ static std::string v3(const V4& f) { return "vec3(" + glslFloat(f[0]) + ", " + g
 
 // GLSL computing `float d` for a polyhedron. Flat: q = local point, h = inradius expression.
 // Curved: q = model point in the node's frame, h = inradius in world units.
+static std::string v4s(const V4& f) { return "vec4(" + glslFloat(f[0]) + ", " + glslFloat(f[1]) + ", " + glslFloat(f[2]) + ", " + glslFloat(f[3]) + ")"; }
+
 static std::string polyGLSL(int type, bool curved, const std::string& q, const std::string& h) {
   std::ostringstream o;
+  if (polyIs4D(type) && curved) type = POLY_CUBE;  // (4D polytopes exist in flat 4D only)
+  if (polyIs4D(type)) {
+    // regular 4D polytope: the largest facet-plane distance; all but the 5-cell are symmetric under
+    // sign changes, so the point is folded into the positive orthant and only those normals count
+    bool sym = polySignSymmetric(type);
+    const auto& F = sym ? polyFacesFolded(type) : polyFaces(type);
+    std::string qq = sym ? "abs(" + q + ")" : q;
+    o << "  float d = -1e30;\n  { vec4 qf = " << qq << ";\n";
+    if (F.size() <= 24) {
+      for (auto& f : F) o << "    d = max(d, dot(qf, " << v4s(f) << "));\n";
+    } else {
+      o << "    const vec4 PF[" << F.size() << "] = vec4[" << F.size() << "](";
+      for (size_t i = 0; i < F.size(); i++) o << (i ? ", " : "") << v4s(F[i]);
+      o << ");\n    for (int i = 0; i < " << F.size() << "; i++) d = max(d, dot(qf, PF[i]));\n";
+    }
+    o << "    d -= (" << h << "); }\n";
+    return o.str();
+  }
   o << "  float d = -1e30;\n";
   if (curved) o << "  { float th = (" << h << ") / u_curvR, Ct = cC(th), St = cS(th);\n";
   for (auto& f : polyFaces(type)) {

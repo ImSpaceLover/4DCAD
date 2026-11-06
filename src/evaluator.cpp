@@ -125,7 +125,7 @@ std::unordered_map<std::string, Bound> computeBounds(const Node& root, const Pri
     else if (n.isPoly()) {
       // circumradius (x2: curved polyhedra are larger than flat ones of the same inradius)
       double r = n.poly.size * polyCircumRatio(n.poly.type) * 2;
-      e = {r, r, r, n.thickness / 2};
+      e = {r, r, r, polyIs4D(n.poly.type) ? r : n.thickness / 2};
     } else if (n.isLeaf()) {
       if (auto* def = reg.get(n.prim)) e = primitiveExtents(*def);
       for (int a = dimFinal; a < 4; a++) e[a] = n.thickness / 2;

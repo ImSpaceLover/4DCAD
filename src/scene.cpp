@@ -249,7 +249,7 @@ std::vector<PrimitiveDef> PrimitiveRegistry::custom() const {
 
 int nodeBaseDim(const Node& n, const PrimitiveRegistry& reg) {
   if (n.isCustom()) return 4;
-  if (n.isPolytope()) return 3;
+  if (n.isPolytope()) return n.isPoly() && polyIs4D(n.poly.type) ? 4 : 3;
   if (n.isLeaf()) { auto* p = reg.get(n.prim); return p ? primitiveDim(*p) : 0; }
   int d = 0;
   for (auto& c : n.children) d = std::max(d, nodeDim(c, reg));
@@ -867,7 +867,8 @@ std::vector<LibraryFolder> builtinFolders() {
     o.node = nodeFromPrimitive(p, p.name);
     out[d <= 2 ? 0 : d == 3 ? 1 : 2].objects.push_back(o);
   }
-  // regular polyhedra with flat faces, and the regular honeycombs (tilings of the whole space)
+  // regular polyhedra with flat faces, the regular 4D polytopes (flat 4D), and the regular
+  // honeycombs (tilings of the whole space)
   LibraryFolder poly{"builtin-poly", "Polyhedra & tilings", true, {}};
   for (int t = 0; t < POLY_COUNT; t++) {
     LibraryObject o;
