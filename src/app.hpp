@@ -1,6 +1,7 @@
 // Application state and logic (no ImGui here): scene + undo, cameras, picking,
 // placement, gizmo / transform tools, explore movement, frame rendering.
 #pragma once
+#include <deque>
 #include <functional>
 #include <sstream>
 #include <memory>
@@ -254,6 +255,11 @@ class App {
   void redo();
   bool canUndo() const { return !history_.empty(); }
   bool canRedo() const { return !future_.empty(); }
+  size_t undoSteps() const { return history_.size(); }
+  std::string snapshotForTest() { return snapshot(); }
+  /** Memory the undo / redo steps take (bytes). */
+  size_t undoBytes() const { return undoBytes_; }
+  static constexpr size_t UNDO_MAX_BYTES = 64u << 20, UNDO_MAX_STEPS = 1000;
   /** Unsaved changes since the scene was loaded / saved. */
   bool dirty() const { return committed_ != saved_; }
   std::string lastFile;  // reopened on startup
@@ -393,7 +399,19 @@ class App {
   double toastUntil = 0;
 
  private:
-  std::vector<std::string> history_, future_;
+  // undo / redo: each step is the difference to the neighbouring state (the scene snapshots share
+  // everything outside the edited part): rebuild it with prefix + mid + suffix of the current one
+  struct UndoStep {
+    size_t pre = 0, suf = 0;
+    std::string mid;
+    size_t bytes() const { return mid.size() + sizeof(UndoStep); }
+  };
+  static UndoStep diffTo(const std::string& target, const std::string& from);
+  static std::string applyStep(const UndoStep& d, const std::string& from);
+  std::deque<UndoStep> history_;
+  std::vector<UndoStep> future_;
+  size_t undoBytes_ = 0;
+  void clearFuture();
   std::string committed_, saved_, autosaved_;
   std::map<std::string, std::string> linkDefs_;  // last known definition of each linked group
   Node evalRoot_;                                 // the scene as the animation left it (auto-key compares to it)

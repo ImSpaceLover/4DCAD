@@ -155,6 +155,7 @@ void App::loadScene(SceneFile f) {
   modal = Modal::None;
   history_.clear();
   future_.clear();
+  undoBytes_ = 0;
   rebuild();
   if (!anim.empty()) applyAnim();
   evalRoot_ = root;
@@ -467,27 +468,59 @@ void App::commit() {
   evalRadius_ = space.radius;
   std::string s = snapshot();
   if (s != committed_) {
-    history_.push_back(committed_);
-    if (history_.size() > 200) history_.erase(history_.begin());
-    future_.clear();
+    clearFuture();
+    history_.push_back(diffTo(committed_, s));
+    undoBytes_ += history_.back().bytes();
+    // the oldest steps go first when there are too many / they take too much memory
+    while (!history_.empty() && (history_.size() > UNDO_MAX_STEPS || undoBytes_ > UNDO_MAX_BYTES)) {
+      undoBytes_ -= history_.front().bytes();
+      history_.pop_front();
+    }
     committed_ = s;
   }
 }
 
+App::UndoStep App::diffTo(const std::string& target, const std::string& from) {
+  // common prefix and suffix (not overlapping), the rest of target is stored
+  size_t n = std::min(target.size(), from.size()), pre = 0, suf = 0;
+  while (pre < n && target[pre] == from[pre]) pre++;
+  while (suf < n - pre && target[target.size() - 1 - suf] == from[from.size() - 1 - suf]) suf++;
+  UndoStep d;
+  d.pre = pre;
+  d.suf = suf;
+  d.mid = target.substr(pre, target.size() - pre - suf);
+  return d;
+}
+
+std::string App::applyStep(const UndoStep& d, const std::string& from) {
+  return from.substr(0, d.pre) + d.mid + from.substr(from.size() - d.suf);
+}
+
+void App::clearFuture() {
+  for (auto& f : future_) undoBytes_ -= f.bytes();
+  future_.clear();
+}
+
 void App::undo() {
   if (history_.empty()) return;
-  future_.push_back(committed_);
-  committed_ = history_.back();
+  std::string prev = applyStep(history_.back(), committed_);
+  undoBytes_ -= history_.back().bytes();
   history_.pop_back();
+  future_.push_back(diffTo(committed_, prev));
+  undoBytes_ += future_.back().bytes();
+  committed_ = std::move(prev);
   restore(committed_);
   selection.erase(std::remove_if(selection.begin(), selection.end(), [&](auto& id) { return !findNode(root, id); }), selection.end());
   rebuild();
 }
 void App::redo() {
   if (future_.empty()) return;
-  history_.push_back(committed_);
-  committed_ = future_.back();
+  std::string next = applyStep(future_.back(), committed_);
+  undoBytes_ -= future_.back().bytes();
   future_.pop_back();
+  history_.push_back(diffTo(committed_, next));
+  undoBytes_ += history_.back().bytes();
+  committed_ = std::move(next);
   restore(committed_);
   rebuild();
 }
