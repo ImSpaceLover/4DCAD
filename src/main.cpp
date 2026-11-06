@@ -5,9 +5,12 @@
 //         [--debug-ray] (debug ray on, frozen after the first frame) [--strafe D] [--turn DEG] (then move / turn)
 //         [--render out.png|.jpg|.gif|.avi|.mp4|.webm [--animation] [--render-size WxH] [--samples N] [--aa N]]
 //         (renders like the Render window, from the active camera, then quits)
+#include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <deque>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -63,7 +66,9 @@ static void loadFonts(float scale) {
 int main(int argc, char** argv) {
   std::string sceneArg, example, screenshot;
   std::string selectName, toolName, openWindow;
-  bool startGeo = false, startExplore = false, debugRayArg = false;
+  bool startGeo = false, startExplore = false, debugRayArg = false, forceAsync = false, forceThreads = false;
+  int lightOverride = -1;
+  double skyOverride = -1, sunOverride = -1, ambientOverride = -1, fogOverride = -1;
   double turnDeg = 0, strafe = 0;
   Backend forceBackend = Backend::Auto;
   int frames = 30, W = 1600, H = 900;
@@ -90,6 +95,15 @@ int main(int argc, char** argv) {
     else if (a == "--samples" && i + 1 < argc) renderSamples = std::atoi(argv[++i]);
     else if (a == "--aa" && i + 1 < argc) renderAA = std::atoi(argv[++i]);
     else if (a == "--gl") forceBackend = Backend::OpenGL;
+    else if (a == "--async") forceAsync = true;
+    else if (a == "--threads") forceThreads = true;  // render threads even for --screenshot (testing)
+    // lighting overrides for this run (testing; not saved): --path-trace, --simple-lighting, --sky-intensity X, --sun X, --ambient X, --fog X
+    else if (a == "--path-trace") lightOverride = 1;
+    else if (a == "--simple-lighting") lightOverride = 0;
+    else if (a == "--sky-intensity" && i + 1 < argc) skyOverride = std::atof(argv[++i]);
+    else if (a == "--sun" && i + 1 < argc) sunOverride = std::atof(argv[++i]);
+    else if (a == "--ambient" && i + 1 < argc) ambientOverride = std::atof(argv[++i]);
+    else if (a == "--fog" && i + 1 < argc) fogOverride = std::atof(argv[++i]);  // background compiles even for --screenshot (testing)
     else if (a == "--vulkan") forceBackend = Backend::Vulkan;
     else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &W, &H);
     else if (a[0] != '-') sceneArg = a;
@@ -157,6 +171,8 @@ int main(int argc, char** argv) {
   st.ScaleAllSizes(xs);
   loadFonts(xs);
   std::unique_ptr<Renderer> renderer;
+  GLFWwindow* glWorker = nullptr;
+  GLFWwindow* glThreadWin[2] = {nullptr, nullptr};  // contexts of the viewport / thumbnail render threads
 #ifdef FD_HAVE_VULKAN
   if (useVulkan) {
     ImGui_ImplGlfw_InitForVulkan(win, true);
@@ -168,11 +184,44 @@ int main(int argc, char** argv) {
   if (!useVulkan) {
     ImGui_ImplGlfw_InitForOpenGL(win, true);
     ImGui_ImplOpenGL3_Init("#version 330");
-    renderer = makeGLRenderer();
+    // a hidden window whose context shares objects with the main one: shaders compile on a
+    // worker thread with it (the UI keeps running)
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    glWorker = glfwCreateWindow(16, 16, "4DCAD compiler", nullptr, win);
+    glfwDefaultWindowHints();
+    GLFWwindow* wk = glWorker;
+    renderer = makeGLRenderer(wk ? std::function<bool(bool)>([wk](bool on) { glfwMakeContextCurrent(on ? wk : nullptr); return true; })
+                                 : std::function<bool(bool)>());
   }
+  // interactive use compiles in the background; screenshots and command-line renders wait for it
+  renderer->setAsync(forceAsync || (screenshot.empty() && renderOut.empty()));
   std::printf("%s\n", renderer->device.c_str());
 
   app.init(std::move(renderer));
+  // the viewport and the thumbnail render on their own threads (interactive use; headless runs
+  // render on this thread so screenshots are deterministic)
+  if (forceThreads || (screenshot.empty() && renderOut.empty())) {
+    std::function<std::unique_ptr<Renderer>()> make;
+    std::function<bool(bool)> ctx[2];
+#ifdef FD_HAVE_VULKAN
+    if (useVulkan) make = [&vk] { return makeVulkanRenderer(vk, true); };
+#endif
+    if (!useVulkan) {
+      glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+      glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+      glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+      glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+      glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+      for (int i = 0; i < 2; i++) {
+        glThreadWin[i] = glfwCreateWindow(16, 16, "4DCAD render", nullptr, win);
+        GLFWwindow* w = glThreadWin[i];
+        if (w) ctx[i] = [w](bool on) { glfwMakeContextCurrent(on ? w : nullptr); return true; };
+      }
+      glfwDefaultWindowHints();
+      make = [] { return makeGLRenderer(); };
+    }
+    if (useVulkan || (glThreadWin[0] && glThreadWin[1])) app.startRenderThreads(make, ctx[0], ctx[1]);
+  }
   ui = new UI(app, win);
   g_ui = ui;
   std::string err;
@@ -184,6 +233,13 @@ int main(int argc, char** argv) {
     app.newScene(kind == "hyperbolic" ? SpaceKind::Hyperbolic : kind == "spherical" ? SpaceKind::Spherical : SpaceKind::Flat, r);
   }
   if (startGeo) app.setGeo(true);
+  QualitySettings savedQuality = app.quality;
+  bool qualityOverride = lightOverride >= 0 || skyOverride >= 0 || sunOverride >= 0 || ambientOverride >= 0 || fogOverride >= 0;
+  if (lightOverride >= 0) app.quality.lighting = lightOverride;
+  if (skyOverride >= 0) app.quality.skyIntensity = (float)skyOverride;
+  if (sunOverride >= 0) app.quality.sunIntensity = (float)sunOverride;
+  if (ambientOverride >= 0) app.quality.ambient = (float)ambientOverride;
+  if (fogOverride >= 0) app.quality.fog = (float)fogOverride;
   if (!selectName.empty()) walk(app.root, [&](Node& n, Node*, int) { if (n.name == selectName && app.selection.empty()) app.selection = {n.id}; });
   if (toolName == "move") app.tool = Tool::Move;
   if (toolName == "rotate") app.tool = Tool::Rotate;
@@ -210,12 +266,15 @@ int main(int argc, char** argv) {
   auto t0 = std::chrono::steady_clock::now();
   double last = 0;
   int frame = 0;
+  bool frameStats = std::getenv("FD_FRAME_STATS") != nullptr;  // prints UI frame time statistics at exit
+  std::vector<double> frameTimes;
   while (!ui->exitNow) {
     glfwPollEvents();
     double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    double dt = std::min(0.1, t - last);
+    double rawDt = t - last, dt = std::min(0.1, rawDt);
     last = t;
     app.now = t;
+    if (frameStats && frame > 2) frameTimes.push_back(rawDt);
     app.fps = app.fps * 0.9 + (dt > 0 ? 1 / dt : 0) * 0.1;
     // explore mouse capture
     if (app.wantCapture && !screenshot.empty()) app.wantCapture = false;
@@ -250,7 +309,9 @@ int main(int argc, char** argv) {
     ImGui::Render();
     int fw = 0, fh = 0;
     glfwGetFramebufferSize(win, &fw, &fh);
-    bool shoot = !screenshot.empty() && frame + 1 >= frames;
+    // headless runs with render threads wait until their images are finished before capturing
+    bool threadsBusy = (app.viewThread && app.viewThread->busy()) || (app.thumbThread && app.thumbThread->busy());
+    bool shoot = !screenshot.empty() && frame + 1 >= frames && !threadsBusy;
     std::vector<uint8_t> px;
 #ifdef FD_HAVE_VULKAN
     if (useVulkan) {
@@ -265,6 +326,19 @@ int main(int argc, char** argv) {
       gl::ClearColor(0.09f, 0.1f, 0.12f, 1);
       gl::Clear(GL_COLOR_BUFFER_BIT);
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+      {  // UI frame clock for the render threads: a fence per frame, polled without waiting
+        static std::deque<std::pair<uint64_t, GLsync>> fences;
+        fences.push_back({uiFrames().current.load(), gl::FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)});
+        uiFrames().current++;
+        gl::Flush();
+        while (!fences.empty()) {
+          GLenum r = gl::ClientWaitSync(fences.front().second, 0, 0);
+          if (r != GL_ALREADY_SIGNALED && r != GL_CONDITION_SATISFIED) break;
+          uiFrames().completed = fences.front().first;
+          gl::DeleteSync(fences.front().second);
+          fences.pop_front();
+        }
+      }
       if (shoot) {
         px.resize((size_t)fw * fh * 4);
         gl::PixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -295,24 +369,34 @@ int main(int argc, char** argv) {
       break;
     }
     if (!renderOut.empty()) { frame++; if (!useVulkan) glfwSwapBuffers(win); continue; }
-    if (!screenshot.empty() && ++frame >= frames) {
+    if (!screenshot.empty() && shoot && ++frame >= frames) {
       writePPM(screenshot, fw, fh, px);
       break;
     }
+    if (!screenshot.empty() && !shoot && frame + 1 < frames) frame++;
     if (!useVulkan) glfwSwapBuffers(win);
     if (app.quality.frameLimit > 0 && screenshot.empty()) {  // Settings > Rendering > Frame rate limit
       double left = 1.0 / app.quality.frameLimit - (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - t);
       if (left > 0.001) glfwWaitEventsTimeout(left);
     }
   }
+  if (frameStats && !frameTimes.empty()) {
+    std::sort(frameTimes.begin(), frameTimes.end());
+    std::printf("UI frames: %zu, median %.1f ms, 95%% %.1f ms, max %.1f ms\n", frameTimes.size(), frameTimes[frameTimes.size() / 2] * 1000,
+                frameTimes[frameTimes.size() * 95 / 100] * 1000, frameTimes.back() * 1000);
+  }
   if (!renderOut.empty()) app.renderSet = savedRenderSet;
+  if (qualityOverride) app.quality = savedQuality;  // (the overrides are not saved)
   app.saveSettings();
   if (screenshot.empty() && renderOut.empty()) app.clearRecovery();  // quitting normally (unsaved changes were already asked about)
   g_ui = nullptr;
   delete ui;
+  app.stopRenderThreads();  // (before their renderers' devices / contexts go)
   app.renderer->destroy(app.mainRT);
   app.renderer->destroy(app.thumbRT);
   app.renderer->destroy(app.job.rt);
+  app.renderer->destroy(app.job.acc);
+  app.renderer->destroy(app.mainAccRT);
   app.renderer.reset();
 #ifdef FD_HAVE_VULKAN
   if (useVulkan) {
@@ -326,6 +410,8 @@ int main(int argc, char** argv) {
 #ifdef FD_HAVE_VULKAN
   if (useVulkan) vk.shutdown();
 #endif
+  if (glWorker) glfwDestroyWindow(glWorker);
+  for (auto* w : glThreadWin) if (w) glfwDestroyWindow(w);
   glfwDestroyWindow(win);
   glfwTerminate();
   return 0;

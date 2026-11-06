@@ -75,6 +75,16 @@ void UI::qualityWindow() {
       Ff("Hit precision", q.eps, 0.0002f, 0.02f, "%.4f", "Distance at which a ray counts as hitting a surface");
       Ff("Step scale", q.stepScale, 0.3f, 1.f, "%.2f", "Below 1: smaller, safer steps for inexact SDFs (custom code, heavy modifiers)");
       ImGui::SeparatorText("Lighting");
+      {
+        const char* models[2] = {"Simple", "Path traced (PBR)"};
+        ImGui::Combo("Lighting model", &q.lighting, models, 2);
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Simple: sun, point lights and ambient light; glowing objects shine as point lights.\n"
+                            "Path traced: physically based. Light bounces between surfaces, glowing objects are\n"
+                            "real lights of their own shape, no ambient light (sky off + nothing glowing = black).\n"
+                            "Used where the image is refined (the still viewport, renders); moving views stay simple.");
+      }
+      Ff("Sky intensity", q.skyIntensity, 0, 3, "%.2f", "Brightness of the sky (Geodesic view: of the world surface seen far away).\n0 = black. Path traced: the sky's light on the scene");
       ImGui::Checkbox("Soft shadows", &q.shadows);
       Ff("Shadow sharpness", q.shadowK, 2, 64, "%.0f");
       Ff("Shadow distance", q.shadowMax, 1, 50, "%.0f");
@@ -87,7 +97,10 @@ void UI::qualityWindow() {
       Ff("Sun intensity", q.sunIntensity, 0, 3);
       ImGui::Checkbox("Point light shadows", &q.pointShadows);
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Without shadows, lights shine through walls (emissive objects' lights always cast shadows)");
+      ImGui::BeginDisabled(q.lighting == 1);
       ImGui::Checkbox("Emissive objects light the scene", &q.emissiveLights);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Simple lighting: as point lights (path tracing: always, as area lights)");
+      ImGui::EndDisabled();
       ImGui::SliderInt("Bounces", &q.transparentLayers, 0, 6);
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflections / refractions followed per pixel (0 = mirrors and glass off)");
       ImGui::Checkbox("Over-relaxed marching", &q.relaxedMarching);

@@ -8,17 +8,35 @@
 
 namespace fd {
 
-std::string Renderer::checkCustomCode(const std::string& code) {
-  auto it = codeErrors_.find(code);
-  if (it != codeErrors_.end()) return it->second;
+UiFrameClock& uiFrames() {
+  static UiFrameClock c;
+  return c;
+}
+
+constexpr size_t PROGRAM_CACHE = 16;  // programs kept (values are node data: entries are real structures)
+
+std::string Renderer::codeCheckSource(const std::string& code) {
   // a tiny fragment shader using the code (same prelude as the real shader)
-  std::string src = shaderPrelude(shaderTarget(), false) + sdfHelpersGLSL() + renameCustomCode(code, "_t") +
-                    "\nvoid main() { fragColor = vec4(sdf_t(vec4(v_uv, 0.0, 1.0))); }\n";
-  std::string err = compileCheck(src);
+  return shaderPrelude(shaderTarget(), false) + sdfHelpersGLSL() + renameCustomCode(code, "_t") +
+         "\nvoid main() { fragColor = vec4(sdf_t(vec4(v_uv, 0.0, 1.0))); }\n";
+}
+
+void Renderer::applyCodeResult(const std::string& code, std::string err) {
   if (err.empty() && code.find("sdf") == std::string::npos) err = "the code must define: float sdf(vec4 p)";
   codeErrors_[code] = err;
   if (!err.empty()) badCode_.insert(code);
-  return err;
+}
+
+std::string Renderer::checkCustomCode(const std::string& code, bool wait) {
+  pollCompiles();
+  auto it = codeErrors_.find(code);
+  if (it != codeErrors_.end()) return it->second;
+  if (async_ && workerOk_ && !wait) {  // checked in the background; the editor shows the result when it is there
+    if (!pendingCode_.count(code)) { pendingCode_.insert(code); enqueue({"", codeCheckSource(code), code}); }
+    return "";
+  }
+  applyCodeResult(code, compileCheck(codeCheckSource(code)));
+  return codeErrors_[code];
 }
 
 void Renderer::clearPrograms() {
@@ -27,12 +45,115 @@ void Renderer::clearPrograms() {
   lru_.clear();
 }
 
-Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball) {
+// ---------------------------------------------------------------- background compiles
+void Renderer::enqueue(Job j) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!worker_.joinable()) worker_ = std::thread([this] { workerLoop(); });
+  jobs_.push_back(std::move(j));
+  cv_.notify_all();
+}
+
+void Renderer::workerLoop() {
+  bool ctx = workerBegin();
+  for (;;) {
+    Job j;
+    {
+      std::unique_lock<std::mutex> lk(mu_);
+      cv_.wait(lk, [&] { return stop_ || !jobs_.empty(); });
+      if (stop_) break;
+      j = std::move(jobs_.front());
+      jobs_.pop_front();
+    }
+    Result r;
+    r.job = std::move(j);
+    if (!ctx) r.err = "\x01";  // no worker context: the calling thread compiles it
+    else {
+      auto t0 = std::chrono::steady_clock::now();
+      if (r.job.key.empty()) r.err = compileCheck(r.job.source);
+      else {
+        r.handle = createProgram(r.job.source, r.err);
+        if (r.handle) workerDone();
+      }
+      r.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
+    std::lock_guard<std::mutex> lk(mu_);
+    done_.push_back(std::move(r));
+  }
+  if (ctx) workerEnd();
+}
+
+void Renderer::stopWorker() {
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    stop_ = true;
+    cv_.notify_all();
+  }
+  if (worker_.joinable()) worker_.join();
+  for (auto& r : done_) if (r.handle) destroyProgram(r.handle);
+  done_.clear();
+  jobs_.clear();
+}
+
+void Renderer::insert(const std::string& key, Program p) {
+  while (lru_.size() >= PROGRAM_CACHE) {
+    destroyProgram(cache_[lru_.back()].handle);
+    cache_.erase(lru_.back());
+    lru_.pop_back();
+  }
+  lru_.push_front(key);
+  cache_[key] = std::move(p);
+}
+
+void Renderer::pollCompiles() {
+  std::vector<Result> rs;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (done_.empty()) return;
+    rs.swap(done_);
+  }
+  for (auto& r : rs) {
+    if (r.err == "\x01") {  // the worker could not compile (no context): from now on, here
+      workerOk_ = false;
+      if (r.job.key.empty()) { applyCodeResult(r.job.code, compileCheck(r.job.source)); pendingCode_.erase(r.job.code); }
+      else pending_.erase(r.job.key);  // asked again by the next render (synchronously)
+      continue;
+    }
+    if (r.job.key.empty()) {
+      applyCodeResult(r.job.code, r.err);
+      pendingCode_.erase(r.job.code);
+      continue;
+    }
+    auto pit = pending_.find(r.job.key);
+    if (!r.handle) {
+      lastError = r.err;
+      std::fprintf(stderr, "Shader error:\n%s\n", r.err.c_str());
+      failed_.insert(r.job.key);
+    } else if (pit != pending_.end()) {
+      lastCompileMs = r.ms;
+      lastError.clear();
+      Program p;
+      p.handle = r.handle;
+      p.cs = std::move(pit->second);
+      insert(r.job.key, std::move(p));
+    } else destroyProgram(r.handle);
+    if (pit != pending_.end()) pending_.erase(pit);
+  }
+}
+
+Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball,
+                                 bool pt, bool& pending) {
+  pending = false;
+  pollCompiles();
   if (space == SpaceKind::Flat) ball = false;
   if (space != SpaceKind::Flat) geo = false;
-  // custom SDFs that do not compile are replaced by their bounding box
-  walk(root, [&](Node& n, Node*, int) { if (n.isCustom()) checkCustomCode(n.code); });
-  std::string key = structureKey(root, reg, world, geo, space) + (ball ? "|ball" : "");
+  // custom SDFs that do not compile are replaced by their bounding box (so their checks come first)
+  bool codeWait = false;
+  walk(root, [&](Node& n, Node*, int) {
+    if (n.isCustom()) { checkCustomCode(n.code); if (pendingCode_.count(n.code)) codeWait = true; }
+  });
+  if (codeWait) { pending = true; return nullptr; }
+  if (ball) pt = false;
+  std::string key = structureKey(root, reg, world, geo, space) + (ball ? "|ball" : "") + (pt ? "|pt" : "");
   auto it = cache_.find(key);
   if (it != cache_.end()) {
     lru_.remove(key);
@@ -40,11 +161,22 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
     return &it->second;
   }
   if (failed_.count(key)) return nullptr;
+  if (pending_.count(key)) { pending = true; return nullptr; }
   auto t0 = std::chrono::steady_clock::now();
+  CompiledScene cs = compileScene(root, reg, world, geo, &badCode_, space);
+  std::string src = buildFragmentShader(cs.glsl, geo, shaderTarget(), (int)space, ball, pt);
+  if (async_ && workerOk_) {
+    pending_[key] = std::move(cs);
+    enqueue({key, std::move(src), ""});
+    pending = true;
+    return nullptr;
+  }
   Program p;
-  p.cs = compileScene(root, reg, world, geo, &badCode_, space);
+  p.cs = std::move(cs);
   std::string err;
-  p.handle = createProgram(buildFragmentShader(p.cs.glsl, geo, shaderTarget(), (int)space, ball), err);
+  compilingNow_ = true;
+  p.handle = createProgram(src, err);
+  compilingNow_ = false;
   if (!p.handle) {
     lastError = err;
     std::fprintf(stderr, "Shader error:\n%s\n", err.c_str());
@@ -53,13 +185,8 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
   }
   lastCompileMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   lastError.clear();
-  while (lru_.size() >= 8) {
-    destroyProgram(cache_[lru_.back()].handle);
-    cache_.erase(lru_.back());
-    lru_.pop_back();
-  }
-  lru_.push_front(key);
-  return &(cache_[key] = std::move(p));
+  insert(key, std::move(p));
+  return &cache_[key];
 }
 
 static void put4(float* d, const V4& v) { for (int i = 0; i < 4; i++) d[i] = (float)v[i]; }
@@ -99,9 +226,12 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   // point lights
   int nl = 0, mask = 0;
   for (auto& l : fp.lights) {
-    if (nl >= MAX_LIGHTS || !fp.prof.pointLights) break;
+    if (nl >= MAX_LIGHTS) break;
+    if (!l.area && !fp.prof.pointLights) continue;  // (area lights: path tracing, always on)
     put4(u.lpos[nl], l.pos);
     put3(u.lcol[nl], l.color, l.range);
+    u.lext[nl][0] = l.area ? l.radius : q.lightRadius;
+    u.lext[nl][1] = l.area ? 1.f : 0.f;
     // emissive objects' lights always cast shadows (they are what would shine through walls)
     if (l.shadows && (fp.prof.pointShadows || l.emissive)) mask |= 1 << nl;
     nl++;
@@ -120,6 +250,7 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   int32_t ll[4] = {std::clamp(p.shadowSteps, 4, 256), p.specular ? 1 : 0, fp.stochastic ? 1 : 0, fp.sample};
   float ee[4] = {fp.stochastic ? fp.aperture : 0.f, std::max(0.01f, fp.focus), std::clamp(fp.blend, 0.f, 1.f), (float)fp.space.R()};
   std::memcpy(u.e, ee, sizeof ee);
+  u.f[0] = std::max(0.f, q.skyIntensity);
   std::memcpy(u.i, ii, sizeof ii);
   std::memcpy(u.j, jj, sizeof jj);
   std::memcpy(u.k, kk, sizeof kk);
@@ -130,7 +261,15 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
 bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const PrimitiveRegistry& reg, const std::string& world,
                       const std::unordered_set<std::string>& highlight, const FrameParams& fp) {
   int rw = std::max(1, (int)(w * fp.scale)), rh = std::max(1, (int)(h * fp.scale));
-  Program* p = get(root, reg, world, fp.geo, fp.space.kind, fp.ballView);
+  bool pending = false;
+  Program* p = get(root, reg, world, fp.geo, fp.space.kind, fp.ballView, fp.pathTrace, pending);
+  compiling_ = pending;
+  if (pending) {
+    // the program is being compiled: keep the last image (a target that does not exist yet is
+    // cleared once so there is something to show)
+    if (rt.id < 0) draw(rt, rw, rh, nullptr, frameUniforms(fp, rw, rh), {}, -1);
+    return true;
+  }
   FrameParams fpx = fp;
   walk(root, [&](Node& n, Node*, int) { if (n.isHoneycomb() && !n.hidden) fpx.honeycomb = true; });
   FrameUniforms u = frameUniforms(fpx, rw, rh);

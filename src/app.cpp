@@ -1826,7 +1826,49 @@ void App::updateExplore(const InputState& in, double dt) {
 }
 
 // ============================================================ rendering
-std::vector<LightParam> App::frameLights() {
+// How far a glowing object reaches from its origin, measured with the CPU evaluator: along 32
+// directions, the outermost point that is inside this object (its bounding sphere is conservative,
+// often twice as large; light sampling within a tight sphere wastes far fewer rays, above all in
+// 4D where the share hitting the object falls with the cube of the ratio). A part missed here is
+// still lit correctly by the paths that hit it, only with more noise.
+double App::emitterRadius(const Node& n, const V4& centre, double bound) {
+  if (emitRadiusVersion_ != version_) { emitRadius_.clear(); emitRadiusVersion_ = version_; }
+  if (auto it = emitRadius_.find(n.id); it != emitRadius_.end()) return it->second;
+  double best = 0;
+  bool curved = space.curved();
+  if (!ev) return bound;
+  uint32_t seed = 12345;
+  auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) * (1.0 / 16777216.0) * 2 - 1; };
+  auto inside = [&](const V4& p) {
+    Sample s = curved ? ev->evalCurved(p) : ev->evalFull(p);
+    return s.d < 0 && s.node && s.node->id == n.id;
+  };
+  auto at = [&](const V4& dir, double r) {
+    if (!curved) return centre + dir * r;
+    V4 p = centre, d = dir;
+    cs::geodesic(space, p, d, r);
+    return p;
+  };
+  const int STEPS = 24;
+  for (int k = 0; k < 32; k++) {
+    V4 d{rnd(), rnd(), rnd(), curved ? 0.0 : rnd()};
+    if (curved) d = cs::tnormalize(space.k(), cs::tangent(space.k(), centre, d));
+    else d = length(d) > 1e-9 ? normalize(d) : V4{1, 0, 0, 0};
+    // outermost sample inside the object, then bisection on the step beyond it
+    double lo = -1;
+    for (int i = STEPS; i >= 0; i--)
+      if (inside(at(d, bound * i / STEPS))) { lo = bound * i / STEPS; break; }
+    if (lo < 0) continue;
+    double hi = std::min(bound, lo + bound / STEPS);
+    for (int b = 0; b < 6; b++) { double m = (lo + hi) / 2; (inside(at(d, m)) ? lo : hi) = m; }
+    best = std::max(best, hi);
+  }
+  double r = best > 0 ? std::min(bound, best * 1.08 + 1e-3) : bound;
+  emitRadius_[n.id] = r;
+  return r;
+}
+
+std::vector<LightParam> App::frameLights(bool pathTrace) {
   std::vector<LightParam> out;
   for (auto& l : lights) {
     if (!l.enabled || out.size() >= (size_t)MAX_LIGHTS) continue;
@@ -1837,7 +1879,36 @@ std::vector<LightParam> App::frameLights() {
     p.shadows = l.shadows;
     out.push_back(p);
   }
-  if (quality.emissiveLights) {
+  if (pathTrace) {
+    // path tracing: every glowing object is an area light; the shader samples directions within its
+    // bounding sphere and counts only those reaching its glowing surface (so its shape matters)
+    Node& top = isolate.empty() ? root : viewRoot_;
+    auto bounds = computeBounds(top, reg);
+    std::vector<std::pair<double, LightParam>> em;
+    walk(top, [&](Node& n, Node*, int) {
+      if (!n.isLeaf() || n.mat.emissive <= 0 || n.mat.emissionStrength <= 0) return;
+      auto path = pathTo(top, n.id);
+      double sAnc = 1;
+      for (Node* a : path) {
+        if (a->hidden) return;
+        if (a != &n) sAnc *= a->xf.scale;
+      }
+      auto b = bounds.find(n.id);
+      if (b == bounds.end() || !std::isfinite(b->second.r)) return;  // unbounded (planes...): found by the paths alone
+      V4 off = b->second.c - n.xf.pos;
+      if (space.curved()) off[3] = 0;
+      LightParam p;
+      p.pos = nodeWorldPos(n.id);
+      p.radius = (float)emitterRadius(n, p.pos, (b->second.r + length(off)) * sAnc);  // (measured; within the conservative bound)
+      double k = n.mat.emissive * n.mat.emissionStrength;
+      for (int i = 0; i < 3; i++) p.color[i] = (float)(n.color[i] * k);
+      p.range = 1e9f;
+      p.area = p.emissive = true;
+      em.push_back({k * (n.color[0] + n.color[1] + n.color[2]) * p.radius * p.radius, p});
+    });
+    std::sort(em.begin(), em.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    for (auto& [w, p] : em) if (out.size() < (size_t)MAX_LIGHTS) out.push_back(p);
+  } else if (quality.emissiveLights) {
     // emissive objects light their surroundings: a point light at the object's centre,
     // reaching a few times its size (brightest first, up to the light limit)
     auto bounds = computeBounds(isolate.empty() ? root : viewRoot_, reg);
@@ -1936,6 +2007,58 @@ RenderProfile App::mainProfile() const {
   return prof;
 }
 
+void App::startRenderThreads(const std::function<std::unique_ptr<Renderer>()>& make, std::function<bool(bool)> viewCtx,
+                             std::function<bool(bool)> thumbCtx) {
+  viewThread = std::make_unique<RenderThread>(make, std::move(viewCtx));
+  thumbThread = std::make_unique<RenderThread>(make, std::move(thumbCtx));
+}
+
+void App::stopRenderThreads() {
+  viewThread.reset();
+  thumbThread.reset();
+}
+
+uint64_t App::viewportTexture(bool& flip) {
+  if (viewThread) { flip = viewThread->flipY(); return viewThread->acquire().tex; }
+  if (!renderer) return 0;
+  flip = renderer->flipY();
+  return renderer->texture(mainRT);
+}
+
+uint64_t App::thumbnailTexture(bool& flip) {
+  if (thumbThread) { flip = thumbThread->flipY(); return thumbThread->acquire().tex; }
+  if (!renderer) return 0;
+  flip = renderer->flipY();
+  return renderer->texture(thumbRT);
+}
+
+std::shared_ptr<const Node> App::sceneSnapshot() {
+  // the tree as drawn (isolation shows a reduced tree); copied once per scene change
+  std::string k = std::to_string(version_) + "|";
+  for (auto& s : isolate) k += s + ";";
+  if (!snap_ || k != snapKey_) {
+    snapKey_ = k;
+    snap_ = std::make_shared<const Node>(isolate.empty() ? root : viewRoot_);
+    snapReg_ = std::make_shared<const PrimitiveRegistry>(reg);
+  }
+  return snap_;
+}
+
+void App::postView(RenderThread& t, int w, int h, const std::unordered_set<std::string>& hl, const FrameParams& fp, int samples, bool stochastic) {
+  RenderRequest r;
+  r.root = sceneSnapshot();
+  r.reg = snapReg_;
+  r.world = world;
+  r.highlight = hl;
+  r.fp = fp;
+  r.quality = quality;
+  r.w = w;
+  r.h = h;
+  r.samples = std::max(1, samples);
+  r.stochastic = stochastic;
+  t.post(std::move(r));
+}
+
 void App::renderFrame() {
   if (!renderer) return;
   if (job.active) return;  // an image / video is rendering: the viewport keeps its last picture
@@ -1973,11 +2096,14 @@ void App::renderFrame() {
   fp.quality = &quality;
   fp.light = light();
   fp.skyCol = worldColor();
-  fp.lights = frameLights();
+  // path tracing where the image is refined (the idle viewport); moving / fast views stay simple
+  fp.pathTrace = q.lighting == 1 && refine;
+  fp.lights = frameLights(fp.pathTrace);
   fp.prof = prof;
-  for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows; }
+  for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows << l.radius; }
   key << prof.maxSteps << prof.bounces << prof.textures << prof.specular << prof.pointLights << prof.shadows << prof.pointShadows << prof.ao
-      << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching << refine << q.sunSize << q.lightRadius;
+      << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching << refine << q.sunSize << q.lightRadius << '|' << q.lighting
+      << q.skyIntensity << fp.pathTrace;
   if (inCameraView()) {  // depth of field of the camera looked through (stochastic only)
     Node* c = findNode(root, activeCamera);
     fp.aperture = (float)c->camAperture;
@@ -2017,15 +2143,27 @@ void App::renderFrame() {
     fp.stochastic = refine;  // a new image: the first sample replaces what was there
     fp.sample = 0;
     fp.blend = 1;
-    renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
-    accumSamples = refine ? 1 : 0;
-  } else if (refine && accumSamples < q.viewportSamples) {
+    if (viewThread) postView(*viewThread, (int)vpW, (int)vpH, highlightSet(), fp, refine ? q.viewportSamples : 1, refine);  // (refined there)
+    else {
+      renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+      if (fp.pathTrace && !renderer->compiling()) renderer->resolve(mainAccRT, mainRT);
+      accumSamples = refine ? 1 : 0;
+      if (renderer->compiling()) { lastKey_.clear(); accumSamples = 0; viewportCompiling = true; }  // not drawn yet: again next frame
+      else viewportCompiling = false;
+    }
+  } else if (refine && accumSamples < q.viewportSamples && !viewThread) {
     // the same view: add one more random sample to the running average
     fp.stochastic = true;
     fp.sample = accumSamples;
     fp.blend = 1.0f / (accumSamples + 1);
-    renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+    renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+    if (fp.pathTrace) renderer->resolve(mainAccRT, mainRT);
     accumSamples++;
+  }
+  if (viewThread) {
+    RenderThread::Image im = viewThread->acquire();
+    accumSamples = refine ? im.samples : 0;
+    viewportCompiling = viewThread->compiling();
   }
   if (space.curved() && editSet.showThumbnail) {
     // overview: the Poincare ball / stereographic view from outside, with a marker where you are
@@ -2049,7 +2187,11 @@ void App::renderFrame() {
     tk << k << "|ball" << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
     if (tk.str() != lastThumbKey_) {
       lastThumbKey_ = tk.str();
-      renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+      if (thumbThread) postView(*thumbThread, thumbW, thumbH, {}, tp, 1, false);
+      else {
+        renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+        if (renderer->compiling()) lastThumbKey_.clear();
+      }
     }
   }
   if (fp.geo && editSet.showThumbnail) {
@@ -2074,7 +2216,11 @@ void App::renderFrame() {
     tk << k << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
     if (tk.str() != lastThumbKey_) {
       lastThumbKey_ = tk.str();
-      renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+      if (thumbThread) postView(*thumbThread, thumbW, thumbH, {}, tp, 1, false);
+      else {
+        renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+        if (renderer->compiling()) lastThumbKey_.clear();
+      }
     }
   }
 }
@@ -2093,7 +2239,8 @@ nlohmann::json qualityToJson(const QualitySettings& q) {
                       {"grid", q.grid}, {"geoMaxStep", q.geoMaxStep}, {"geoProjectIters", q.geoProjectIters}, {"sunIntensity", q.sunIntensity},
                       {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
                       {"relaxedMarching", q.relaxedMarching}, {"fastWhileMovingInEdit", q.fastWhileMovingInEdit},
-                      {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"frameLimit", q.frameLimit}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius}};
+                      {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"frameLimit", q.frameLimit}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius},
+                      {"lighting", q.lighting}, {"skyIntensity", q.skyIntensity}};
   const RenderProfile& f = q.fast;
   r["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
                {"specular", f.specular}, {"pointLights", f.pointLights}, {"shadows", f.shadows}, {"pointShadows", f.pointShadows},
@@ -2115,6 +2262,8 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
   getKey(r, "fastWhileMovingInEdit", q.fastWhileMovingInEdit);
   getKey(r, "frameLimit", q.frameLimit);
   getKey(r, "stochastic", q.stochastic); getKey(r, "viewportSamples", q.viewportSamples); getKey(r, "sunSize", q.sunSize); getKey(r, "lightRadius", q.lightRadius);
+  getKey(r, "lighting", q.lighting); getKey(r, "skyIntensity", q.skyIntensity);
+  q.lighting = std::clamp(q.lighting, 0, 1);
   auto& f = q.fast;
   if (r.contains("fast") && r["fast"].is_object()) {
     auto& o = r["fast"];
@@ -2184,6 +2333,7 @@ std::vector<App::RenderPreset> App::builtinPresets() {
     q.ao = p.ao;
     q.stochastic = i > 0;
     q.viewportSamples = i == 0 ? 8 : i == 1 ? 32 : 128;
+    q.lighting = i == 2 ? 1 : 0;  // Full: path traced
     RenderSettings o;
     o.width = i == 0 ? 640 : i == 1 ? 1280 : 1920;
     o.height = i == 0 ? 360 : i == 1 ? 720 : 1080;
@@ -2191,7 +2341,7 @@ std::vector<App::RenderPreset> App::builtinPresets() {
     o.samples = i == 0 ? 1 : i == 1 ? 16 : 128;
     nlohmann::json j = {{"name", names[i]}, {"quality", qualityToJson(q)}, {"output", outputToJson(o, false)}};
     // the look (light, sky, fog) and the output format stay as they are
-    for (const char* k : {"lightYaw", "lightPitch", "lightW", "skyTop", "skyBottom", "fog", "ambient", "sunIntensity", "grid"}) j["quality"].erase(k);
+    for (const char* k : {"lightYaw", "lightPitch", "lightW", "skyTop", "skyBottom", "fog", "ambient", "sunIntensity", "grid", "skyIntensity"}) j["quality"].erase(k);
     for (const char* k : {"stillFormat", "animFormat", "sceneRange", "start", "end", "fps", "jpegQuality"}) j["output"].erase(k);
     out.push_back({names[i], true, j.dump(2)});
   }

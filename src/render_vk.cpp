@@ -70,7 +70,7 @@ struct FrameRes {
 
 class VKRenderer : public Renderer {
  public:
-  explicit VKRenderer(VulkanContext& c) : ctx_(c) {}
+  VKRenderer(VulkanContext& c, bool threaded) : ctx_(c), threaded_(threaded) { immediate_ = threaded; }
   bool init(std::string& err) {
     VkDevice d = ctx_.device;
     device = ctx_.deviceName;
@@ -140,14 +140,36 @@ class VKRenderer : public Renderer {
     vert_ = module(spv);
     for (int i = 0; i <= VulkanContext::FRAMES; i++) {
       FrameRes& fr = i < VulkanContext::FRAMES ? frames_[i] : imm_;
-      VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 64}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64}};
+      VkDescriptorPoolSize ps[3] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 64}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64},
+                                    {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16}};
       VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-      dpi.maxSets = 64;
-      dpi.poolSizeCount = 2;
+      dpi.maxSets = 80;
+      dpi.poolSizeCount = 3;
       dpi.pPoolSizes = ps;
       vkCreateDescriptorPool(d, &dpi, nullptr, &fr.pool);
     }
-    ctx_.onFrameStart = [this](int slot) {
+    {  // the display pass of path-traced images (gamma after averaging): one sampled image
+      VkDescriptorSetLayoutBinding rb{};
+      rb.binding = 0;
+      rb.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      rb.descriptorCount = 1;
+      rb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+      VkDescriptorSetLayoutCreateInfo rli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+      rli.bindingCount = 1;
+      rli.pBindings = &rb;
+      if (vkCreateDescriptorSetLayout(d, &rli, nullptr, &resolveSetLayout_) != VK_SUCCESS) { err = "resolve set layout"; return false; }
+      VkPipelineLayoutCreateInfo rpli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+      rpli.setLayoutCount = 1;
+      rpli.pSetLayouts = &resolveSetLayout_;
+      if (vkCreatePipelineLayout(d, &rpli, nullptr, &resolveLayout_) != VK_SUCCESS) { err = "resolve pipeline layout"; return false; }
+      std::vector<uint32_t> rs;
+      if (!compileGlsl(EShLangFragment, resolveShader(ShaderTarget::Vulkan), rs, err)) return false;
+      VkShaderModule fm = module(rs);
+      resolvePipe_ = pipeline(fm, resolveLayout_, false);
+      vkDestroyShaderModule(d, fm, nullptr);
+      if (!resolvePipe_) { err = "resolve pipeline"; return false; }
+    }
+    if (!threaded_) ctx_.onFrameStart = [this](int slot) {
       FrameRes& f = frames_[slot];
       for (auto& c : f.chunks) c.used = 0;
       vkResetDescriptorPool(ctx_.device, f.pool, 0);
@@ -157,7 +179,8 @@ class VKRenderer : public Renderer {
   }
 
   ~VKRenderer() override {
-    vkDeviceWaitIdle(ctx_.device);
+    stopWorker();
+    ctx_.waitIdle();
     clearPrograms();
     VkDevice d = ctx_.device;
     for (auto& t : targets_) for (auto& v : t.v) freeImage(v);
@@ -168,11 +191,14 @@ class VKRenderer : public Renderer {
     for (auto& f : frames_) freeRes(f);
     freeRes(imm_);
     vkDestroyShaderModule(d, vert_, nullptr);
+    if (resolvePipe_) vkDestroyPipeline(d, resolvePipe_, nullptr);
+    if (resolveLayout_) vkDestroyPipelineLayout(d, resolveLayout_, nullptr);
+    if (resolveSetLayout_) vkDestroyDescriptorSetLayout(d, resolveSetLayout_, nullptr);
     vkDestroySampler(d, sampler_, nullptr);
     vkDestroyRenderPass(d, pass_, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
-    ctx_.onFrameStart = nullptr;
+    if (!threaded_) ctx_.onFrameStart = nullptr;
   }
 
   uint64_t texture(const RenderTarget& rt) override {
@@ -184,9 +210,9 @@ class VKRenderer : public Renderer {
   const char* backendName() const override { return "Vulkan"; }
   void destroy(RenderTarget& rt) override {
     if (rt.id < 0 || rt.id >= (int)targets_.size()) return;
-    vkDeviceWaitIdle(ctx_.device);
+    ctx_.waitIdle();
     for (auto& v : targets_[rt.id].v) freeImage(v);
-    targets_[rt.id].current = -1;
+    targets_[rt.id].current = -1;  // (after the wait above)
     rt = RenderTarget{};
   }
 
@@ -197,6 +223,14 @@ class VKRenderer : public Renderer {
     std::vector<uint32_t> spv;
     if (!compileGlsl(EShLangFragment, fs, spv, err)) return nullptr;
     VkShaderModule frag = module(spv);
+    auto* p = new VKProgram;
+    p->pipeline = pipeline(frag, pipeLayout_, true);
+    vkDestroyShaderModule(ctx_.device, frag, nullptr);
+    if (!p->pipeline) { err = "vkCreateGraphicsPipelines failed"; delete p; return nullptr; }
+    return p;
+  }
+  // a full-screen pipeline in the offscreen pass (blend: progressive sampling's constant-alpha blend)
+  VkPipeline pipeline(VkShaderModule frag, VkPipelineLayout layout, bool blend) {
     VkPipelineShaderStageCreateInfo st[2]{};
     st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -220,7 +254,7 @@ class VKRenderer : public Renderer {
     VkPipelineColorBlendAttachmentState cba{};
     cba.colorWriteMask = 0xF;
     // new sample = src * w + previous * (1 - w); w = 1 replaces (blend constant alpha, per draw)
-    cba.blendEnable = VK_TRUE;
+    cba.blendEnable = blend ? VK_TRUE : VK_FALSE;
     cba.srcColorBlendFactor = cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_CONSTANT_ALPHA;
     cba.dstColorBlendFactor = cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
     cba.colorBlendOp = cba.alphaBlendOp = VK_BLEND_OP_ADD;
@@ -229,7 +263,7 @@ class VKRenderer : public Renderer {
     cb.pAttachments = &cba;
     VkDynamicState dyn[3] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS};
     VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    ds.dynamicStateCount = 3;
+    ds.dynamicStateCount = blend ? 3 : 2;
     ds.pDynamicStates = dyn;
     VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pi.stageCount = 2;
@@ -241,18 +275,16 @@ class VKRenderer : public Renderer {
     pi.pMultisampleState = &ms;
     pi.pColorBlendState = &cb;
     pi.pDynamicState = &ds;
-    pi.layout = pipeLayout_;
+    pi.layout = layout;
     pi.renderPass = pass_;
-    auto* p = new VKProgram;
-    VkResult r = vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &pi, nullptr, &p->pipeline);
-    vkDestroyShaderModule(ctx_.device, frag, nullptr);
-    if (r != VK_SUCCESS) { err = "vkCreateGraphicsPipelines failed (" + std::to_string((int)r) + ")"; delete p; return nullptr; }
-    return p;
+    VkPipeline pl = VK_NULL_HANDLE;
+    if (vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &pi, nullptr, &pl) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return pl;
   }
   void destroyProgram(void* h) override {
     auto* p = (VKProgram*)h;
     if (!p) return;
-    vkDeviceWaitIdle(ctx_.device);  // a frame in flight may still use it
+    ctx_.waitIdle();  // a frame in flight may still use it
     vkDestroyPipeline(ctx_.device, p->pipeline, nullptr);
     delete p;
   }
@@ -263,7 +295,8 @@ class VKRenderer : public Renderer {
     return err;
   }
 
-  void draw(RenderTarget& rt, int w, int h, void* prog, const FrameUniforms& u, const std::vector<float>& nodes, int) override {
+  void draw(RenderTarget& rt, int w, int h, void* prog, const FrameUniforms& u, const std::vector<float>& nodes, int nodeCount) override {
+    compilingClear_ = !prog && nodeCount < 0;  // being compiled: dark grey instead of the error colour
     if (immediate_) {  // offline renders: submitted and finished right away (with their own upload memory)
       VKImage& img = ensure(rt, w, h);
       ctx_.immediate([&](VkCommandBuffer cmd) { record(cmd, img, prog, u, nodes); });
@@ -276,7 +309,78 @@ class VKRenderer : public Renderer {
     record(ctx_.cmd(), img, prog, u, nodes);
   }
 
-  void setImmediate(bool on) override { immediate_ = on; }
+  void setImmediate(bool on) override { immediate_ = on || threaded_; }
+  void copyTarget(const RenderTarget& src, RenderTarget& dst) override {
+    if (src.id < 0 || targets_[src.id].current < 0) return;
+    int sw = targets_[src.id].v[targets_[src.id].current].w, sh = targets_[src.id].v[targets_[src.id].current].h;
+    VKImage& d = ensure(dst, sw, sh);
+    VKImage& s = targets_[src.id].v[targets_[src.id].current];
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+      VkImageMemoryBarrier b[2]{};
+      for (int i = 0; i < 2; i++) {
+        b[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b[i].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+        b[i].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b[i].srcQueueFamilyIndex = b[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      }
+      b[0].image = s.image; b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT; b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      b[1].image = d.image; b[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; b[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, b);
+      VkImageCopy c{};
+      c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      c.extent = {(uint32_t)sw, (uint32_t)sh, 1};
+      vkCmdCopyImage(cmd, s.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, d.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+      for (int i = 0; i < 2; i++) {
+        b[i].srcAccessMask = b[i].dstAccessMask;
+        b[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b[i].oldLayout = b[i].newLayout;
+        b[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      }
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, b);
+    });
+  }
+  void flushAndWait() override {}  // threaded draws are already finished (immediate)
+  void resolve(const RenderTarget& src, RenderTarget& dst) override {
+    if (src.id < 0 || targets_[src.id].current < 0) return;
+    int sw = targets_[src.id].v[targets_[src.id].current].w, sh = targets_[src.id].v[targets_[src.id].current].h;
+    VKImage& d = ensure(dst, sw, sh);
+    VKImage& s = targets_[src.id].v[targets_[src.id].current];
+    auto rec = [&](VkCommandBuffer cmd) {
+      VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+      dai.descriptorPool = res().pool;
+      dai.descriptorSetCount = 1;
+      dai.pSetLayouts = &resolveSetLayout_;
+      VkDescriptorSet set = VK_NULL_HANDLE;
+      if (vkAllocateDescriptorSets(ctx_.device, &dai, &set) != VK_SUCCESS) return;
+      VkDescriptorImageInfo ii{sampler_, s.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+      VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      wr.dstSet = set;
+      wr.descriptorCount = 1;
+      wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      wr.pImageInfo = &ii;
+      vkUpdateDescriptorSets(ctx_.device, 1, &wr, 0, nullptr);
+      VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+      rb.renderPass = pass_;
+      rb.framebuffer = d.fb;
+      rb.renderArea.extent = {(uint32_t)sw, (uint32_t)sh};
+      vkCmdBeginRenderPass(cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
+      VkViewport vpt{0, 0, (float)sw, (float)sh, 0, 1};
+      VkRect2D sc{{0, 0}, {(uint32_t)sw, (uint32_t)sh}};
+      vkCmdSetViewport(cmd, 0, 1, &vpt);
+      vkCmdSetScissor(cmd, 0, 1, &sc);
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, resolvePipe_);
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, resolveLayout_, 0, 1, &set, 0, nullptr);
+      vkCmdDraw(cmd, 3, 1, 0, 0);
+      vkCmdEndRenderPass(cmd);
+    };
+    if (immediate_) {
+      ctx_.immediate(rec);
+      for (auto& c : imm_.chunks) c.used = 0;
+      vkResetDescriptorPool(ctx_.device, imm_.pool, 0);
+    } else if (ctx_.recording) rec(ctx_.cmd());
+  }
+  bool compilingClear_ = false;
 
   bool readPixels(const RenderTarget& rt, Pixels& out) override {
     if (rt.id < 0 || rt.id >= (int)targets_.size() || targets_[rt.id].current < 0) return false;
@@ -329,7 +433,7 @@ class VKRenderer : public Renderer {
 
   void record(VkCommandBuffer cmd, VKImage& img, void* prog, const FrameUniforms& u, const std::vector<float>& nodes) {
     VkClearValue clear{};
-    clear.color = prog ? VkClearColorValue{{0, 0, 0, 1}} : VkClearColorValue{{0.3f, 0.05f, 0.05f, 1}};
+    clear.color = prog ? VkClearColorValue{{0, 0, 0, 1}} : compilingClear_ ? VkClearColorValue{{0.08f, 0.08f, 0.09f, 1}} : VkClearColorValue{{0.3f, 0.05f, 0.05f, 1}};
     VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rb.renderPass = pass_;
     rb.framebuffer = img.fb;
@@ -395,6 +499,10 @@ class VKRenderer : public Renderer {
   FrameRes frames_[VulkanContext::FRAMES];
   FrameRes imm_;  // immediate (offline) draws
   bool immediate_ = false;
+  bool threaded_ = false;
+  VkDescriptorSetLayout resolveSetLayout_ = VK_NULL_HANDLE;
+  VkPipelineLayout resolveLayout_ = VK_NULL_HANDLE;
+  VkPipeline resolvePipe_ = VK_NULL_HANDLE;  // a render thread's renderer: every draw immediate, frame hooks left to the UI's
   std::vector<VKTarget> targets_;
   uint64_t frameCounter_ = 0;
 
@@ -456,7 +564,7 @@ class VKRenderer : public Renderer {
 
   void freeImage(VKImage& v) {
     VkDevice d = ctx_.device;
-    if (v.tex) ImGui_ImplVulkan_RemoveTexture(v.tex);
+    if (v.tex) { std::lock_guard<std::recursive_mutex> lk(ctx_.poolMutex); ImGui_ImplVulkan_RemoveTexture(v.tex); }
     if (v.fb) vkDestroyFramebuffer(d, v.fb, nullptr);
     if (v.view) vkDestroyImageView(d, v.view, nullptr);
     if (v.image) vkDestroyImage(d, v.image, nullptr);
@@ -474,7 +582,7 @@ class VKRenderer : public Renderer {
     ii.arrayLayers = 1;
     ii.samples = VK_SAMPLE_COUNT_1_BIT;
     ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ii.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    ii.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (vkCreateImage(d, &ii, nullptr, &v.image) != VK_SUCCESS) return false;
     VkMemoryRequirements mr;
@@ -510,7 +618,10 @@ class VKRenderer : public Renderer {
       b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
       vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
     });
-    v.tex = ImGui_ImplVulkan_AddTexture(sampler_, v.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    {
+      std::lock_guard<std::recursive_mutex> lk(ctx_.poolMutex);
+      v.tex = ImGui_ImplVulkan_AddTexture(sampler_, v.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
     v.w = w;
     v.h = h;
     return true;
@@ -524,9 +635,10 @@ class VKRenderer : public Renderer {
     if (pick < 0) {
       // replace the variant used longest ago (wait: a frame in flight may still read it)
       pick = !t.v[0].image ? 0 : !t.v[1].image ? 1 : (t.v[0].lastUse <= t.v[1].lastUse ? 0 : 1);
-      if (t.v[pick].image) { vkDeviceWaitIdle(ctx_.device); freeImage(t.v[pick]); }
+      if (t.v[pick].image) { ctx_.waitIdle(); freeImage(t.v[pick]); }
       createImage(t.v[pick], w, h);
     }
+    if (threaded_) frameCounter_++;
     t.v[pick].lastUse = frameCounter_;
     t.current = pick;
     rt.w = w;
@@ -537,8 +649,8 @@ class VKRenderer : public Renderer {
 
 }  // namespace
 
-std::unique_ptr<Renderer> makeVulkanRenderer(VulkanContext& ctx) {
-  auto r = std::make_unique<VKRenderer>(ctx);
+std::unique_ptr<Renderer> makeVulkanRenderer(VulkanContext& ctx, bool threaded) {
+  auto r = std::make_unique<VKRenderer>(ctx, threaded);
   std::string err;
   if (!r->init(err)) {
     std::fprintf(stderr, "Vulkan renderer: %s\n", err.c_str());

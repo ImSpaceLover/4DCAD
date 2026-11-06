@@ -27,8 +27,8 @@ void UI::viewport(double dt) {
     ImGui::EndDragDropTarget();
   }
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  if (uint64_t t = app.renderer ? app.renderer->texture(app.mainRT) : 0) {
-    bool fl = app.renderer->flipY();  // OpenGL images are stored bottom-up
+  bool fl = false;  // OpenGL images are stored bottom-up
+  if (uint64_t t = app.viewportTexture(fl)) {
     dl->AddImage((ImTextureID)t, p0, {p0.x + sz.x, p0.y + sz.y}, {0, fl ? 1.f : 0.f}, {1, fl ? 0.f : 1.f});
   }
 
@@ -116,8 +116,9 @@ void UI::thumbnail() {
   if (hovered) ImGui::SetTooltip("Drag to orbit, wheel to zoom");
   ImDrawList* dl = ImGui::GetWindowDrawList();
   ImVec2 p1 = {p0.x + app.thumbW, p0.y + app.thumbH};
-  if (uint64_t t = app.renderer ? app.renderer->texture(app.thumbRT) : 0) {
-    bool fl = app.renderer->flipY();
+  bool tfl = false;
+  if (uint64_t t = app.thumbnailTexture(tfl)) {
+    bool fl = tfl;
     dl->AddImage((ImTextureID)t, p0, p1, {0, fl ? 1.f : 0.f}, {1, fl ? 0.f : 1.f});
   }
   // debug ray seen from outside (projected onto the thumbnail's view)
@@ -172,6 +173,7 @@ void UI::overlays(ImDrawList* dl) {
                   v.eye[0], v.eye[1], v.eye[2], v.eye[3]);
   lines.push_back(buf);
   int highlight = -1;
+  if (app.viewportCompiling || (app.renderer && app.renderer->pendingCompiles() > 0)) lines.push_back("Compiling shader...");
   if (app.accumSamples > 0 && app.accumSamples < app.quality.viewportSamples && app.mode == Mode::Edit) {
     std::snprintf(buf, sizeof buf, "Refining %d / %d", app.accumSamples, app.quality.viewportSamples);
     lines.push_back(buf);

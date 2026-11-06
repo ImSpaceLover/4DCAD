@@ -14,6 +14,7 @@
 #include "evaluator.hpp"
 #include "keybinds.hpp"
 #include "library.hpp"
+#include "render_thread.hpp"
 #include "renderer.hpp"
 #include "surface.hpp"
 
@@ -145,6 +146,7 @@ class App {
   bool inCameraView() const;
   bool keyMenuRequest = false;  // I pressed: the UI shows the insert-keyframe menu
   int accumSamples = 0;         // stochastic samples averaged in the viewport image so far
+  bool viewportCompiling = false;  // the viewport waits for a shader being compiled in the background
   V4 light() const;
   double thumbYaw = 0.4, thumbPitch = -0.9, thumbZoom = 1;
   bool mouseCaptured = false, wantCapture = false, wantRelease = false;
@@ -152,8 +154,17 @@ class App {
   // --- viewport (window pixels) ---
   float vpX = 0, vpY = 0, vpW = 1, vpH = 1;
   RenderTarget mainRT, thumbRT;
+  RenderTarget mainAccRT;  // path tracing (single-threaded viewport): the linear running average
   int thumbW = 300, thumbH = 225;
-  std::unique_ptr<Renderer> renderer;
+  std::unique_ptr<Renderer> renderer;  // the UI thread's renderer (offline renders; headless runs: everything)
+  // the viewport and the thumbnail render on their own threads (interactive use; see render_thread.hpp)
+  std::unique_ptr<RenderThread> viewThread, thumbThread;
+  void startRenderThreads(const std::function<std::unique_ptr<Renderer>()>& make, std::function<bool(bool)> viewCtx,
+                          std::function<bool(bool)> thumbCtx);
+  void stopRenderThreads();
+  /** The viewport / thumbnail image to draw (0: none yet); flip: stored bottom-up (OpenGL). */
+  uint64_t viewportTexture(bool& flip);
+  uint64_t thumbnailTexture(bool& flip);
   Backend backendPref = Backend::Auto;  // graphics API for the next start (settings)
   bool showLights = false;              // Lights window
   double fps = 0, now = 0;
@@ -185,6 +196,7 @@ class App {
     int tile = 0;  // next tile of the current sample (tiles of TILE pixels, row by row)
     bool prepared = false;
     RenderTarget rt;                    // the supersampled image being refined (also the preview)
+    RenderTarget acc;                   // path tracing: the linear running average (rt = its display version)
     std::unique_ptr<FrameWriter> writer;
     std::string path, error;
     double started = 0, fps = 24, seconds = 0;
@@ -294,7 +306,8 @@ class App {
   /** Per-value keying from Properties / the Lights window: key, or remove the key at this frame. */
   void toggleValueKey(const std::string& target, const std::string& path);
   /** The point lights for a frame: enabled scene lights, then emissive objects (if enabled). */
-  std::vector<LightParam> frameLights();
+  /** Lights of a frame. pathTrace: emissive objects become area lights (bounding spheres) instead of point lights. */
+  std::vector<LightParam> frameLights(bool pathTrace = false);
   // cameras are scene objects (NodeKind::Camera); the active one is used for rendering
   std::string activeCamera;
   /** View, Geodesic flag and field of view of a camera object. */
@@ -392,6 +405,16 @@ class App {
   std::vector<std::string> selectionAtPress_;
   int version_ = 0;
   std::string lastKey_, lastThumbKey_;
+  // scene snapshots for the render threads (rebuilt when the scene changes)
+  std::shared_ptr<const Node> snap_;
+  std::shared_ptr<const PrimitiveRegistry> snapReg_;
+  std::string snapKey_;
+  // path tracing: the measured radius of each glowing object around its origin (per scene version)
+  std::unordered_map<std::string, double> emitRadius_;
+  int emitRadiusVersion_ = -1;
+  double emitterRadius(const Node& n, const V4& centre, double bound);
+  std::shared_ptr<const Node> sceneSnapshot();
+  void postView(RenderThread& t, int w, int h, const std::unordered_set<std::string>& hl, const FrameParams& fp, int samples, bool stochastic);
   double lastChange_ = 0;
   struct Orig { Transform xf; std::optional<Anchor> anchor; };
   std::vector<std::pair<std::string, Orig>> orig_;

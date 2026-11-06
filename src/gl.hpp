@@ -64,6 +64,14 @@ typedef std::ptrdiff_t GLsizeiptr;
 #define GL_TEXTURE1 0x84C1
 #define GL_MAX_TEXTURE_SIZE 0x0D33
 #define GL_INVALID_INDEX 0xFFFFFFFFu
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define GL_ALREADY_SIGNALED 0x911A
+#define GL_CONDITION_SATISFIED 0x911C
+#define GL_SYNC_FLUSH_COMMANDS_BIT 0x00000001
+typedef struct __GLsync* GLsync;
+typedef uint64_t GLuint64;
 
 #define FD_GL_FUNCS(X)                                                                                  \
   X(GLuint, CreateShader, (GLenum))                                                                     \
@@ -123,7 +131,12 @@ typedef std::ptrdiff_t GLsizeiptr;
   X(void, GetIntegerv, (GLenum, GLint*))                                                                \
   X(void, Enable, (GLenum))                                                                             \
   X(void, BlendFunc, (GLenum, GLenum))                                                                  \
-  X(void, BlendColor, (GLfloat, GLfloat, GLfloat, GLfloat))
+  X(void, BlendColor, (GLfloat, GLfloat, GLfloat, GLfloat))                                             \
+  X(void, BlitFramebuffer, (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum))  \
+  X(void, Flush, (void))                                                                                \
+  X(GLsync, FenceSync, (GLenum, GLbitfield))                                                            \
+  X(GLenum, ClientWaitSync, (GLsync, GLbitfield, GLuint64))                                             \
+  X(void, DeleteSync, (GLsync))
 
 namespace gl {
 #define FD_DECL(ret, name, args) typedef ret(FD_APIENTRY* PFN_##name) args; extern PFN_##name name;

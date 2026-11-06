@@ -42,7 +42,7 @@ struct GLTarget {
 
 class GLRenderer : public Renderer {
  public:
-  GLRenderer() {
+  explicit GLRenderer(std::function<bool(bool)> wc) : workerCtx_(std::move(wc)) {
     gl::GenVertexArrays(1, &vao_);  // the full-screen triangle needs no vertex data
     gl::GenBuffers(1, &ubo_);
     gl::BindBuffer(GL_UNIFORM_BUFFER, ubo_);
@@ -52,14 +52,22 @@ class GLRenderer : public Renderer {
     gl::BindTexture(GL_TEXTURE_2D, nodeTex_);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    {  // the display pass of path-traced images (gamma after averaging)
+      std::string err;
+      GLProgram* rp = (GLProgram*)createProgram(resolveShader(ShaderTarget::OpenGL), err);
+      if (rp) { resolveProg_ = rp->id; resolveLoc_ = gl::GetUniformLocation(rp->id, "u_src"); delete rp; }
+      else std::fprintf(stderr, "resolve shader: %s\n", err.c_str());
+    }
     const GLubyte* r = gl::GetString(GL_RENDERER);
     const GLubyte* v = gl::GetString(GL_VERSION);
     device = std::string("OpenGL ") + (v ? (const char*)v : "") + " | " + (r ? (const char*)r : "");
   }
   ~GLRenderer() override {
+    stopWorker();
     clearPrograms();
     for (auto& t : targets_) if (t.fbo) { gl::DeleteFramebuffers(1, &t.fbo); gl::DeleteTextures(1, &t.tex); }
     gl::DeleteTextures(1, &nodeTex_);
+    if (resolveProg_) gl::DeleteProgram(resolveProg_);
     gl::DeleteBuffers(1, &ubo_);
     gl::DeleteVertexArrays(1, &vao_);
   }
@@ -68,6 +76,45 @@ class GLRenderer : public Renderer {
   bool flipY() const override { return true; }
   const char* backendName() const override { return "OpenGL"; }
   void finish() override { gl::Finish(); }
+  void flush() override { gl::Flush(); }
+  void resolve(const RenderTarget& src, RenderTarget& dst) override {
+    if (src.id < 0 || !resolveProg_) return;
+    int w = targets_[src.id].w, h = targets_[src.id].h;
+    GLTarget& d = ensure(dst, w, h);
+    GLTarget& s = targets_[src.id];
+    gl::BindFramebuffer(GL_FRAMEBUFFER, d.fbo);
+    gl::Viewport(0, 0, w, h);
+    gl::Disable(GL_BLEND);
+    gl::Disable(GL_SCISSOR_TEST);
+    gl::Disable(GL_DEPTH_TEST);
+    gl::UseProgram(resolveProg_);
+    gl::ActiveTexture(GL_TEXTURE0);
+    gl::BindTexture(GL_TEXTURE_2D, s.tex);
+    gl::Uniform1i(resolveLoc_, 0);
+    gl::BindVertexArray(vao_);
+    gl::DrawArrays(GL_TRIANGLES, 0, 3);
+    gl::BindVertexArray(0);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+  void copyTarget(const RenderTarget& src, RenderTarget& dst) override {
+    if (src.id < 0) return;
+    GLTarget& s = targets_[src.id];
+    GLTarget& d = ensure(dst, s.w, s.h);
+    GLTarget& s2 = targets_[src.id];  // (ensure may have grown the list)
+    gl::BindFramebuffer(GL_READ_FRAMEBUFFER, s2.fbo);
+    gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, d.fbo);
+    gl::BlitFramebuffer(0, 0, s2.w, s2.h, 0, 0, d.w, d.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+
+ protected:
+  // background compiles: the worker thread uses a hidden context of the same share group
+  // (programs are shared objects); glFinish makes a linked program usable by the other contexts
+  bool workerBegin() override { return workerCtx_ && workerCtx_(true); }
+  void workerDone() override { gl::Finish(); }
+  void workerEnd() override { if (workerCtx_) workerCtx_(false); }
+
+ public:
   bool readPixels(const RenderTarget& rt, Pixels& out) override {
     if (rt.id < 0 || rt.id >= (int)targets_.size() || !targets_[rt.id].fbo) return false;
     GLTarget& t = targets_[rt.id];
@@ -135,8 +182,9 @@ class GLRenderer : public Renderer {
     GLTarget& t = ensure(rt, w, h);
     gl::BindFramebuffer(GL_FRAMEBUFFER, t.fbo);
     gl::Viewport(0, 0, t.w, t.h);
-    if (!prog) {
-      gl::ClearColor(0.3f, 0.05f, 0.05f, 1);
+    if (!prog) {  // shader error (dark red) / being compiled (nodeCount < 0: dark grey)
+      if (nodeCount < 0) gl::ClearColor(0.08f, 0.08f, 0.09f, 1);
+      else gl::ClearColor(0.3f, 0.05f, 0.05f, 1);
       gl::Clear(GL_COLOR_BUFFER_BIT);
       gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
       return;
@@ -172,7 +220,9 @@ class GLRenderer : public Renderer {
   }
 
  private:
-  GLuint vao_ = 0, ubo_ = 0, nodeTex_ = 0;
+  GLuint vao_ = 0, ubo_ = 0, nodeTex_ = 0, resolveProg_ = 0;
+  GLint resolveLoc_ = -1;
+  std::function<bool(bool)> workerCtx_;
   std::vector<GLTarget> targets_;
 
   GLTarget& ensure(RenderTarget& rt, int w, int h) {
@@ -197,6 +247,8 @@ class GLRenderer : public Renderer {
 
 }  // namespace
 
-std::unique_ptr<Renderer> makeGLRenderer() { return std::make_unique<GLRenderer>(); }
+std::unique_ptr<Renderer> makeGLRenderer(std::function<bool(bool)> workerContext) {
+  return std::make_unique<GLRenderer>(std::move(workerContext));
+}
 
 }  // namespace fd
