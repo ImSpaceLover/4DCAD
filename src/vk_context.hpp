@@ -7,7 +7,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 struct GLFWwindow;
@@ -63,12 +66,22 @@ struct VulkanContext {
   /** Records the ImGui pass, submits and presents. If `rgba` is given, the presented image is read back. */
   void endFrame(ImDrawData* dd, std::vector<uint8_t>* rgba = nullptr);
   void shutdown();
-  /** One-off commands (uploads), executed synchronously. */
+  /** One-off commands (uploads, render threads' draws), executed synchronously. Any thread. */
   void immediate(const std::function<void(VkCommandBuffer)>& fn);
+  /** vkDeviceWaitIdle with the queue lock held (any thread). */
+  void waitIdle();
+  // the one queue is used by the UI thread and the render threads: every submit / present /
+  // wait-idle holds queueMutex; ImGui's descriptor pool (image textures) is guarded by poolMutex
+  std::mutex queueMutex;
+  std::recursive_mutex poolMutex;
   uint32_t memoryType(uint32_t typeBits, VkMemoryPropertyFlags flags) const;
 
  private:
   GLFWwindow* win_ = nullptr;
+  uint64_t slotFrame_[FRAMES] = {0, 0};  // UI frame number last submitted in each slot (see uiFrames())
+  std::mutex poolsMutex_;
+  std::map<std::thread::id, VkCommandPool> pools_;  // immediate(): one command pool per thread
+  VkCommandPool threadPool();
   bool createSwapchain();
   void destroySwapchain();
 };

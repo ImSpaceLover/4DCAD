@@ -274,6 +274,17 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
   compiled on a background thread (OpenGL: a hidden shared context; Vulkan:
   glslang and pipeline creation) while the last image stays on screen with
   "Compiling shader..." in the viewport. The last 16 programs are kept.
+* **Render threads.** The viewport and the thumbnail each render on their own
+  thread (OpenGL: a shared context per thread; Vulkan: their own command pools,
+  with one lock around the queue), so a slow image never freezes the UI or the
+  other view. The UI posts a snapshot of what to draw; the thread renders it
+  (large images tile by tile, each tile its own GPU submission), copies the
+  finished image into one of three display images, and the UI shows the newest.
+  A display image is reused only after the UI frames that drew it have finished
+  on the GPU. Refinement samples leave the GPU idle as long as they used it, so
+  the UI always gets its turn. Offline renders and headless screenshots still
+  render on the UI thread (`--threads` forces the threads in headless runs;
+  `FD_FRAME_STATS=1` prints UI frame times at exit).
 * **Bounding spheres.** Each node has a bounding hypersphere, so distant
   subtrees are skipped while marching.
 * **One `map()` call site.** The shader's main loop is a single state machine

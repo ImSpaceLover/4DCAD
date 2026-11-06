@@ -3,6 +3,7 @@
 // cache, node data, frame uniforms) lives here; backends (OpenGL, Vulkan) only create
 // programs and targets and run the full-screen pass.
 #pragma once
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -87,6 +88,14 @@ struct FrameUniforms {
   float dbg[MAX_DEBUG_PTS][4];
 };
 
+/** UI frame numbers shared with the render threads: an image the UI drew in frame N may be
+ *  overwritten once `completed` >= N (the GPU has finished that frame). */
+struct UiFrameClock {
+  std::atomic<uint64_t> current{1};    // the frame the UI is recording
+  std::atomic<uint64_t> completed{0};  // the newest frame the GPU has finished
+};
+UiFrameClock& uiFrames();
+
 class Renderer {
  public:
   virtual ~Renderer() = default;
@@ -112,6 +121,14 @@ class Renderer {
   /** OpenGL images are stored bottom-up: the UI flips their texture coordinates. */
   virtual bool flipY() const = 0;
   virtual void destroy(RenderTarget& rt) = 0;
+  /** Copies src into dst (resized to src's size). */
+  virtual void copyTarget(const RenderTarget& src, RenderTarget& dst) = 0;
+  /** Waits until this renderer's drawing has finished (render threads, before publishing an image). */
+  virtual void flushAndWait() { finish(); }
+  /** Sends the queued drawing to the GPU without waiting (OpenGL: glFlush). */
+  virtual void flush() {}
+  /** A program is being compiled right now (synchronously, on the thread rendering). */
+  bool compilingNow() const { return compilingNow_.load(); }
   /** The target's image as RGBA8, top row first (after its last render has finished). */
   virtual bool readPixels(const RenderTarget& rt, Pixels& rgba) = 0;
   /** Offline renders: each draw is executed at once (Vulkan; OpenGL draws immediately anyway). */
@@ -169,6 +186,7 @@ class Renderer {
     double ms = 0;
   };
   bool async_ = false, compiling_ = false;
+  std::atomic<bool> compilingNow_{false};
   bool workerOk_ = true;  // false: the backend has no worker context
   std::thread worker_;
   std::mutex mu_;
@@ -192,7 +210,8 @@ std::unique_ptr<Renderer> makeGLRenderer(std::function<bool(bool)> workerContext
 #ifdef FD_HAVE_VULKAN
 /** Vulkan backend (see render_vk.cpp); nullptr if no usable device. */
 struct VulkanContext;
-std::unique_ptr<Renderer> makeVulkanRenderer(VulkanContext& ctx);
+std::unique_ptr<Renderer> makeVulkanRenderer(VulkanContext& ctx, bool threaded = false);
+/**   threaded: for a render thread (every draw is submitted and waited for on that thread). */
 #endif
 
 /** Packs the frame parameters into the uniform block. */

@@ -69,6 +69,17 @@ class GLRenderer : public Renderer {
   bool flipY() const override { return true; }
   const char* backendName() const override { return "OpenGL"; }
   void finish() override { gl::Finish(); }
+  void flush() override { gl::Flush(); }
+  void copyTarget(const RenderTarget& src, RenderTarget& dst) override {
+    if (src.id < 0) return;
+    GLTarget& s = targets_[src.id];
+    GLTarget& d = ensure(dst, s.w, s.h);
+    GLTarget& s2 = targets_[src.id];  // (ensure may have grown the list)
+    gl::BindFramebuffer(GL_READ_FRAMEBUFFER, s2.fbo);
+    gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, d.fbo);
+    gl::BlitFramebuffer(0, 0, s2.w, s2.h, 0, 0, d.w, d.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
 
  protected:
   // background compiles: the worker thread uses a hidden context of the same share group

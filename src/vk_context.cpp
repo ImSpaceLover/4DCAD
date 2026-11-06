@@ -10,6 +10,7 @@
 
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
+#include "renderer.hpp"
 
 namespace fd {
 
@@ -239,13 +240,14 @@ bool VulkanContext::initImGui() {
 bool VulkanContext::beginFrame(GLFWwindow* win) {
   win_ = win;
   if (swapchainDirty || !swapchain) {
-    vkDeviceWaitIdle(device);
+    waitIdle();
     destroySwapchain();
     if (!createSwapchain()) return false;
     ImGui_ImplVulkan_SetMinImageCount(minImageCount);
   }
   Frame& f = frames[frame];
   vkWaitForFences(device, 1, &f.fence, VK_TRUE, UINT64_MAX);
+  if (slotFrame_[frame] > uiFrames().completed) uiFrames().completed = slotFrame_[frame];  // that UI frame is done
   VkResult r = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &imageIndex);
   if (r == VK_ERROR_OUT_OF_DATE_KHR) { swapchainDirty = true; return false; }
   if (r == VK_SUBOPTIMAL_KHR) swapchainDirty = true;
@@ -271,7 +273,10 @@ void VulkanContext::endFrame(ImDrawData* dd, std::vector<uint8_t>* rgba) {
   rb.clearValueCount = 1;
   rb.pClearValues = &clear;
   vkCmdBeginRenderPass(f.cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
-  if (dd) ImGui_ImplVulkan_RenderDrawData(dd, f.cmd);
+  if (dd) {
+    std::lock_guard<std::recursive_mutex> lk(poolMutex);
+    ImGui_ImplVulkan_RenderDrawData(dd, f.cmd);
+  }
   vkCmdEndRenderPass(f.cmd);
 
   // optional read back of the finished image (screenshots / tests)
@@ -320,7 +325,12 @@ void VulkanContext::endFrame(ImDrawData* dd, std::vector<uint8_t>* rgba) {
   si.pCommandBuffers = &f.cmd;
   si.signalSemaphoreCount = 1;
   si.pSignalSemaphores = &f.rendered;
-  vkQueueSubmit(queue, 1, &si, f.fence);
+  {
+    std::lock_guard<std::mutex> lk(queueMutex);
+    vkQueueSubmit(queue, 1, &si, f.fence);
+  }
+  slotFrame_[frame] = uiFrames().current;
+  uiFrames().current++;
   if (doRead) {
     vkWaitForFences(device, 1, &f.fence, VK_TRUE, UINT64_MAX);
     void* p = nullptr;
@@ -339,14 +349,36 @@ void VulkanContext::endFrame(ImDrawData* dd, std::vector<uint8_t>* rgba) {
   pi.swapchainCount = 1;
   pi.pSwapchains = &swapchain;
   pi.pImageIndices = &imageIndex;
-  VkResult r = vkQueuePresentKHR(queue, &pi);
+  VkResult r;
+  {
+    std::lock_guard<std::mutex> lk(queueMutex);
+    r = vkQueuePresentKHR(queue, &pi);
+  }
   if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) swapchainDirty = true;
   frame = (frame + 1) % FRAMES;
 }
 
+VkCommandPool VulkanContext::threadPool() {
+  std::lock_guard<std::mutex> lk(poolsMutex_);
+  VkCommandPool& p = pools_[std::this_thread::get_id()];
+  if (!p) {
+    VkCommandPoolCreateInfo cpi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    cpi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    cpi.queueFamilyIndex = queueFamily;
+    vkCreateCommandPool(device, &cpi, nullptr, &p);
+  }
+  return p;
+}
+
+void VulkanContext::waitIdle() {
+  std::lock_guard<std::mutex> lk(queueMutex);
+  vkDeviceWaitIdle(device);
+}
+
 void VulkanContext::immediate(const std::function<void(VkCommandBuffer)>& fn) {
+  VkCommandPool pool = threadPool();
   VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-  cai.commandPool = frames[0].pool;
+  cai.commandPool = pool;
   cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   cai.commandBufferCount = 1;
   VkCommandBuffer cb;
@@ -359,9 +391,16 @@ void VulkanContext::immediate(const std::function<void(VkCommandBuffer)>& fn) {
   VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   si.commandBufferCount = 1;
   si.pCommandBuffers = &cb;
-  vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
-  vkQueueWaitIdle(queue);
-  vkFreeCommandBuffers(device, frames[0].pool, 1, &cb);
+  VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VkFence fence = VK_NULL_HANDLE;
+  vkCreateFence(device, &fci, nullptr, &fence);
+  {
+    std::lock_guard<std::mutex> lk(queueMutex);
+    vkQueueSubmit(queue, 1, &si, fence);
+  }
+  vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);  // (only this work: other threads keep going)
+  vkDestroyFence(device, fence, nullptr);
+  vkFreeCommandBuffers(device, pool, 1, &cb);
 }
 
 void VulkanContext::shutdown() {
@@ -374,6 +413,8 @@ void VulkanContext::shutdown() {
   }
   vkDeviceWaitIdle(device);
   destroySwapchain();
+  for (auto& [t, p] : pools_) vkDestroyCommandPool(device, p, nullptr);
+  pools_.clear();
   for (auto& f : frames) {
     vkDestroyFence(device, f.fence, nullptr);
     vkDestroySemaphore(device, f.acquired, nullptr);

@@ -1936,6 +1936,58 @@ RenderProfile App::mainProfile() const {
   return prof;
 }
 
+void App::startRenderThreads(const std::function<std::unique_ptr<Renderer>()>& make, std::function<bool(bool)> viewCtx,
+                             std::function<bool(bool)> thumbCtx) {
+  viewThread = std::make_unique<RenderThread>(make, std::move(viewCtx));
+  thumbThread = std::make_unique<RenderThread>(make, std::move(thumbCtx));
+}
+
+void App::stopRenderThreads() {
+  viewThread.reset();
+  thumbThread.reset();
+}
+
+uint64_t App::viewportTexture(bool& flip) {
+  if (viewThread) { flip = viewThread->flipY(); return viewThread->acquire().tex; }
+  if (!renderer) return 0;
+  flip = renderer->flipY();
+  return renderer->texture(mainRT);
+}
+
+uint64_t App::thumbnailTexture(bool& flip) {
+  if (thumbThread) { flip = thumbThread->flipY(); return thumbThread->acquire().tex; }
+  if (!renderer) return 0;
+  flip = renderer->flipY();
+  return renderer->texture(thumbRT);
+}
+
+std::shared_ptr<const Node> App::sceneSnapshot() {
+  // the tree as drawn (isolation shows a reduced tree); copied once per scene change
+  std::string k = std::to_string(version_) + "|";
+  for (auto& s : isolate) k += s + ";";
+  if (!snap_ || k != snapKey_) {
+    snapKey_ = k;
+    snap_ = std::make_shared<const Node>(isolate.empty() ? root : viewRoot_);
+    snapReg_ = std::make_shared<const PrimitiveRegistry>(reg);
+  }
+  return snap_;
+}
+
+void App::postView(RenderThread& t, int w, int h, const std::unordered_set<std::string>& hl, const FrameParams& fp, int samples, bool stochastic) {
+  RenderRequest r;
+  r.root = sceneSnapshot();
+  r.reg = snapReg_;
+  r.world = world;
+  r.highlight = hl;
+  r.fp = fp;
+  r.quality = quality;
+  r.w = w;
+  r.h = h;
+  r.samples = std::max(1, samples);
+  r.stochastic = stochastic;
+  t.post(std::move(r));
+}
+
 void App::renderFrame() {
   if (!renderer) return;
   if (job.active) return;  // an image / video is rendering: the viewport keeps its last picture
@@ -2017,17 +2069,25 @@ void App::renderFrame() {
     fp.stochastic = refine;  // a new image: the first sample replaces what was there
     fp.sample = 0;
     fp.blend = 1;
-    renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
-    accumSamples = refine ? 1 : 0;
-    if (renderer->compiling()) { lastKey_.clear(); accumSamples = 0; viewportCompiling = true; }  // not drawn yet: again next frame
-    else viewportCompiling = false;
-  } else if (refine && accumSamples < q.viewportSamples) {
+    if (viewThread) postView(*viewThread, (int)vpW, (int)vpH, highlightSet(), fp, refine ? q.viewportSamples : 1, refine);  // (refined there)
+    else {
+      renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+      accumSamples = refine ? 1 : 0;
+      if (renderer->compiling()) { lastKey_.clear(); accumSamples = 0; viewportCompiling = true; }  // not drawn yet: again next frame
+      else viewportCompiling = false;
+    }
+  } else if (refine && accumSamples < q.viewportSamples && !viewThread) {
     // the same view: add one more random sample to the running average
     fp.stochastic = true;
     fp.sample = accumSamples;
     fp.blend = 1.0f / (accumSamples + 1);
     renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
     accumSamples++;
+  }
+  if (viewThread) {
+    RenderThread::Image im = viewThread->acquire();
+    accumSamples = refine ? im.samples : 0;
+    viewportCompiling = viewThread->compiling();
   }
   if (space.curved() && editSet.showThumbnail) {
     // overview: the Poincare ball / stereographic view from outside, with a marker where you are
@@ -2051,8 +2111,11 @@ void App::renderFrame() {
     tk << k << "|ball" << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
     if (tk.str() != lastThumbKey_) {
       lastThumbKey_ = tk.str();
-      renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
-      if (renderer->compiling()) lastThumbKey_.clear();
+      if (thumbThread) postView(*thumbThread, thumbW, thumbH, {}, tp, 1, false);
+      else {
+        renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+        if (renderer->compiling()) lastThumbKey_.clear();
+      }
     }
   }
   if (fp.geo && editSet.showThumbnail) {
@@ -2077,8 +2140,11 @@ void App::renderFrame() {
     tk << k << thumbYaw << thumbPitch << thumbZoom << thumbW << thumbH;
     if (tk.str() != lastThumbKey_) {
       lastThumbKey_ = tk.str();
-      renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
-      if (renderer->compiling()) lastThumbKey_.clear();
+      if (thumbThread) postView(*thumbThread, thumbW, thumbH, {}, tp, 1, false);
+      else {
+        renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+        if (renderer->compiling()) lastThumbKey_.clear();
+      }
     }
   }
 }

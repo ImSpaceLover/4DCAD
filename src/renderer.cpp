@@ -8,6 +8,11 @@
 
 namespace fd {
 
+UiFrameClock& uiFrames() {
+  static UiFrameClock c;
+  return c;
+}
+
 constexpr size_t PROGRAM_CACHE = 16;  // programs kept (values are node data: entries are real structures)
 
 std::string Renderer::codeCheckSource(const std::string& code) {
@@ -168,7 +173,9 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
   Program p;
   p.cs = std::move(cs);
   std::string err;
+  compilingNow_ = true;
   p.handle = createProgram(src, err);
+  compilingNow_ = false;
   if (!p.handle) {
     lastError = err;
     std::fprintf(stderr, "Shader error:\n%s\n", err.c_str());

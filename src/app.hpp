@@ -14,6 +14,7 @@
 #include "evaluator.hpp"
 #include "keybinds.hpp"
 #include "library.hpp"
+#include "render_thread.hpp"
 #include "renderer.hpp"
 #include "surface.hpp"
 
@@ -154,7 +155,15 @@ class App {
   float vpX = 0, vpY = 0, vpW = 1, vpH = 1;
   RenderTarget mainRT, thumbRT;
   int thumbW = 300, thumbH = 225;
-  std::unique_ptr<Renderer> renderer;
+  std::unique_ptr<Renderer> renderer;  // the UI thread's renderer (offline renders; headless runs: everything)
+  // the viewport and the thumbnail render on their own threads (interactive use; see render_thread.hpp)
+  std::unique_ptr<RenderThread> viewThread, thumbThread;
+  void startRenderThreads(const std::function<std::unique_ptr<Renderer>()>& make, std::function<bool(bool)> viewCtx,
+                          std::function<bool(bool)> thumbCtx);
+  void stopRenderThreads();
+  /** The viewport / thumbnail image to draw (0: none yet); flip: stored bottom-up (OpenGL). */
+  uint64_t viewportTexture(bool& flip);
+  uint64_t thumbnailTexture(bool& flip);
   Backend backendPref = Backend::Auto;  // graphics API for the next start (settings)
   bool showLights = false;              // Lights window
   double fps = 0, now = 0;
@@ -393,6 +402,12 @@ class App {
   std::vector<std::string> selectionAtPress_;
   int version_ = 0;
   std::string lastKey_, lastThumbKey_;
+  // scene snapshots for the render threads (rebuilt when the scene changes)
+  std::shared_ptr<const Node> snap_;
+  std::shared_ptr<const PrimitiveRegistry> snapReg_;
+  std::string snapKey_;
+  std::shared_ptr<const Node> sceneSnapshot();
+  void postView(RenderThread& t, int w, int h, const std::unordered_set<std::string>& hl, const FrameParams& fp, int samples, bool stochastic);
   double lastChange_ = 0;
   struct Orig { Transform xf; std::optional<Anchor> anchor; };
   std::vector<std::pair<std::string, Orig>> orig_;
