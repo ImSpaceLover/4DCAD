@@ -243,8 +243,18 @@ Settings > Rendering > **Lighting model** (saved, part of render presets):
     sampling), so small and large lights both converge.
   * Light bounces between surfaces (Bounces setting; Russian roulette after 3).
   * No ambient light: with **Sky intensity** 0 and nothing glowing, the image is black.
-  * Works in Full 4D (directions in 4D), the Geodesic view (light travels along the world surface;
-    there the sun and glowing objects found by the paths light the scene) and curved spaces.
+  * Works in Full 4D (directions in 4D), the Geodesic view and curved spaces. In the Geodesic view
+    light travels along the world surface: shadow rays home in on glowing objects and point lights
+    along it (as the simple model's point lights do), with the light's solid angle measured on arrival.
+  * **4D light falloff** (Full 4D): light spreads over 3D spheres in 4D, so it fades with distance³ and
+    lamps look weak. "Like 3D" (default) makes glowing objects fade with distance², as you know it;
+    "Physical" keeps the true 4D falloff.
+  * **Display:** samples are averaged as linear light, then **Exposure** (stops), **Tone mapping**
+    (filmic ACES: bright light rolls off instead of burning out; or clip) and gamma are applied.
+  * **Denoise** (with a strength): an edge-aware à-trous filter (5 passes) guided by a cheap extra
+    pass with the first surface's colour and depth, so edges and textures stay sharp. It does less
+    as samples add up. Light that reaches a path after a diffuse bounce is capped (fireflies from
+    caustics), a common, slight bias.
 * **Sky intensity** (both models): brightness of the sky. In the Geodesic view the "sky" is the
   colour of the world surface that far rays reach, so it also darkens the fog there. With simple
   lighting, the rim light on grazing surfaces now follows the ambient setting, so sun 0, ambient 0

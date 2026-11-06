@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
   std::string selectName, toolName, openWindow;
   bool startGeo = false, startExplore = false, debugRayArg = false, forceAsync = false, forceThreads = false;
   int lightOverride = -1;
+  std::vector<std::pair<std::string, double>> ptOverrides;
   double skyOverride = -1, sunOverride = -1, ambientOverride = -1, fogOverride = -1;
   double turnDeg = 0, strafe = 0;
   Backend forceBackend = Backend::Auto;
@@ -103,7 +104,9 @@ int main(int argc, char** argv) {
     else if (a == "--sky-intensity" && i + 1 < argc) skyOverride = std::atof(argv[++i]);
     else if (a == "--sun" && i + 1 < argc) sunOverride = std::atof(argv[++i]);
     else if (a == "--ambient" && i + 1 < argc) ambientOverride = std::atof(argv[++i]);
-    else if (a == "--fog" && i + 1 < argc) fogOverride = std::atof(argv[++i]);  // background compiles even for --screenshot (testing)
+    else if (a == "--fog" && i + 1 < argc) fogOverride = std::atof(argv[++i]);
+    // path tracing display: --denoise 0|1, --exposure STOPS, --tonemap 0|1, --light4d 0|1 (physical / like 3D)
+    else if ((a == "--denoise" || a == "--exposure" || a == "--tonemap" || a == "--light4d") && i + 1 < argc) ptOverrides.push_back({a, std::atof(argv[++i])});  // background compiles even for --screenshot (testing)
     else if (a == "--vulkan") forceBackend = Backend::Vulkan;
     else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &W, &H);
     else if (a[0] != '-') sceneArg = a;
@@ -234,7 +237,13 @@ int main(int argc, char** argv) {
   }
   if (startGeo) app.setGeo(true);
   QualitySettings savedQuality = app.quality;
-  bool qualityOverride = lightOverride >= 0 || skyOverride >= 0 || sunOverride >= 0 || ambientOverride >= 0 || fogOverride >= 0;
+  bool qualityOverride = lightOverride >= 0 || skyOverride >= 0 || sunOverride >= 0 || ambientOverride >= 0 || fogOverride >= 0 || !ptOverrides.empty();
+  for (auto& [k, v] : ptOverrides) {
+    if (k == "--denoise") app.quality.denoise = v != 0;
+    if (k == "--exposure") app.quality.exposure = (float)v;
+    if (k == "--tonemap") app.quality.tonemap = (int)v;
+    if (k == "--light4d") app.quality.light4D = (int)v;
+  }
   if (lightOverride >= 0) app.quality.lighting = lightOverride;
   if (skyOverride >= 0) app.quality.skyIntensity = (float)skyOverride;
   if (sunOverride >= 0) app.quality.sunIntensity = (float)sunOverride;
@@ -397,6 +406,9 @@ int main(int argc, char** argv) {
   app.renderer->destroy(app.job.rt);
   app.renderer->destroy(app.job.acc);
   app.renderer->destroy(app.mainAccRT);
+  app.renderer->destroy(app.mainGuideRT);
+  app.renderer->destroy(app.job.guide);
+  for (int i = 0; i < 2; i++) { app.renderer->destroy(app.mainTmpRT[i]); app.renderer->destroy(app.job.tmp[i]); }
   app.renderer.reset();
 #ifdef FD_HAVE_VULKAN
   if (useVulkan) {

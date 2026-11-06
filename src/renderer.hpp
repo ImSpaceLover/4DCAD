@@ -79,7 +79,22 @@ struct FrameParams {
   int tile[4] = {0, 0, 0, 0};
   bool ballView = false;   // curved: the Poincare ball / stereographic overview (view = outside camera in the ball)
   bool pathTrace = false;  // physically based path tracing (a separate shader; needs random samples)
+  bool ptGuide = false;    // path tracing: the denoiser's guide image (first hit's colour and depth), no jitter
 };
+
+/** Full-screen post passes (path tracing). */
+enum PostOp { POST_RESOLVE = 0, POST_ATROUS = 1, POST_COUNT };
+/** How a path-traced image is shown. */
+struct PostSettings {
+  float exposure = 0;  // stops
+  int tonemap = 1;     // 0 = clip, 1 = filmic (ACES)
+  bool denoise = true;
+  float strength = 1;
+  int samples = 1;     // samples averaged so far (the denoiser does less as they add up)
+};
+inline PostSettings postSettings(const QualitySettings& q, int samples) {
+  return {q.exposure, q.tonemap, q.denoise, q.denoiseStrength, samples};
+}
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */
 struct FrameUniforms {
@@ -89,7 +104,7 @@ struct FrameUniforms {
   float a[4], b[4], c[4], d[4];
   int32_t i[4], j[4], k[4], l[4];
   float e[4];  // aperture, focus distance, accumulation weight (backend blend), 0
-  float f[4];  // sky intensity (path tracing), 0, 0, 0
+  float f[4];  // sky intensity, 4D light like 3D (path tracing), 0, 0
   float lpos[MAX_LIGHTS][4], lcol[MAX_LIGHTS][4];
   float lext[MAX_LIGHTS][4];  // radius, area light (1) / point light (0), 0, 0
   float dbg[MAX_DEBUG_PTS][4];
@@ -130,9 +145,14 @@ class Renderer {
   virtual void destroy(RenderTarget& rt) = 0;
   /** Copies src into dst (resized to src's size). */
   virtual void copyTarget(const RenderTarget& src, RenderTarget& dst) = 0;
+  /** A full-screen pass: dst (resized to a's size) = op(a, b) with parameters p[8].
+   *  POST_RESOLVE: p0 = exposure factor, p1 = tonemap. POST_ATROUS: b = guide, p0 = step,
+   *  p1 = colour sigma, p2 = colour-guide sigma, p3 = depth sigma (relative). */
+  virtual void post(int op, const RenderTarget& a, const RenderTarget* b, RenderTarget& dst, const float* p) = 0;
   /** Path tracing accumulates linear light (averaging gamma-encoded samples would darken rare bright
-   *  ones): this writes src gamma-encoded into dst (resized to src's size) for display / saving. */
-  virtual void resolve(const RenderTarget& src, RenderTarget& dst) = 0;
+   *  ones). This shows it: optional denoising (guide: see FrameParams::ptGuide; tmp: two scratch
+   *  targets), exposure, tone mapping and gamma, into dst (display / saving). */
+  void present(const RenderTarget& acc, const RenderTarget* guide, RenderTarget* tmp, RenderTarget& dst, const PostSettings& s);
   /** Waits until this renderer's drawing has finished (render threads, before publishing an image). */
   virtual void flushAndWait() { finish(); }
   /** Sends the queued drawing to the GPU without waiting (OpenGL: glFlush). */
@@ -180,7 +200,7 @@ class Renderer {
   std::unordered_set<std::string> failed_;
   std::unordered_set<std::string> badCode_;
   std::unordered_map<std::string, std::string> codeErrors_;
-  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball, bool pt, bool& pending);
+  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball, int pt, bool& pending);
   void insert(const std::string& key, Program p);
 
   // ---- background compiles: jobs run on worker_, results are applied on the calling thread

@@ -2103,7 +2103,7 @@ void App::renderFrame() {
   for (auto& l : fp.lights) { for (double x : l.pos) key << (float)x << ','; key << l.color[0] << l.color[1] << l.color[2] << l.range << l.shadows << l.radius; }
   key << prof.maxSteps << prof.bounces << prof.textures << prof.specular << prof.pointLights << prof.shadows << prof.pointShadows << prof.ao
       << prof.aoSamples << prof.shadowSteps << q.sunIntensity << q.relaxedMarching << refine << q.sunSize << q.lightRadius << '|' << q.lighting
-      << q.skyIntensity << fp.pathTrace;
+      << q.skyIntensity << fp.pathTrace << q.exposure << q.tonemap << q.denoise << q.denoiseStrength << q.light4D;
   if (inCameraView()) {  // depth of field of the camera looked through (stochastic only)
     Node* c = findNode(root, activeCamera);
     fp.aperture = (float)c->camAperture;
@@ -2145,8 +2145,14 @@ void App::renderFrame() {
     fp.blend = 1;
     if (viewThread) postView(*viewThread, (int)vpW, (int)vpH, highlightSet(), fp, refine ? q.viewportSamples : 1, refine);  // (refined there)
     else {
-      renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
-      if (fp.pathTrace && !renderer->compiling()) renderer->resolve(mainAccRT, mainRT);
+      Node& vr = isolate.empty() ? root : viewRoot_;
+      if (fp.pathTrace && q.denoise) {  // the denoiser's guide (first hit's colour and depth)
+        FrameParams g = fp;
+        g.ptGuide = true;
+        renderer->render(mainGuideRT, (int)vpW, (int)vpH, vr, reg, world, highlightSet(), g);
+      }
+      renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, vr, reg, world, highlightSet(), fp);
+      if (fp.pathTrace && !renderer->compiling()) renderer->present(mainAccRT, q.denoise ? &mainGuideRT : nullptr, mainTmpRT, mainRT, postSettings(q, 1));
       accumSamples = refine ? 1 : 0;
       if (renderer->compiling()) { lastKey_.clear(); accumSamples = 0; viewportCompiling = true; }  // not drawn yet: again next frame
       else viewportCompiling = false;
@@ -2157,7 +2163,7 @@ void App::renderFrame() {
     fp.sample = accumSamples;
     fp.blend = 1.0f / (accumSamples + 1);
     renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
-    if (fp.pathTrace) renderer->resolve(mainAccRT, mainRT);
+    if (fp.pathTrace) renderer->present(mainAccRT, q.denoise ? &mainGuideRT : nullptr, mainTmpRT, mainRT, postSettings(q, accumSamples + 1));
     accumSamples++;
   }
   if (viewThread) {
@@ -2240,7 +2246,8 @@ nlohmann::json qualityToJson(const QualitySettings& q) {
                       {"pointShadows", q.pointShadows}, {"emissiveLights", q.emissiveLights}, {"transparentLayers", q.transparentLayers},
                       {"relaxedMarching", q.relaxedMarching}, {"fastWhileMovingInEdit", q.fastWhileMovingInEdit},
                       {"stochastic", q.stochastic}, {"viewportSamples", q.viewportSamples}, {"frameLimit", q.frameLimit}, {"sunSize", q.sunSize}, {"lightRadius", q.lightRadius},
-                      {"lighting", q.lighting}, {"skyIntensity", q.skyIntensity}};
+                      {"lighting", q.lighting}, {"skyIntensity", q.skyIntensity}, {"exposure", q.exposure}, {"tonemap", q.tonemap},
+                      {"denoise", q.denoise}, {"denoiseStrength", q.denoiseStrength}, {"light4D", q.light4D}};
   const RenderProfile& f = q.fast;
   r["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
                {"specular", f.specular}, {"pointLights", f.pointLights}, {"shadows", f.shadows}, {"pointShadows", f.pointShadows},
@@ -2263,6 +2270,10 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
   getKey(r, "frameLimit", q.frameLimit);
   getKey(r, "stochastic", q.stochastic); getKey(r, "viewportSamples", q.viewportSamples); getKey(r, "sunSize", q.sunSize); getKey(r, "lightRadius", q.lightRadius);
   getKey(r, "lighting", q.lighting); getKey(r, "skyIntensity", q.skyIntensity);
+  getKey(r, "exposure", q.exposure); getKey(r, "tonemap", q.tonemap); getKey(r, "denoise", q.denoise);
+  getKey(r, "denoiseStrength", q.denoiseStrength); getKey(r, "light4D", q.light4D);
+  q.tonemap = std::clamp(q.tonemap, 0, 1);
+  q.light4D = std::clamp(q.light4D, 0, 1);
   q.lighting = std::clamp(q.lighting, 0, 1);
   auto& f = q.fast;
   if (r.contains("fast") && r["fast"].is_object()) {
@@ -2341,7 +2352,7 @@ std::vector<App::RenderPreset> App::builtinPresets() {
     o.samples = i == 0 ? 1 : i == 1 ? 16 : 128;
     nlohmann::json j = {{"name", names[i]}, {"quality", qualityToJson(q)}, {"output", outputToJson(o, false)}};
     // the look (light, sky, fog) and the output format stay as they are
-    for (const char* k : {"lightYaw", "lightPitch", "lightW", "skyTop", "skyBottom", "fog", "ambient", "sunIntensity", "grid", "skyIntensity"}) j["quality"].erase(k);
+    for (const char* k : {"lightYaw", "lightPitch", "lightW", "skyTop", "skyBottom", "fog", "ambient", "sunIntensity", "grid", "skyIntensity", "exposure", "tonemap"}) j["quality"].erase(k);
     for (const char* k : {"stillFormat", "animFormat", "sceneRange", "start", "end", "fps", "jpegQuality"}) j["output"].erase(k);
     out.push_back({names[i], true, j.dump(2)});
   }

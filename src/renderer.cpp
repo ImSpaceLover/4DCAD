@@ -141,7 +141,7 @@ void Renderer::pollCompiles() {
 }
 
 Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball,
-                                 bool pt, bool& pending) {
+                                 int pt, bool& pending) {
   pending = false;
   pollCompiles();
   if (space == SpaceKind::Flat) ball = false;
@@ -152,8 +152,8 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
     if (n.isCustom()) { checkCustomCode(n.code); if (pendingCode_.count(n.code)) codeWait = true; }
   });
   if (codeWait) { pending = true; return nullptr; }
-  if (ball) pt = false;
-  std::string key = structureKey(root, reg, world, geo, space) + (ball ? "|ball" : "") + (pt ? "|pt" : "");
+  if (ball) pt = 0;
+  std::string key = structureKey(root, reg, world, geo, space) + (ball ? "|ball" : "") + (pt == 1 ? "|pt" : pt == 2 ? "|ptg" : "");
   auto it = cache_.find(key);
   if (it != cache_.end()) {
     lru_.remove(key);
@@ -164,7 +164,7 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
   if (pending_.count(key)) { pending = true; return nullptr; }
   auto t0 = std::chrono::steady_clock::now();
   CompiledScene cs = compileScene(root, reg, world, geo, &badCode_, space);
-  std::string src = buildFragmentShader(cs.glsl, geo, shaderTarget(), (int)space, ball, pt);
+  std::string src = buildFragmentShader(cs.glsl, geo, shaderTarget(), (int)space, ball, pt > 0, pt == 2);
   if (async_ && workerOk_) {
     pending_[key] = std::move(cs);
     enqueue({key, std::move(src), ""});
@@ -187,6 +187,25 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
   lastError.clear();
   insert(key, std::move(p));
   return &cache_[key];
+}
+
+void Renderer::present(const RenderTarget& acc, const RenderTarget* guide, RenderTarget* tmp, RenderTarget& dst, const PostSettings& s) {
+  const RenderTarget* cur = &acc;
+  if (s.denoise && guide && guide->id >= 0 && s.strength > 0) {
+    // edge-aware a-trous wavelet filter: 5 passes with growing steps (1 .. 16 pixels); the colour
+    // tolerance shrinks as samples add up (less noise to remove) and from pass to pass
+    float sc = 0.9f * s.strength / std::sqrt((float)std::max(1, s.samples));
+    int i = 0;
+    for (int step = 1; step <= 16; step *= 2) {
+      float p[8] = {(float)step, sc, 0.12f, 0.04f, 0, 0, 0, 0};
+      post(POST_ATROUS, *cur, guide, tmp[i], p);
+      cur = &tmp[i];
+      i ^= 1;
+      sc *= 0.7f;
+    }
+  }
+  float p[8] = {std::exp2(s.exposure), (float)s.tonemap, 0, 0, 0, 0, 0, 0};
+  post(POST_RESOLVE, *cur, nullptr, dst, p);
 }
 
 static void put4(float* d, const V4& v) { for (int i = 0; i < 4; i++) d[i] = (float)v[i]; }
@@ -251,6 +270,7 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   float ee[4] = {fp.stochastic ? fp.aperture : 0.f, std::max(0.01f, fp.focus), std::clamp(fp.blend, 0.f, 1.f), (float)fp.space.R()};
   std::memcpy(u.e, ee, sizeof ee);
   u.f[0] = std::max(0.f, q.skyIntensity);
+  u.f[1] = q.light4D == 1 ? 1.f : 0.f;
   std::memcpy(u.i, ii, sizeof ii);
   std::memcpy(u.j, jj, sizeof jj);
   std::memcpy(u.k, kk, sizeof kk);
@@ -262,7 +282,7 @@ bool Renderer::render(RenderTarget& rt, int w, int h, Node& root, const Primitiv
                       const std::unordered_set<std::string>& highlight, const FrameParams& fp) {
   int rw = std::max(1, (int)(w * fp.scale)), rh = std::max(1, (int)(h * fp.scale));
   bool pending = false;
-  Program* p = get(root, reg, world, fp.geo, fp.space.kind, fp.ballView, fp.pathTrace, pending);
+  Program* p = get(root, reg, world, fp.geo, fp.space.kind, fp.ballView, fp.pathTrace ? (fp.ptGuide ? 2 : 1) : 0, pending);
   compiling_ = pending;
   if (pending) {
     // the program is being compiled: keep the last image (a target that does not exist yet is

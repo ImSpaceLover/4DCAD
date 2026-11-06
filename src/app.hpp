@@ -155,6 +155,7 @@ class App {
   float vpX = 0, vpY = 0, vpW = 1, vpH = 1;
   RenderTarget mainRT, thumbRT;
   RenderTarget mainAccRT;  // path tracing (single-threaded viewport): the linear running average
+  RenderTarget mainGuideRT, mainTmpRT[2];  // (its denoiser: guide image, scratch)
   int thumbW = 300, thumbH = 225;
   std::unique_ptr<Renderer> renderer;  // the UI thread's renderer (offline renders; headless runs: everything)
   // the viewport and the thumbnail render on their own threads (interactive use; see render_thread.hpp)
@@ -197,6 +198,7 @@ class App {
     bool prepared = false;
     RenderTarget rt;                    // the supersampled image being refined (also the preview)
     RenderTarget acc;                   // path tracing: the linear running average (rt = its display version)
+    RenderTarget guide, tmp[2];         // (its denoiser)
     std::unique_ptr<FrameWriter> writer;
     std::string path, error;
     double started = 0, fps = 24, seconds = 0;

@@ -60,7 +60,7 @@ void RenderThread::loop() {
   }
   flip_ = r->flipY();
   r_ = r.get();
-  RenderTarget acc, disp[SLOTS];
+  RenderTarget acc, disp[SLOTS], guide, tmp[2];  // (guide, tmp: path tracing's denoiser)
   RenderRequest cur;
   bool have = false;
   int sample = 0;
@@ -102,6 +102,13 @@ void RenderThread::loop() {
         cv_.wait_for(lk, used, [&] { return stop_ || next_.has_value(); });  // (a new request ends the pause)
       } else r->flush();  // each tile goes to the GPU on its own
     };
+    bool denoise = fp.pathTrace && cur.quality.denoise;
+    if (denoise && sample == 0) {  // the denoiser's guide (first hit's colour and depth): one cheap pass
+      FrameParams g = fp;
+      g.ptGuide = true;
+      g.blend = 1;
+      r->render(guide, cur.w, cur.h, root, *cur.reg, cur.world, cur.highlight, g);
+    }
     if ((long long)rw * rh <= (long long)TILE * TILE * 2) pass();
     else
       for (int y = 0; y < rh && ok; y += TILE)
@@ -128,7 +135,8 @@ void RenderThread::loop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (s < 0) break;
-    if (cur.fp.pathTrace) r->resolve(acc, disp[s]);  // linear average -> gamma-encoded
+    if (cur.fp.pathTrace)  // linear average -> (denoised,) tone mapped, gamma-encoded
+      r->present(acc, denoise ? &guide : nullptr, tmp, disp[s], postSettings(cur.quality, sample + 1));
     else r->copyTarget(acc, disp[s]);
     r->flushAndWait();  // finished before the UI may sample it
     uint64_t tex = r->texture(disp[s]);
@@ -142,6 +150,8 @@ void RenderThread::loop() {
   }
   r_ = nullptr;
   r->destroy(acc);
+  r->destroy(guide);
+  for (auto& t : tmp) r->destroy(t);
   for (auto& d : disp) r->destroy(d);
   r.reset();
   if (context_) context_(false);

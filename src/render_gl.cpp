@@ -52,11 +52,17 @@ class GLRenderer : public Renderer {
     gl::BindTexture(GL_TEXTURE_2D, nodeTex_);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    {  // the display pass of path-traced images (gamma after averaging)
+    for (int op = 0; op < POST_COUNT; op++) {  // post passes of path-traced images
       std::string err;
-      GLProgram* rp = (GLProgram*)createProgram(resolveShader(ShaderTarget::OpenGL), err);
-      if (rp) { resolveProg_ = rp->id; resolveLoc_ = gl::GetUniformLocation(rp->id, "u_src"); delete rp; }
-      else std::fprintf(stderr, "resolve shader: %s\n", err.c_str());
+      GLProgram* rp = (GLProgram*)createProgram(postShader(op, ShaderTarget::OpenGL), err);
+      if (!rp) { std::fprintf(stderr, "post shader %d: %s\n", op, err.c_str()); continue; }
+      PostProg& q = post_[op];
+      q.id = rp->id;
+      q.a = gl::GetUniformLocation(rp->id, "u_a");
+      q.b = gl::GetUniformLocation(rp->id, "u_b");
+      q.p0 = gl::GetUniformLocation(rp->id, "u_p0");
+      q.p1 = gl::GetUniformLocation(rp->id, "u_p1");
+      delete rp;
     }
     const GLubyte* r = gl::GetString(GL_RENDERER);
     const GLubyte* v = gl::GetString(GL_VERSION);
@@ -67,7 +73,7 @@ class GLRenderer : public Renderer {
     clearPrograms();
     for (auto& t : targets_) if (t.fbo) { gl::DeleteFramebuffers(1, &t.fbo); gl::DeleteTextures(1, &t.tex); }
     gl::DeleteTextures(1, &nodeTex_);
-    if (resolveProg_) gl::DeleteProgram(resolveProg_);
+    for (auto& q : post_) if (q.id) gl::DeleteProgram(q.id);
     gl::DeleteBuffers(1, &ubo_);
     gl::DeleteVertexArrays(1, &vao_);
   }
@@ -77,20 +83,28 @@ class GLRenderer : public Renderer {
   const char* backendName() const override { return "OpenGL"; }
   void finish() override { gl::Finish(); }
   void flush() override { gl::Flush(); }
-  void resolve(const RenderTarget& src, RenderTarget& dst) override {
-    if (src.id < 0 || !resolveProg_) return;
+  void post(int op, const RenderTarget& src, const RenderTarget* b, RenderTarget& dst, const float* p) override {
+    if (src.id < 0 || op < 0 || op >= POST_COUNT || !post_[op].id) return;
+    const PostProg& pp = post_[op];
     int w = targets_[src.id].w, h = targets_[src.id].h;
     GLTarget& d = ensure(dst, w, h);
     GLTarget& s = targets_[src.id];
+    GLuint btex = b && b->id >= 0 ? targets_[b->id].tex : s.tex;
     gl::BindFramebuffer(GL_FRAMEBUFFER, d.fbo);
     gl::Viewport(0, 0, w, h);
     gl::Disable(GL_BLEND);
     gl::Disable(GL_SCISSOR_TEST);
     gl::Disable(GL_DEPTH_TEST);
-    gl::UseProgram(resolveProg_);
+    gl::UseProgram(pp.id);
     gl::ActiveTexture(GL_TEXTURE0);
     gl::BindTexture(GL_TEXTURE_2D, s.tex);
-    gl::Uniform1i(resolveLoc_, 0);
+    gl::ActiveTexture(GL_TEXTURE0 + 2);
+    gl::BindTexture(GL_TEXTURE_2D, btex);
+    gl::ActiveTexture(GL_TEXTURE0);
+    gl::Uniform1i(pp.a, 0);
+    gl::Uniform1i(pp.b, 2);
+    gl::Uniform4fv(pp.p0, 1, p);
+    gl::Uniform4fv(pp.p1, 1, p + 4);
     gl::BindVertexArray(vao_);
     gl::DrawArrays(GL_TRIANGLES, 0, 3);
     gl::BindVertexArray(0);
@@ -220,8 +234,9 @@ class GLRenderer : public Renderer {
   }
 
  private:
-  GLuint vao_ = 0, ubo_ = 0, nodeTex_ = 0, resolveProg_ = 0;
-  GLint resolveLoc_ = -1;
+  GLuint vao_ = 0, ubo_ = 0, nodeTex_ = 0;
+  struct PostProg { GLuint id = 0; GLint a = -1, b = -1, p0 = -1, p1 = -1; };
+  PostProg post_[POST_COUNT];
   std::function<bool(bool)> workerCtx_;
   std::vector<GLTarget> targets_;
 

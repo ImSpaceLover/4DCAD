@@ -21,6 +21,7 @@
 using namespace fd;
 
 static int checks = 0, failures = 0;
+constexpr int POST_COUNT_TEST = 2;  // (PostOp count: resolve, a-trous; renderer.hpp is not part of fdcore)
 
 static bool compile(const std::string& src, ShaderTarget t, std::string& log) {
   glslang::TShader sh(EShLangFragment);
@@ -71,17 +72,19 @@ static void scene(const std::string& name, SceneFile f) {
   auto bad = badCustomCode(root);
   bool curved = f.space.curved();
   std::string world = !curved && !f.world.empty() && findNode(root, f.world) ? f.world : "";
-  struct View { const char* tag; bool geo, ball, pt; };
+  struct View { const char* tag; bool geo, ball, pt, guide; };
   std::vector<View> views;
-  for (bool pt : {false, true}) {
-    views.push_back({pt ? "pt" : "simple", false, false, pt});
-    if (!world.empty()) views.push_back({pt ? "geo-pt" : "geo", true, false, pt});
+  for (int pt : {0, 1, 2}) {  // simple, path traced, the denoiser's guide
+    const char* tags[3] = {"simple", "pt", "pt-guide"};
+    const char* gtags[3] = {"geo", "geo-pt", "geo-pt-guide"};
+    views.push_back({tags[pt], false, false, pt > 0, pt == 2});
+    if (!world.empty()) views.push_back({gtags[pt], true, false, pt > 0, pt == 2});
   }
-  if (curved) views.push_back({"ball", false, true, false});
+  if (curved) views.push_back({"ball", false, true, false, false});
   for (auto& v : views) {
     CompiledScene cs = compileScene(root, reg, world, v.geo, &bad, f.space.kind);
     for (ShaderTarget t : {ShaderTarget::Vulkan, ShaderTarget::OpenGL})
-      check(name + " [" + v.tag + "]", buildFragmentShader(cs.glsl, v.geo, t, (int)f.space.kind, v.ball, v.pt), t);
+      check(name + " [" + v.tag + "]", buildFragmentShader(cs.glsl, v.geo, t, (int)f.space.kind, v.ball, v.pt, v.guide), t);
   }
 }
 
@@ -109,8 +112,9 @@ int main() {
       }
     }
   }
-  // the path tracer's display pass
-  for (ShaderTarget t : {ShaderTarget::Vulkan, ShaderTarget::OpenGL}) check("resolve", resolveShader(t), t);
+  // the path tracer's post passes (resolve / tone mapping, denoiser)
+  for (int op = 0; op < POST_COUNT_TEST; op++)
+    for (ShaderTarget t : {ShaderTarget::Vulkan, ShaderTarget::OpenGL}) check("post " + std::to_string(op), postShader(op, t), t);
   glslang::FinalizeProcess();
   std::printf("%d shaders compiled, %d failures\n", checks, failures);
   return failures ? 1 : 0;
