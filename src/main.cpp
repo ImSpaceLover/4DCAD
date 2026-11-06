@@ -63,7 +63,7 @@ static void loadFonts(float scale) {
 int main(int argc, char** argv) {
   std::string sceneArg, example, screenshot;
   std::string selectName, toolName, openWindow;
-  bool startGeo = false, startExplore = false, debugRayArg = false;
+  bool startGeo = false, startExplore = false, debugRayArg = false, forceAsync = false;
   double turnDeg = 0, strafe = 0;
   Backend forceBackend = Backend::Auto;
   int frames = 30, W = 1600, H = 900;
@@ -90,6 +90,7 @@ int main(int argc, char** argv) {
     else if (a == "--samples" && i + 1 < argc) renderSamples = std::atoi(argv[++i]);
     else if (a == "--aa" && i + 1 < argc) renderAA = std::atoi(argv[++i]);
     else if (a == "--gl") forceBackend = Backend::OpenGL;
+    else if (a == "--async") forceAsync = true;  // background compiles even for --screenshot (testing)
     else if (a == "--vulkan") forceBackend = Backend::Vulkan;
     else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &W, &H);
     else if (a[0] != '-') sceneArg = a;
@@ -157,6 +158,7 @@ int main(int argc, char** argv) {
   st.ScaleAllSizes(xs);
   loadFonts(xs);
   std::unique_ptr<Renderer> renderer;
+  GLFWwindow* glWorker = nullptr;
 #ifdef FD_HAVE_VULKAN
   if (useVulkan) {
     ImGui_ImplGlfw_InitForVulkan(win, true);
@@ -168,8 +170,17 @@ int main(int argc, char** argv) {
   if (!useVulkan) {
     ImGui_ImplGlfw_InitForOpenGL(win, true);
     ImGui_ImplOpenGL3_Init("#version 330");
-    renderer = makeGLRenderer();
+    // a hidden window whose context shares objects with the main one: shaders compile on a
+    // worker thread with it (the UI keeps running)
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    glWorker = glfwCreateWindow(16, 16, "4DCAD compiler", nullptr, win);
+    glfwDefaultWindowHints();
+    GLFWwindow* wk = glWorker;
+    renderer = makeGLRenderer(wk ? std::function<bool(bool)>([wk](bool on) { glfwMakeContextCurrent(on ? wk : nullptr); return true; })
+                                 : std::function<bool(bool)>());
   }
+  // interactive use compiles in the background; screenshots and command-line renders wait for it
+  renderer->setAsync(forceAsync || (screenshot.empty() && renderOut.empty()));
   std::printf("%s\n", renderer->device.c_str());
 
   app.init(std::move(renderer));
@@ -326,6 +337,7 @@ int main(int argc, char** argv) {
 #ifdef FD_HAVE_VULKAN
   if (useVulkan) vk.shutdown();
 #endif
+  if (glWorker) glfwDestroyWindow(glWorker);
   glfwDestroyWindow(win);
   glfwTerminate();
   return 0;

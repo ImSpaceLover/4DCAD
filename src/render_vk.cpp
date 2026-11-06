@@ -157,6 +157,7 @@ class VKRenderer : public Renderer {
   }
 
   ~VKRenderer() override {
+    stopWorker();
     vkDeviceWaitIdle(ctx_.device);
     clearPrograms();
     VkDevice d = ctx_.device;
@@ -263,7 +264,8 @@ class VKRenderer : public Renderer {
     return err;
   }
 
-  void draw(RenderTarget& rt, int w, int h, void* prog, const FrameUniforms& u, const std::vector<float>& nodes, int) override {
+  void draw(RenderTarget& rt, int w, int h, void* prog, const FrameUniforms& u, const std::vector<float>& nodes, int nodeCount) override {
+    compilingClear_ = !prog && nodeCount < 0;  // being compiled: dark grey instead of the error colour
     if (immediate_) {  // offline renders: submitted and finished right away (with their own upload memory)
       VKImage& img = ensure(rt, w, h);
       ctx_.immediate([&](VkCommandBuffer cmd) { record(cmd, img, prog, u, nodes); });
@@ -277,6 +279,7 @@ class VKRenderer : public Renderer {
   }
 
   void setImmediate(bool on) override { immediate_ = on; }
+  bool compilingClear_ = false;
 
   bool readPixels(const RenderTarget& rt, Pixels& out) override {
     if (rt.id < 0 || rt.id >= (int)targets_.size() || targets_[rt.id].current < 0) return false;
@@ -329,7 +332,7 @@ class VKRenderer : public Renderer {
 
   void record(VkCommandBuffer cmd, VKImage& img, void* prog, const FrameUniforms& u, const std::vector<float>& nodes) {
     VkClearValue clear{};
-    clear.color = prog ? VkClearColorValue{{0, 0, 0, 1}} : VkClearColorValue{{0.3f, 0.05f, 0.05f, 1}};
+    clear.color = prog ? VkClearColorValue{{0, 0, 0, 1}} : compilingClear_ ? VkClearColorValue{{0.08f, 0.08f, 0.09f, 1}} : VkClearColorValue{{0.3f, 0.05f, 0.05f, 1}};
     VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rb.renderPass = pass_;
     rb.framebuffer = img.fb;

@@ -225,6 +225,7 @@ void App::renderStep(double budget) {
     fp.tile[2] = fp.tile[3] = TILE;
     bool ok = renderer->render(j.rt, j.w, j.h, j.frameRoot, reg, j.world, {}, fp);
     fp.tile[2] = 0;
+    if (renderer->compiling()) break;  // this frame's program is still being compiled: try again next UI frame
     if (!ok) {
       j.error = "Shader error: " + renderer->lastError;
       if (j.writer) j.writer->close();

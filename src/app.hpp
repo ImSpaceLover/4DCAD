@@ -145,6 +145,7 @@ class App {
   bool inCameraView() const;
   bool keyMenuRequest = false;  // I pressed: the UI shows the insert-keyframe menu
   int accumSamples = 0;         // stochastic samples averaged in the viewport image so far
+  bool viewportCompiling = false;  // the viewport waits for a shader being compiled in the background
   V4 light() const;
   double thumbYaw = 0.4, thumbPitch = -0.9, thumbZoom = 1;
   bool mouseCaptured = false, wantCapture = false, wantRelease = false;

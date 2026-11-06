@@ -6,6 +6,7 @@
 #include "animation.hpp"
 #include "camera.hpp"
 #include "codegen.hpp"
+#include "shaders.hpp"
 #include "evaluator.hpp"
 #include "examples.hpp"
 #include "geodesic.hpp"
@@ -296,23 +297,23 @@ int main() {
     CHECK(q.type == MOD_RADIAL && q.count == 4 && std::abs(q.angle - 90) < 1e-12 && std::abs(q.radius - 2) < 1e-12, "radial round trip");
   }
 
-  // node data buffer: 12 vec4 per node; new material fields and lights survive JSON
+  // node data buffer: NODE_VEC4S vec4 per node; new material fields and lights survive JSON
   {
     Node l = makeShape("cube", "c");
     l.mat.roughness = 0.2; l.mat.specular = 1.1; l.mat.transparency = 0.4; l.mat.ior = 1.33; l.mat.metallic = 0.8;
     Node r = makeGroup(BoolOp::Union, {l});
     auto cs = compileScene(r, reg, "", false, nullptr);
     auto d = packNodes(r, reg, cs, {});
-    CHECK(d.size() == cs.nodeIds.size() * 48, "node buffer size");
+    CHECK(d.size() >= cs.nodeIds.size() * (NODE_VEC4S * 4) && d.size() % (NODE_VEC4S * 4) == 0, "node buffer size (+ modifier rows)");
     size_t li = 1;  // the leaf (root first)
-    CLOSE(d[li * 48 + 44], 0.2, 1e-6);
-    CLOSE(d[li * 48 + 46], 0.4, 1e-6);
+    CLOSE(d[li * (NODE_VEC4S * 4) + 44], 0.2, 1e-6);
+    CLOSE(d[li * (NODE_VEC4S * 4) + 46], 0.4, 1e-6);
     CHECK(cs.glsl.find("uniform") == std::string::npos, "no uniform arrays in the scene code (node data buffer)");
     Node rt = nodeFromJson(nodeToJson(l));
     CHECK(rt.mat.roughness == 0.2 && rt.mat.specular == 1.1 && rt.mat.transparency == 0.4 && rt.mat.ior == 1.33 && rt.mat.metallic == 0.8,
           "material round trip");
-    CLOSE(d[li * 48 + 47], 0.8, 1e-6);  // metallic
-    CLOSE(d[li * 48 + 33], 1.33, 1e-6); // index of refraction
+    CLOSE(d[li * (NODE_VEC4S * 4) + 47], 0.8, 1e-6);  // metallic
+    CLOSE(d[li * (NODE_VEC4S * 4) + 33], 1.33, 1e-6); // index of refraction
     std::vector<PointLight> ls(1);
     ls[0].pos = {1, 2, 3, 4}; ls[0].range = 3; ls[0].shadows = false;
     auto back = lightsFromJson(lightsToJson(ls));
@@ -321,7 +322,36 @@ int main() {
     Node big = makeGroup(BoolOp::Union, {});
     for (int i = 0; i < 300; i++) big.children.push_back(makeShape("sphere", "s", {double(i), 0, 0, 0}));
     auto cb = compileScene(big, reg, "", false, nullptr);
-    CHECK(cb.nodeIds.size() == 301 && packNodes(big, reg, cb, {}).size() == 301 * 48, "300 objects");
+    CHECK(cb.nodeIds.size() == 301 && packNodes(big, reg, cb, {}).size() >= 301 * (NODE_VEC4S * 4), "300 objects");
+  }
+
+  // values are node data: editing them keeps the structure key (no recompile); structure changes it
+  {
+    Node l = makeShape("cube", "c");
+    Modifier ex; ex.type = MOD_EXTRUDE; ex.length = 2;
+    Modifier rp; rp.type = MOD_REPEAT; rp.axis = 0; rp.spacing = 3; rp.count = 2;
+    l.mods = {rp, ex};
+    Node r = makeGroup(BoolOp::Union, {l});
+    std::string k0 = structureKey(r, reg, "", false, SpaceKind::Flat);
+    Node e = r;
+    Node& c = e.children[0];
+    c.mods[1].length = 5; c.mods[0].spacing = 1.5; c.mods[0].count = 0; c.shell = 0.1; c.round = 0.05;
+    c.mat.texture = TEX_CHECKER; c.mat.emissive = 2; c.xf.scale = 3; c.color = {0.1, 0.2, 0.3};
+    CHECK(structureKey(e, reg, "", false, SpaceKind::Flat) == k0, "value edits keep the structure key");
+    auto cs = compileScene(e, reg, "", false, nullptr);
+    auto d = packNodes(e, reg, cs, {});
+    int row = (int)d[1 * NODE_VEC4S * 4 + 12 * 4];
+    CHECK(row >= 2, "modifier row after the nodes");
+    CLOSE(d[row * NODE_VEC4S * 4 + 0], 1.5, 1e-6);   // repeat spacing
+    CHECK(d[row * NODE_VEC4S * 4 + 1] > 1e8, "infinite repeat count packed as huge");
+    CLOSE(d[row * NODE_VEC4S * 4 + 4], 2.5, 1e-6);   // extrude half length
+    CLOSE(d[1 * NODE_VEC4S * 4 + 12 * 4 + 1], TEX_CHECKER, 1e-6);
+    CLOSE(d[1 * NODE_VEC4S * 4 + 12 * 4 + 2], 0.1, 1e-6);
+    CLOSE(d[1 * NODE_VEC4S * 4 + 12 * 4 + 3], 0.05, 1e-6);
+    Node f = r;
+    Modifier mi; mi.type = MOD_MIRROR;
+    f.children[0].mods.push_back(mi);
+    CHECK(structureKey(f, reg, "", false, SpaceKind::Flat) != k0, "adding a modifier changes the key");
   }
 
   // an object attached to a world surface stays on its own sheet (double wormhole: not in the other room)

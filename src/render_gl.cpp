@@ -42,7 +42,7 @@ struct GLTarget {
 
 class GLRenderer : public Renderer {
  public:
-  GLRenderer() {
+  explicit GLRenderer(std::function<bool(bool)> wc) : workerCtx_(std::move(wc)) {
     gl::GenVertexArrays(1, &vao_);  // the full-screen triangle needs no vertex data
     gl::GenBuffers(1, &ubo_);
     gl::BindBuffer(GL_UNIFORM_BUFFER, ubo_);
@@ -57,6 +57,7 @@ class GLRenderer : public Renderer {
     device = std::string("OpenGL ") + (v ? (const char*)v : "") + " | " + (r ? (const char*)r : "");
   }
   ~GLRenderer() override {
+    stopWorker();
     clearPrograms();
     for (auto& t : targets_) if (t.fbo) { gl::DeleteFramebuffers(1, &t.fbo); gl::DeleteTextures(1, &t.tex); }
     gl::DeleteTextures(1, &nodeTex_);
@@ -68,6 +69,15 @@ class GLRenderer : public Renderer {
   bool flipY() const override { return true; }
   const char* backendName() const override { return "OpenGL"; }
   void finish() override { gl::Finish(); }
+
+ protected:
+  // background compiles: the worker thread uses a hidden context of the same share group
+  // (programs are shared objects); glFinish makes a linked program usable by the other contexts
+  bool workerBegin() override { return workerCtx_ && workerCtx_(true); }
+  void workerDone() override { gl::Finish(); }
+  void workerEnd() override { if (workerCtx_) workerCtx_(false); }
+
+ public:
   bool readPixels(const RenderTarget& rt, Pixels& out) override {
     if (rt.id < 0 || rt.id >= (int)targets_.size() || !targets_[rt.id].fbo) return false;
     GLTarget& t = targets_[rt.id];
@@ -135,8 +145,9 @@ class GLRenderer : public Renderer {
     GLTarget& t = ensure(rt, w, h);
     gl::BindFramebuffer(GL_FRAMEBUFFER, t.fbo);
     gl::Viewport(0, 0, t.w, t.h);
-    if (!prog) {
-      gl::ClearColor(0.3f, 0.05f, 0.05f, 1);
+    if (!prog) {  // shader error (dark red) / being compiled (nodeCount < 0: dark grey)
+      if (nodeCount < 0) gl::ClearColor(0.08f, 0.08f, 0.09f, 1);
+      else gl::ClearColor(0.3f, 0.05f, 0.05f, 1);
       gl::Clear(GL_COLOR_BUFFER_BIT);
       gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
       return;
@@ -173,6 +184,7 @@ class GLRenderer : public Renderer {
 
  private:
   GLuint vao_ = 0, ubo_ = 0, nodeTex_ = 0;
+  std::function<bool(bool)> workerCtx_;
   std::vector<GLTarget> targets_;
 
   GLTarget& ensure(RenderTarget& rt, int w, int h) {
@@ -197,6 +209,8 @@ class GLRenderer : public Renderer {
 
 }  // namespace
 
-std::unique_ptr<Renderer> makeGLRenderer() { return std::make_unique<GLRenderer>(); }
+std::unique_ptr<Renderer> makeGLRenderer(std::function<bool(bool)> workerContext) {
+  return std::make_unique<GLRenderer>(std::move(workerContext));
+}
 
 }  // namespace fd

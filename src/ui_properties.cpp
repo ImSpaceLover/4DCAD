@@ -309,7 +309,7 @@ void UI::propertiesPanel() {
       buf.resize(std::max<size_t>(16384, codeBuf_.size() + 4096), 0);
       if (ImGui::InputTextMultiline("##code", buf.data(), buf.size(), {-1, 200}, ImGuiInputTextFlags_AllowTabInput)) codeBuf_ = buf.data();
       if (ImGui::Button("Apply code")) {
-        std::string err = app.renderer->checkCustomCode(codeBuf_);
+        std::string err = app.renderer->checkCustomCode(codeBuf_, true);  // (a small shader: checked at once)
         codeErr_ = err;
         if (err.empty()) { n->code = codeBuf_; done = true; }
       }

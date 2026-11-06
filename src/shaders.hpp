@@ -14,7 +14,7 @@ namespace fd {
 enum class ShaderTarget { OpenGL, Vulkan };
 
 /** Number of vec4 per node in the node data buffer (see packNodes). */
-constexpr int NODE_VEC4S = 12;
+constexpr int NODE_VEC4S = 16;
 constexpr int MAX_LIGHTS = 8;
 constexpr int MAX_DEBUG_PTS = 48;
 
@@ -105,7 +105,7 @@ inline std::string shaderPrelude(ShaderTarget t, bool geo, int curved = 0) {
     s += curvedDefines(curved);
     s += std::string("layout(std140, set = 0, binding = 0) uniform Frame {") + FRAME_BLOCK + "};\n";
     s += "layout(std430, set = 0, binding = 1) readonly buffer Nodes { vec4 nodeData[]; };\n"
-         "vec4 ndat(int i, int k) { return nodeData[i * 12 + k]; }\n"
+         "vec4 ndat(int i, int k) { return nodeData[i * " + std::to_string(NODE_VEC4S) + " + k]; }\n"
          "layout(location = 0) in vec2 v_uv;\nlayout(location = 0) out vec4 fragColor;\n";
   }
   return s + FRAME_DEFINES;

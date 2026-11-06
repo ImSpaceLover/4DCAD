@@ -5,6 +5,7 @@
 #include <map>
 #include <regex>
 #include "math4.hpp"
+#include "shaders.hpp"
 #include <sstream>
 #include <unordered_map>
 
@@ -45,8 +46,8 @@ float sS(float a, float b, float k) { if (b >= INF * 0.5 || a >= INF * 0.5) retu
 // row `base`: (half length, sample spacing), then per sample: position, Y, Z, normal); the CPU
 // evaluator's followLocal is the same
 static_assert(NPATH == 32, "FOLLOW_GLSL assumes 32 path segments");
+static_assert(NODE_VEC4S == 16, "ndatx assumes 16 vec4 per row");
 static const char* FOLLOW_GLSL = R"(
-vec4 ndatx(int base, int k) { return ndat(base + k / 12, k - (k / 12) * 12); }
 vec4 followLocal(vec4 p, int base) {
   vec4 hdr = ndatx(base, 0);
   float bestD = 1e30, bh = 0.0;
@@ -73,6 +74,8 @@ vec4 followLocal(vec4 p, int base) {
 // Material = mat3x4: column 0 (rgb, selection highlight), column 1 (emissive, roughness, specular,
 // transparency), column 2 (metallic, index of refraction, 0, 0).
 static const char* SCENE_HELPERS = R"(
+// extra node-data rows (modifier parameters, follow paths): vec4 k counted from row `base`
+vec4 ndatx(int base, int k) { return ndat(base + k / 16, k - (k / 16) * 16); }
 bool g_exact = false;      // disable bounding-sphere shortcuts (shadow / AO samples need true distances)
 bool g_noEmissive = false; // shadow / AO rays ignore emissive objects
 #define MAT mat3x4
@@ -137,6 +140,22 @@ float texBricks(vec4 p) {
   return 1.0 - step(0.06, min(min(e.x, e.y), e.z));  // mortar
 }
 float texGradient(vec4 p) { return clamp(0.5 + 0.5 * p.y, 0.0, 1.0); }
+// the texture type is data (node slot 12.y): switching it never recompiles
+float texAny(int t, vec4 p) {
+  if (t == 1) return texChecker(p);
+  if (t == 2) return texStripes(p);
+  if (t == 3) return texGrid(p);
+  if (t == 4) return texNoise(p);
+  if (t == 5) return texRings(p);
+  if (t == 6) return texDots(p);
+  if (t == 7) return texWaves(p);
+  if (t == 8) return texMarble(p);
+  if (t == 9) return texWood(p);
+  if (t == 10) return texCells(p);
+  if (t == 11) return texBricks(p);
+  if (t == 12) return texGradient(p);
+  return 0.0;
+}
 )";
 
 const char* sdfHelpersGLSL() { return SDF_HELPERS; }
@@ -155,32 +174,43 @@ std::string renameCustomCode(const std::string& code, const std::string& suffix)
   return out;
 }
 
-static const char* texFn(int t) {
-  switch (t) {
-    case TEX_CHECKER: return "texChecker";
-    case TEX_STRIPES: return "texStripes";
-    case TEX_GRID: return "texGrid";
-    case TEX_NOISE: return "texNoise";
-    case TEX_RINGS: return "texRings";
-    case TEX_DOTS: return "texDots";
-    case TEX_WAVES: return "texWaves";
-    case TEX_MARBLE: return "texMarble";
-    case TEX_WOOD: return "texWood";
-    case TEX_CELLS: return "texCells";
-    case TEX_BRICKS: return "texBricks";
-    case TEX_GRADIENT: return "texGradient";
-    default: return nullptr;
-  }
-}
 
 // Coordinate pass of a modifier stack (outermost first). Extrusions capture their
 // coordinate in t<k>; the distance pass (extrudeGLSL) applies them afterwards.
-static std::string modifierCoordsGLSL(const Node& n, const std::vector<ModAxis>& ax, const char* v, const std::string& tag) {
+// mb: GLSL int expression of the node's first modifier-parameter row (one vec4 per modifier, see
+// packNodes): the numbers are data, so editing them never recompiles. nullptr: constants (the
+// standalone code viewer).
+static std::string modP(const char* mb, int k) { return std::string("ndatx(") + mb + ", " + std::to_string(k) + ")"; }
+
+static std::string modifierCoordsGLSL(const Node& n, const std::vector<ModAxis>& ax, const char* v, const std::string& tag, const char* mb = nullptr) {
   std::ostringstream o;
   auto c = [&](int a) { return std::string(v) + "." + C[a]; };
   for (int k = (int)n.mods.size() - 1; k >= 0; k--) {
     const Modifier& m = n.mods[k];
     if (!ax[k].valid) continue;
+    if (mb) {
+      std::string P = modP(mb, k);
+      switch (m.type) {
+        case MOD_MIRROR: o << "  " << c(m.axis) << " = abs(" << c(m.axis) << ") - " << P << ".x;\n"; break;
+        case MOD_REPEAT:  // (count 0 = infinite: packed as a huge count)
+          o << "  { vec4 rp = " << P << "; " << c(m.axis) << " -= rp.x * clamp(floor(" << c(m.axis) << " / rp.x + 0.5), -rp.y, rp.y); }\n";
+          break;
+        case MOD_RADIAL: {
+          std::string sw = std::string(v) + "." + C[m.i] + C[m.j];
+          o << "  { vec4 rp = " << P << "; " << sw << " = opRadial(" << sw << ", rp.x, rp.y, rp.z, rp.w); }\n";
+          break;
+        }
+        case MOD_EXTRUDE:
+          if (m.mode != ExtrudeMode::Infinite) o << "  float t" << tag << k << " = " << c(ax[k].newAxis) << ";\n";
+          o << "  " << c(ax[k].newAxis) << " = 0.0;\n";
+          break;
+        case MOD_REVOLVE:
+          o << "  " << c(ax[k].srcAxis) << " = length(vec2(" << c(ax[k].srcAxis) << ", " << c(ax[k].newAxis) << ")) - " << P << ".x;\n";
+          o << "  " << c(ax[k].newAxis) << " = 0.0;\n";
+          break;
+      }
+      continue;
+    }
     switch (m.type) {
       case MOD_MIRROR:
         o << "  " << c(m.axis) << " = abs(" << c(m.axis) << ")";
@@ -214,12 +244,13 @@ static std::string modifierCoordsGLSL(const Node& n, const std::vector<ModAxis>&
   return o.str();
 }
 
-static std::string extrudeGLSL(const Node& n, const std::vector<ModAxis>& ax, const std::string& tag) {
+static std::string extrudeGLSL(const Node& n, const std::vector<ModAxis>& ax, const std::string& tag, const char* mb = nullptr) {
   std::ostringstream o;
   for (size_t k = 0; k < n.mods.size(); k++) {
     const Modifier& m = n.mods[k];
     if (!ax[k].valid || m.type != MOD_EXTRUDE || m.mode == ExtrudeMode::Infinite) continue;
     if (m.mode == ExtrudeMode::Half) o << "  d = opExtrude(d, t" << tag << k << ");\n";
+    else if (mb) o << "  d = opExtrude(d, abs(t" << tag << k << ") - " << modP(mb, (int)k) << ".x);\n";  // .x: half length
     else o << "  d = opExtrude(d, abs(t" << tag << k << ") - " << glslFloat(m.length / 2) << ");\n";
   }
   return o.str();
@@ -252,7 +283,7 @@ static std::string honeycombFn(const std::string& name, const PolyParams& pp, bo
   const auto& F = polyFaces(hc.cell);
   int n = (int)F.size();
   double th = honeycombInradius(hc);
-  o << "float " << name << "(vec4 q, float h, float w, out float par) {\n";
+  o << "float " << name << "(vec4 q, float h, float w, float style, out float par) {\n";
   o << "  const vec3 F[" << n << "] = vec3[" << n << "](";
   for (int i = 0; i < n; i++) o << (i ? ", " : "") << v3(F[i]);
   o << ");\n";
@@ -269,10 +300,8 @@ static std::string honeycombFn(const std::string& name, const PolyParams& pp, bo
   o << "    par = 1.0 - par;\n  }\n";
   if (curved) o << "  if (abs(q.w) < 100.0) q = crenormC(q);\n";
   o << "  float a[" << n << "];\n  for (int i = 0; i < " << n << "; i++) { float x = " << fv << "; a[i] = -(" << (curved ? "u_curvR * asinK(x)" : "x") << "); }\n";
-  if (pp.style == 1) {
-    o << "  float m = 1e30;\n  for (int i = 0; i < " << n << "; i++) m = min(m, a[i]);\n  return -m + w;\n}\n";
-    return o.str();
-  }
+  // style (data): 1 = cells shrunk by the gap, 0 = edges
+  o << "  if (style > 0.5) { float m = 1e30;\n  for (int i = 0; i < " << n << "; i++) m = min(m, a[i]);\n  return -m + w; }\n";
   double t = hc.dihedralDeg * PI / 180, ct = std::cos(t), st2 = std::max(std::sin(t) * std::sin(t), 1e-6);
   o << "  float e = 1e30, x, y;\n";
   for (auto& [i, j] : polyEdges(hc.cell))
@@ -378,7 +407,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       o << L.str();
       return;
     }
-    if (n.isLeaf() && n.mat.emissive > 0) L << "  if (g_noEmissive && " << D(i, 9) << ".x > 0.0) { m = MAT(0.0); return INF; }\n";
+    if (n.isLeaf()) L << "  if (g_noEmissive && " << D(i, 9) << ".x > 0.0) { m = MAT(0.0); return INF; }\n";  // (emissive: data)
     L << "  vec4 par = " << D(i, 5) << ";\n";
     const Modifier* rep = n.isLeaf() ? exactRepeat(n) : nullptr;
     if (n.id != root.id) L << "  float br = " << D(i, 8) << ".x;\n  if (br < 0.0) { m = MAT(0.0); return INF; }\n";  // out of reach (packNodes)
@@ -396,12 +425,11 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       L << "  vec4 q0 = clogO(qm) / s;\n  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
       if (n.isPoly()) L << polyGLSL(n.poly.type, true, "qm", "m9.w * s");
       else {
-        L << "  float hpar;\n  float d = honey_c" << i << "(qm, 0.0, " << D(i, 10) << ".w, hpar);\n";
-        if (n.poly.alternate) L << "  col = mix(col, " << D(i, 10) << ".rgb, hpar);\n";
+        L << "  float hpar;\n  float d = honey_c" << i << "(qm, 0.0, " << D(i, 10) << ".w, " << D(i, 13) << ".z, hpar);\n";
+        L << "  col = mix(col, " << D(i, 10) << ".rgb, hpar * " << D(i, 13) << ".w);\n";  // .w: alternate colours
       }
-      double round = n.round.value_or(0.0);
-      if (round != 0) L << "  d -= " << glslFloat(round) << " * s;\n";
-      if (const char* tf = texFn(n.mat.texture)) L << "  if (u_textures == 1) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(q0 * m9.y) * m9.z);\n";
+      L << "  vec4 x12 = " << D(i, 12) << ";\n  d -= x12.w * s;\n";  // rounding
+      L << "  if (u_textures == 1 && x12.y > 0.5) col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), q0 * m9.y) * m9.z);\n";
       L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
       L << "  return d;\n}\n";
     } else if (n.isLeaf()) {
@@ -415,36 +443,34 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       }
       Node shape = n;
       if (const Modifier* rm = exactRepeat(n)) {
-        L << "  qm = repeatExact(qm, " << rm->axis << ", " << glslFloat(rm->spacing) << " * s, " << glslFloat(rm->count) << ");\n";
+        L << "  int mrow = int(" << D(i, 12) << ".x);\n";
+        L << "  { vec4 rp = ndatx(mrow, " << (int)n.mods.size() - 1 << "); qm = repeatExact(qm, " << rm->axis << ", rp.x * s, rp.y); }\n";
         shape.mods.pop_back();
         ax = modifierAxes(shape, reg);
-      }
+      } else if (!n.mods.empty()) L << "  int mrow = int(" << D(i, 12) << ".x);\n";
       L << "  vec4 q = clogO(qm) / s;\n  vec4 q0 = q;\n";
-      L << modifierCoordsGLSL(shape, ax, "q", "");
+      L << modifierCoordsGLSL(shape, ax, "q", "", "mrow");
       if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
-      L << extrudeGLSL(shape, ax, "");
-      double shell = n.shell.value_or(0.0), round = n.round.value_or(0.0);
-      if (shell > 0) L << "  d = abs(d) - " << glslFloat(shell) << ";\n";
-      if (round != 0) L << "  d -= " << glslFloat(round) << ";\n";
+      L << extrudeGLSL(shape, ax, "", "mrow");
+      L << "  vec4 x12 = " << D(i, 12) << ";\n  if (x12.z > 0.0) d = abs(d) - x12.z;\n  d -= x12.w;\n";  // shell, rounding (data)
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
-      if (const char* tf = texFn(n.mat.texture)) {
-        L << "  vec4 tq = q0 * m9.y;\n";
-        for (int a = nodeDim(n, reg); a < 4; a++) L << "  tq." << C[a] << " = 0.5;\n";
-        L << "  if (u_textures == 1) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(tq) * m9.z);\n";
-      }
+      L << "  if (u_textures == 1 && x12.y > 0.5) {\n    vec4 tq = q0 * m9.y;\n";
+      for (int a = nodeDim(n, reg); a < 4; a++) L << "    tq." << C[a] << " = 0.5;\n";
+      L << "    col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), tq) * m9.z);\n  }\n";
       L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
       L << "  return d * s * " << D(i, 8) << ".w;\n}\n";  // .w: spherical safety factor
     } else {
-      std::string coords = modifierCoordsGLSL(n, ax, "q", "");
+      if (!n.mods.empty()) L << "  int mrow = int(" << D(i, 12) << ".x);\n";
+      std::string coords = modifierCoordsGLSL(n, ax, "q", "", "mrow");
       if (!coords.empty()) L << "  vec4 q = clogO(qm) / s;\n" << coords << "  q.w = 0.0;\n  qm = cexpO(q * s);\n";
       static const char* opf[6] = {"opU", "opI", "opS", "opSU", "opSI", "opSS"};
       L << "  float k = max(par.y, 1e-4);\n  MAT mb;\n";
       L << "  float d = " << fn(n.children[0]) << "(qm, pc, m);\n";
       for (size_t c = 1; c < n.children.size(); c++)
         L << "  { float b = " << fn(n.children[c]) << "(qm, pc, mb); d = " << opf[(int)n.op] << "(d, m, b, mb" << (isSmooth(n.op) ? ", k" : "") << "); }\n";
-      std::string ex = extrudeGLSL(n, ax, "");
+      std::string ex = extrudeGLSL(n, ax, "", "mrow");
       if (!ex.empty()) L << "  if (d < INF * 0.5) {\n  d /= s;\n" << ex << "  d *= s;\n  }\n";
       L << "  return d;\n}\n";
     }
@@ -528,43 +554,39 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       o << L.str();
       return;
     }
-    if (n.isLeaf() && n.mat.emissive > 0) L << "  if (g_noEmissive && " << D(i, 9) << ".x > 0.0) { m = MAT(0.0); return INF; }\n";
+    if (n.isLeaf()) L << "  if (g_noEmissive && " << D(i, 9) << ".x > 0.0) { m = MAT(0.0); return INF; }\n";  // (emissive: data)
     // bounding-sphere early out (threshold covers the parent's smooth blend radius)
     if (n.id != root.id) L << "  vec4 par = " << D(i, 5) << ";\n  float bd = length(p - " << D(i, 7) << ") - " << D(i, 8) << ".x;\n  if (bd > par.w && !g_exact) { m = MAT(0.0); return bd; }\n";
     else L << "  vec4 par = " << D(i, 5) << ";\n";
       bool follow = n.anchor && n.anchor->follow && (role == Role::Tangent || role == Role::Hug);
-    if (follow)  // bent along the surface (packNodes stores the path; 8.w = its first row)
-      L << "  float s = par.x;\n  vec4 q = followLocal(p, int(" << D(i, 8) << ".w)) / s;\n  vec4 q0 = q;\n";
+    if (follow)  // bent along the surface (packNodes stores the path; 13.x = its first row)
+      L << "  float s = par.x;\n  vec4 q = followLocal(p, int(" << D(i, 13) << ".x)) / s;\n  vec4 q0 = q;\n";
     else L << "  float s = par.x;\n  vec4 q = (" << ROT(i) << " * (p - " << D(i, 4) << ")) / s;\n  vec4 q0 = q;\n";
     bool anchored = role == Role::Tangent || role == Role::Hug;
     if (anchored) L << "  float nd = q.w;\n";
     if (role == Role::Tangent) L << "  q.w = 0.0;\n";
     if (role == Role::Hug) L << "  q.w = g_world" << wslot(n.anchor->world) << " / (sAcc * s);\n";
     auto ax = modifierAxes(n, reg);
-    L << modifierCoordsGLSL(n, ax, "q", "");
+    if (!n.mods.empty()) L << "  int mrow = int(" << D(i, 12) << ".x);\n";  // modifier parameters (data)
+    L << modifierCoordsGLSL(n, ax, "q", "", "mrow");
     if (n.isLeaf()) {
       L << "  float hpar = 0.0;\n";
       if (n.isPoly()) L << polyGLSL(n.poly.type, false, "q", D(i, 9) + ".w");
-      else if (n.isHoneycomb()) L << "  float d = honey_f" << i << "(q, " << D(i, 9) << ".w, " << D(i, 10) << ".w, hpar);\n";
+      else if (n.isHoneycomb()) L << "  float d = honey_f" << i << "(q, " << D(i, 9) << ".w, " << D(i, 10) << ".w, " << D(i, 13) << ".z, hpar);\n";
       else if (n.isCustom()) L << "  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
-      L << extrudeGLSL(n, ax, "");
-      // shell / rounding act on the shape itself, before its thickness along the unused axes
-      double shell = n.shell.value_or(0.0), round = n.round.value_or(0.0);
-      if (shell > 0) L << "  d = abs(d) - " << glslFloat(shell) << ";\n";
-      if (round != 0) L << "  d -= " << glslFloat(round) << ";\n";
+      L << extrudeGLSL(n, ax, "", "mrow");
+      // shell / rounding act on the shape itself, before its thickness along the unused axes (data: slot 12)
+      L << "  vec4 x12 = " << D(i, 12) << ";\n  if (x12.z > 0.0) d = abs(d) - x12.z;\n  d -= x12.w;\n";
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
-      if (n.isHoneycomb() && n.poly.alternate) L << "  col = mix(col, " << D(i, 10) << ".rgb, hpar);\n";
-      const char* tf = texFn(n.mat.texture);
-      if (tf) {
-        // textures are 4D patterns: along the axes a thin (< 4D) object does not use it sits on a
-        // cell boundary (coordinate 0), which would make grids solid and checkers flicker, so those
-        // coordinates are put in the middle of a cell
-        L << "  vec4 tq = q0 * m9.y;\n";
-        for (int a = nodeDim(n, reg); a < 4; a++) L << "  tq." << C[a] << " = 0.5;\n";
-        L << "  if (u_textures == 1) col = mix(col, " << D(i, 10) << ".rgb, " << tf << "(tq) * m9.z);\n";  // textures can be off (fast mode)
-      }
+      if (n.isHoneycomb()) L << "  col = mix(col, " << D(i, 10) << ".rgb, hpar * " << D(i, 13) << ".w);\n";
+      // textures are 4D patterns: along the axes a thin (< 4D) object does not use it sits on a
+      // cell boundary (coordinate 0), which would make grids solid and checkers flicker, so those
+      // coordinates are put in the middle of a cell. The type is data (12.y); textures can be off (fast mode)
+      L << "  if (u_textures == 1 && x12.y > 0.5) {\n    vec4 tq = q0 * m9.y;\n";
+      for (int a = nodeDim(n, reg); a < 4; a++) L << "    tq." << C[a] << " = 0.5;\n";
+      L << "    col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), tq) * m9.z);\n  }\n";
       L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, 0.0, 0.0));\n";
       // attached to a surface: the shape is extruded along the surface normal, so keep it to its
       // own sheet (two-sided, within its size): other sheets of the world (e.g. the other room of a
@@ -578,7 +600,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       for (size_t c = 1; c < n.children.size(); c++)
         L << "  { float b = " << fnName(n.children[c], ctx) << "(q, g, sAcc * s, mb); d = " << opf[(int)n.op] << "(d, m, b, mb"
           << (isSmooth(n.op) ? ", k" : "") << "); }\n";
-      std::string ex = extrudeGLSL(n, ax, "");
+      std::string ex = extrudeGLSL(n, ax, "", "mrow");
       if (!ex.empty()) L << "  if (d < INF * 0.5) {\n" << ex << "  }\n";
       if (anchored) L << "  return d >= INF * 0.5 ? d : max(d * s, abs(nd) * s - " << D(i, 8) << ".z);\n}\n";
       else L << "  return d >= INF * 0.5 ? d : d * s;\n}\n";
@@ -594,7 +616,8 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     for (size_t a = 0; a + 1 < path.size(); a++) {
       int i = index[path[a]->id];
       o << "  p = (" << ROT(i) << " * (p - " << D(i, 4) << ")) / " << D(i, 5) << ".x; s *= " << D(i, 5) << ".x;\n";
-      o << "  {\n" << modifierCoordsGLSL(*path[a], modifierAxes(*path[a], reg), "p", "w") << "  }\n";
+      std::string mr = "int(" + D(i, 12) + ".x)";
+      o << "  {\n" << modifierCoordsGLSL(*path[a], modifierAxes(*path[a], reg), "p", "w", mr.c_str()) << "  }\n";
     }
     o << "  return " << fnName(target, EvalCtx::World) << "(p, g, s, m) * s;\n}\n";
     o << "float worldSDF" << k << "(vec4 g) { MAT m; return worldSDF" << k << "m(g, m); }\n";
@@ -618,7 +641,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
 
 std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight,
                              const Space* space, const M4* camIso) {
-  const int S = 12 * 4;  // floats per node (12 vec4 slots, see emitNode)
+  const int S = NODE_VEC4S * 4;  // floats per node (NODE_VEC4S vec4 slots, see emitNode)
   const int S_PER = S;
   size_t N = cs.nodeIds.size();
   std::vector<float> d(std::max<size_t>(N, 1) * S, 0.f);
@@ -657,6 +680,13 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       slot(8)[1] = (float)n.mat.ior;
       slot(9)[3] = (float)n.poly.size;   // polyhedron inradius / flat honeycomb cell size
       slot(10)[3] = (float)n.poly.width;  // honeycomb edge radius / gap
+      // slot 12 = (modifier rows, texture type, shell, round), 13 = (follow rows, emissive, honeycomb style, alternate)
+      slot(12)[1] = (float)n.mat.texture;
+      slot(12)[2] = (float)std::max(n.shell.value_or(0.0), 0.0);
+      slot(12)[3] = (float)n.round.value_or(0.0);
+      slot(13)[1] = n.mat.emissive > 0 ? 1.f : 0.f;
+      slot(13)[2] = (float)n.poly.style;
+      slot(13)[3] = n.poly.alternate ? 1.f : 0.f;
     } else slot(6)[3] = (float)reach;  // groups: colour unused, store reach
     auto b = bounds.find(n.id);
     slot(8)[0] = 1e9f;
@@ -667,14 +697,43 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
     // attached objects: how far from the tangent space they may reach (see attachCut)
     slot(8)[2] = (float)attachCut(reach, b != bounds.end() ? b->second.r : INFINITY);
   }
-  // follow-surface paths: extra rows after the nodes (12 rows = header + 33 samples x 4 vec4)
+  // modifier parameters: extra rows after the nodes, one vec4 per modifier (see modifierCoordsGLSL)
+  for (size_t i = 0; i < N; i++) {
+    auto it = byId.find(cs.nodeIds[i]);
+    if (it == byId.end() || it->second->mods.empty()) continue;
+    const Node& n = *it->second;
+    size_t base = d.size() / S;
+    size_t rows = (n.mods.size() + NODE_VEC4S - 1) / NODE_VEC4S;
+    d.resize(d.size() + rows * S, 0.f);
+    for (size_t k = 0; k < n.mods.size(); k++) {
+      const Modifier& m = n.mods[k];
+      float* x = &d[base * S + k * 4];
+      switch (m.type) {
+        case MOD_MIRROR: x[0] = (float)m.offset; break;
+        case MOD_REPEAT:
+          x[0] = m.spacing > 0 ? (float)m.spacing : 1e9f;
+          x[1] = m.count > 0 ? (float)m.count : 1e9f;  // 0 = infinite
+          break;
+        case MOD_RADIAL:
+          x[0] = (float)m.radius;
+          x[1] = (float)std::max(1, m.count);
+          x[2] = (float)(m.startAngle * PI / 180);
+          x[3] = (float)(m.angle * PI / 180);
+          break;
+        case MOD_EXTRUDE: x[0] = (float)(m.length / 2); x[1] = (float)(int)m.mode; break;
+        case MOD_REVOLVE: x[0] = (float)m.radius; break;
+      }
+    }
+    d[i * S + 12 * 4 + 0] = (float)base;  // slot 12.x: first modifier row
+  }
+  // follow-surface paths: extra rows after the nodes (header + 33 samples x 4 vec4 = 133 vec4)
   for (size_t i = 0; i < N; i++) {
     auto it = byId.find(cs.nodeIds[i]);
     if (it == byId.end() || !it->second->anchor) continue;
     const Anchor& a = *it->second->anchor;
     if (!a.follow || a.path.size() != (size_t)NPATH + 1) continue;
     size_t base = d.size() / S;
-    d.resize(d.size() + 12 * S, 0.f);
+    d.resize(d.size() + ((1 + 4 * (NPATH + 1) + NODE_VEC4S - 1) / NODE_VEC4S) * S, 0.f);
     float* x = &d[base * S];
     x[0] = (float)a.pathLen;
     x[1] = (float)(2 * a.pathLen / NPATH);
@@ -683,7 +742,7 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       for (int c = 0; c < 4; c++)
         for (int e = 0; e < 4; e++) x[(1 + 4 * k + c) * 4 + e] = (float)(*v[c])[e];
     }
-    d[i * S + 8 * 4 + 3] = (float)base;  // slot 8.w: first row of the path
+    d[i * S + 13 * 4 + 0] = (float)base;  // slot 13.x: first row of the path
   }
   if (space && space->curved()) {
     // curved: inverse isometries relative to the parent (the root's also undoes the camera: the
@@ -753,12 +812,10 @@ std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const s
   walkc(root, [&](const Node& n, const Node*, int depth) {
     o << depth << n.id << (n.isLeaf() ? "L" + n.prim : n.isCamera() ? std::string("C") : "G" + std::to_string((int)n.op)) << (n.hidden ? "h" : "") << (n.anchor ? "a" + n.anchor->world : "");
     if (n.anchor && n.anchor->follow) o << "F";
-    for (auto& m : n.mods) o << "m" << m.type << m.axis << m.spacing << ":" << m.count << ":" << (int)m.mode << m.length << ":" << m.radius << ":" << m.i << m.j << m.angle;
-    if (n.round) o << "r" << *n.round;
-    if (n.shell) o << "s" << *n.shell;
-    if (n.isLeaf()) o << "t" << n.mat.texture << (n.mat.emissive > 0 ? "e" : "");
+    // only what decides the code: every number is node data (packNodes), so editing values never recompiles
+    for (auto& m : n.mods) o << "m" << m.type << m.axis << (m.type == MOD_EXTRUDE ? (int)m.mode : 0) << m.i << m.j << (m.spacing > 0 ? "+" : "-");
     if (n.isCustom()) o << "c" << std::hash<std::string>()(n.code) << ":" << n.codeBound;
-    if (n.isPolytope()) o << "p" << n.poly.type << ":" << n.poly.honey << ":" << n.poly.style << n.poly.alternate;
+    if (n.isPolytope()) o << "p" << n.poly.type << ":" << n.poly.honey;
     o << ";";
   });
   for (auto& p : reg.custom()) o << p.id << primitiveGLSL(p, "f");

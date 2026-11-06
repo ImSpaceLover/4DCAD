@@ -266,9 +266,14 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
 
 ## Performance
 
-* **Per-scene shaders.** Each scene structure is compiled into its own GLSL
-  program; desktop drivers compile these quickly. Moving or recolouring objects
-  only updates uniforms, so it never recompiles.
+* **Per-scene shaders.** Each scene structure (the tree, operations, modifier
+  types, primitives) is compiled into its own GLSL program. Every number
+  (positions, colours, materials, sizes, extrusion lengths, repeat spacing,
+  shell / rounding, texture type, honeycomb style) is node data, so editing
+  values never recompiles. When the structure changes, the new program is
+  compiled on a background thread (OpenGL: a hidden shared context; Vulkan:
+  glslang and pipeline creation) while the last image stays on screen with
+  "Compiling shader..." in the viewport. The last 16 programs are kept.
 * **Bounding spheres.** Each node has a bounding hypersphere, so distant
   subtrees are skipped while marching.
 * **One `map()` call site.** The shader's main loop is a single state machine

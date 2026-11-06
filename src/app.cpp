@@ -2019,6 +2019,8 @@ void App::renderFrame() {
     fp.blend = 1;
     renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
     accumSamples = refine ? 1 : 0;
+    if (renderer->compiling()) { lastKey_.clear(); accumSamples = 0; viewportCompiling = true; }  // not drawn yet: again next frame
+    else viewportCompiling = false;
   } else if (refine && accumSamples < q.viewportSamples) {
     // the same view: add one more random sample to the running average
     fp.stochastic = true;
@@ -2050,6 +2052,7 @@ void App::renderFrame() {
     if (tk.str() != lastThumbKey_) {
       lastThumbKey_ = tk.str();
       renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+      if (renderer->compiling()) lastThumbKey_.clear();
     }
   }
   if (fp.geo && editSet.showThumbnail) {
@@ -2075,6 +2078,7 @@ void App::renderFrame() {
     if (tk.str() != lastThumbKey_) {
       lastThumbKey_ = tk.str();
       renderer->render(thumbRT, thumbW, thumbH, isolate.empty() ? root : viewRoot_, reg, world, {}, tp);
+      if (renderer->compiling()) lastThumbKey_.clear();
     }
   }
 }
