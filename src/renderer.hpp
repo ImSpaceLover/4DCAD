@@ -130,6 +130,9 @@ class Renderer {
   virtual void destroy(RenderTarget& rt) = 0;
   /** Copies src into dst (resized to src's size). */
   virtual void copyTarget(const RenderTarget& src, RenderTarget& dst) = 0;
+  /** Path tracing accumulates linear light (averaging gamma-encoded samples would darken rare bright
+   *  ones): this writes src gamma-encoded into dst (resized to src's size) for display / saving. */
+  virtual void resolve(const RenderTarget& src, RenderTarget& dst) = 0;
   /** Waits until this renderer's drawing has finished (render threads, before publishing an image). */
   virtual void flushAndWait() { finish(); }
   /** Sends the queued drawing to the GPU without waiting (OpenGL: glFlush). */

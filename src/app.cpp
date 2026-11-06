@@ -1826,6 +1826,48 @@ void App::updateExplore(const InputState& in, double dt) {
 }
 
 // ============================================================ rendering
+// How far a glowing object reaches from its origin, measured with the CPU evaluator: along 32
+// directions, the outermost point that is inside this object (its bounding sphere is conservative,
+// often twice as large; light sampling within a tight sphere wastes far fewer rays, above all in
+// 4D where the share hitting the object falls with the cube of the ratio). A part missed here is
+// still lit correctly by the paths that hit it, only with more noise.
+double App::emitterRadius(const Node& n, const V4& centre, double bound) {
+  if (emitRadiusVersion_ != version_) { emitRadius_.clear(); emitRadiusVersion_ = version_; }
+  if (auto it = emitRadius_.find(n.id); it != emitRadius_.end()) return it->second;
+  double best = 0;
+  bool curved = space.curved();
+  if (!ev) return bound;
+  uint32_t seed = 12345;
+  auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) * (1.0 / 16777216.0) * 2 - 1; };
+  auto inside = [&](const V4& p) {
+    Sample s = curved ? ev->evalCurved(p) : ev->evalFull(p);
+    return s.d < 0 && s.node && s.node->id == n.id;
+  };
+  auto at = [&](const V4& dir, double r) {
+    if (!curved) return centre + dir * r;
+    V4 p = centre, d = dir;
+    cs::geodesic(space, p, d, r);
+    return p;
+  };
+  const int STEPS = 24;
+  for (int k = 0; k < 32; k++) {
+    V4 d{rnd(), rnd(), rnd(), curved ? 0.0 : rnd()};
+    if (curved) d = cs::tnormalize(space.k(), cs::tangent(space.k(), centre, d));
+    else d = length(d) > 1e-9 ? normalize(d) : V4{1, 0, 0, 0};
+    // outermost sample inside the object, then bisection on the step beyond it
+    double lo = -1;
+    for (int i = STEPS; i >= 0; i--)
+      if (inside(at(d, bound * i / STEPS))) { lo = bound * i / STEPS; break; }
+    if (lo < 0) continue;
+    double hi = std::min(bound, lo + bound / STEPS);
+    for (int b = 0; b < 6; b++) { double m = (lo + hi) / 2; (inside(at(d, m)) ? lo : hi) = m; }
+    best = std::max(best, hi);
+  }
+  double r = best > 0 ? std::min(bound, best * 1.08 + 1e-3) : bound;
+  emitRadius_[n.id] = r;
+  return r;
+}
+
 std::vector<LightParam> App::frameLights(bool pathTrace) {
   std::vector<LightParam> out;
   for (auto& l : lights) {
@@ -1857,7 +1899,7 @@ std::vector<LightParam> App::frameLights(bool pathTrace) {
       if (space.curved()) off[3] = 0;
       LightParam p;
       p.pos = nodeWorldPos(n.id);
-      p.radius = (float)((b->second.r + length(off)) * sAnc);  // (conservative: about the object's origin)
+      p.radius = (float)emitterRadius(n, p.pos, (b->second.r + length(off)) * sAnc);  // (measured; within the conservative bound)
       double k = n.mat.emissive * n.mat.emissionStrength;
       for (int i = 0; i < 3; i++) p.color[i] = (float)(n.color[i] * k);
       p.range = 1e9f;
@@ -2103,7 +2145,8 @@ void App::renderFrame() {
     fp.blend = 1;
     if (viewThread) postView(*viewThread, (int)vpW, (int)vpH, highlightSet(), fp, refine ? q.viewportSamples : 1, refine);  // (refined there)
     else {
-      renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+      renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+      if (fp.pathTrace && !renderer->compiling()) renderer->resolve(mainAccRT, mainRT);
       accumSamples = refine ? 1 : 0;
       if (renderer->compiling()) { lastKey_.clear(); accumSamples = 0; viewportCompiling = true; }  // not drawn yet: again next frame
       else viewportCompiling = false;
@@ -2113,7 +2156,8 @@ void App::renderFrame() {
     fp.stochastic = true;
     fp.sample = accumSamples;
     fp.blend = 1.0f / (accumSamples + 1);
-    renderer->render(mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+    renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+    if (fp.pathTrace) renderer->resolve(mainAccRT, mainRT);
     accumSamples++;
   }
   if (viewThread) {

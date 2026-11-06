@@ -395,6 +395,8 @@ int main(int argc, char** argv) {
   app.renderer->destroy(app.mainRT);
   app.renderer->destroy(app.thumbRT);
   app.renderer->destroy(app.job.rt);
+  app.renderer->destroy(app.job.acc);
+  app.renderer->destroy(app.mainAccRT);
   app.renderer.reset();
 #ifdef FD_HAVE_VULKAN
   if (useVulkan) {

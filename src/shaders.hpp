@@ -1147,8 +1147,7 @@ void main() {
   if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
   col = min(max(col, vec3(0.0)), vec3(32.0));  // (rare very bright samples would take long to average out)
   col = groundGrid(col, gro, grd, firstT >= 0.0 ? firstT : 1e9);
-  col = pow(col, vec3(0.4545));
-  fragColor = vec4(col, 1.0);
+  fragColor = vec4(col, 1.0);  // linear: samples are averaged as light, gamma comes after (Renderer::resolve)
 }
 )";
 
@@ -1157,6 +1156,15 @@ void main() {
 // unit ball) or the stereographic projection (spherical: the half of the space around the origin
 // fills the unit ball, more out to radius 1.6). Rays are straight in the ball; each step converts
 // the scene distance with the conformal factor (lengths in the ball = world / R * (1 -+ |x|^2) / 2).
+/** Path tracing's display pass: the linear accumulated image, gamma-encoded. */
+inline std::string resolveShader(ShaderTarget t) {
+  std::string body = "void main() {\n  vec3 c = texelFetch(u_src, ivec2(gl_FragCoord.xy), 0).rgb;\n"
+                     "  fragColor = vec4(pow(max(c, vec3(0.0)), vec3(0.4545)), 1.0);\n}\n";
+  if (t == ShaderTarget::OpenGL) return "#version 330 core\nuniform sampler2D u_src;\nin vec2 v_uv;\nout vec4 fragColor;\n" + body;
+  return "#version 450\nlayout(set = 0, binding = 0) uniform sampler2D u_src;\nlayout(location = 0) in vec2 v_uv;\n"
+         "layout(location = 0) out vec4 fragColor;\n" + body;
+}
+
 inline const char* BALL_MAIN = R"(
 vec4 ballToModel(vec3 x) {
   float r2 = dot(x, x);

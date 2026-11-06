@@ -154,6 +154,7 @@ class App {
   // --- viewport (window pixels) ---
   float vpX = 0, vpY = 0, vpW = 1, vpH = 1;
   RenderTarget mainRT, thumbRT;
+  RenderTarget mainAccRT;  // path tracing (single-threaded viewport): the linear running average
   int thumbW = 300, thumbH = 225;
   std::unique_ptr<Renderer> renderer;  // the UI thread's renderer (offline renders; headless runs: everything)
   // the viewport and the thumbnail render on their own threads (interactive use; see render_thread.hpp)
@@ -195,6 +196,7 @@ class App {
     int tile = 0;  // next tile of the current sample (tiles of TILE pixels, row by row)
     bool prepared = false;
     RenderTarget rt;                    // the supersampled image being refined (also the preview)
+    RenderTarget acc;                   // path tracing: the linear running average (rt = its display version)
     std::unique_ptr<FrameWriter> writer;
     std::string path, error;
     double started = 0, fps = 24, seconds = 0;
@@ -407,6 +409,10 @@ class App {
   std::shared_ptr<const Node> snap_;
   std::shared_ptr<const PrimitiveRegistry> snapReg_;
   std::string snapKey_;
+  // path tracing: the measured radius of each glowing object around its origin (per scene version)
+  std::unordered_map<std::string, double> emitRadius_;
+  int emitRadiusVersion_ = -1;
+  double emitterRadius(const Node& n, const V4& centre, double bound);
   std::shared_ptr<const Node> sceneSnapshot();
   void postView(RenderThread& t, int w, int h, const std::unordered_set<std::string>& hl, const FrameParams& fp, int samples, bool stochastic);
   double lastChange_ = 0;

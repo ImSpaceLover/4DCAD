@@ -52,6 +52,12 @@ class GLRenderer : public Renderer {
     gl::BindTexture(GL_TEXTURE_2D, nodeTex_);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    {  // the display pass of path-traced images (gamma after averaging)
+      std::string err;
+      GLProgram* rp = (GLProgram*)createProgram(resolveShader(ShaderTarget::OpenGL), err);
+      if (rp) { resolveProg_ = rp->id; resolveLoc_ = gl::GetUniformLocation(rp->id, "u_src"); delete rp; }
+      else std::fprintf(stderr, "resolve shader: %s\n", err.c_str());
+    }
     const GLubyte* r = gl::GetString(GL_RENDERER);
     const GLubyte* v = gl::GetString(GL_VERSION);
     device = std::string("OpenGL ") + (v ? (const char*)v : "") + " | " + (r ? (const char*)r : "");
@@ -61,6 +67,7 @@ class GLRenderer : public Renderer {
     clearPrograms();
     for (auto& t : targets_) if (t.fbo) { gl::DeleteFramebuffers(1, &t.fbo); gl::DeleteTextures(1, &t.tex); }
     gl::DeleteTextures(1, &nodeTex_);
+    if (resolveProg_) gl::DeleteProgram(resolveProg_);
     gl::DeleteBuffers(1, &ubo_);
     gl::DeleteVertexArrays(1, &vao_);
   }
@@ -70,6 +77,25 @@ class GLRenderer : public Renderer {
   const char* backendName() const override { return "OpenGL"; }
   void finish() override { gl::Finish(); }
   void flush() override { gl::Flush(); }
+  void resolve(const RenderTarget& src, RenderTarget& dst) override {
+    if (src.id < 0 || !resolveProg_) return;
+    int w = targets_[src.id].w, h = targets_[src.id].h;
+    GLTarget& d = ensure(dst, w, h);
+    GLTarget& s = targets_[src.id];
+    gl::BindFramebuffer(GL_FRAMEBUFFER, d.fbo);
+    gl::Viewport(0, 0, w, h);
+    gl::Disable(GL_BLEND);
+    gl::Disable(GL_SCISSOR_TEST);
+    gl::Disable(GL_DEPTH_TEST);
+    gl::UseProgram(resolveProg_);
+    gl::ActiveTexture(GL_TEXTURE0);
+    gl::BindTexture(GL_TEXTURE_2D, s.tex);
+    gl::Uniform1i(resolveLoc_, 0);
+    gl::BindVertexArray(vao_);
+    gl::DrawArrays(GL_TRIANGLES, 0, 3);
+    gl::BindVertexArray(0);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
   void copyTarget(const RenderTarget& src, RenderTarget& dst) override {
     if (src.id < 0) return;
     GLTarget& s = targets_[src.id];
@@ -194,7 +220,8 @@ class GLRenderer : public Renderer {
   }
 
  private:
-  GLuint vao_ = 0, ubo_ = 0, nodeTex_ = 0;
+  GLuint vao_ = 0, ubo_ = 0, nodeTex_ = 0, resolveProg_ = 0;
+  GLint resolveLoc_ = -1;
   std::function<bool(bool)> workerCtx_;
   std::vector<GLTarget> targets_;
 

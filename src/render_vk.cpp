@@ -140,12 +140,34 @@ class VKRenderer : public Renderer {
     vert_ = module(spv);
     for (int i = 0; i <= VulkanContext::FRAMES; i++) {
       FrameRes& fr = i < VulkanContext::FRAMES ? frames_[i] : imm_;
-      VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 64}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64}};
+      VkDescriptorPoolSize ps[3] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 64}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64},
+                                    {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16}};
       VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-      dpi.maxSets = 64;
-      dpi.poolSizeCount = 2;
+      dpi.maxSets = 80;
+      dpi.poolSizeCount = 3;
       dpi.pPoolSizes = ps;
       vkCreateDescriptorPool(d, &dpi, nullptr, &fr.pool);
+    }
+    {  // the display pass of path-traced images (gamma after averaging): one sampled image
+      VkDescriptorSetLayoutBinding rb{};
+      rb.binding = 0;
+      rb.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      rb.descriptorCount = 1;
+      rb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+      VkDescriptorSetLayoutCreateInfo rli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+      rli.bindingCount = 1;
+      rli.pBindings = &rb;
+      if (vkCreateDescriptorSetLayout(d, &rli, nullptr, &resolveSetLayout_) != VK_SUCCESS) { err = "resolve set layout"; return false; }
+      VkPipelineLayoutCreateInfo rpli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+      rpli.setLayoutCount = 1;
+      rpli.pSetLayouts = &resolveSetLayout_;
+      if (vkCreatePipelineLayout(d, &rpli, nullptr, &resolveLayout_) != VK_SUCCESS) { err = "resolve pipeline layout"; return false; }
+      std::vector<uint32_t> rs;
+      if (!compileGlsl(EShLangFragment, resolveShader(ShaderTarget::Vulkan), rs, err)) return false;
+      VkShaderModule fm = module(rs);
+      resolvePipe_ = pipeline(fm, resolveLayout_, false);
+      vkDestroyShaderModule(d, fm, nullptr);
+      if (!resolvePipe_) { err = "resolve pipeline"; return false; }
     }
     if (!threaded_) ctx_.onFrameStart = [this](int slot) {
       FrameRes& f = frames_[slot];
@@ -169,6 +191,9 @@ class VKRenderer : public Renderer {
     for (auto& f : frames_) freeRes(f);
     freeRes(imm_);
     vkDestroyShaderModule(d, vert_, nullptr);
+    if (resolvePipe_) vkDestroyPipeline(d, resolvePipe_, nullptr);
+    if (resolveLayout_) vkDestroyPipelineLayout(d, resolveLayout_, nullptr);
+    if (resolveSetLayout_) vkDestroyDescriptorSetLayout(d, resolveSetLayout_, nullptr);
     vkDestroySampler(d, sampler_, nullptr);
     vkDestroyRenderPass(d, pass_, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
@@ -198,6 +223,14 @@ class VKRenderer : public Renderer {
     std::vector<uint32_t> spv;
     if (!compileGlsl(EShLangFragment, fs, spv, err)) return nullptr;
     VkShaderModule frag = module(spv);
+    auto* p = new VKProgram;
+    p->pipeline = pipeline(frag, pipeLayout_, true);
+    vkDestroyShaderModule(ctx_.device, frag, nullptr);
+    if (!p->pipeline) { err = "vkCreateGraphicsPipelines failed"; delete p; return nullptr; }
+    return p;
+  }
+  // a full-screen pipeline in the offscreen pass (blend: progressive sampling's constant-alpha blend)
+  VkPipeline pipeline(VkShaderModule frag, VkPipelineLayout layout, bool blend) {
     VkPipelineShaderStageCreateInfo st[2]{};
     st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -221,7 +254,7 @@ class VKRenderer : public Renderer {
     VkPipelineColorBlendAttachmentState cba{};
     cba.colorWriteMask = 0xF;
     // new sample = src * w + previous * (1 - w); w = 1 replaces (blend constant alpha, per draw)
-    cba.blendEnable = VK_TRUE;
+    cba.blendEnable = blend ? VK_TRUE : VK_FALSE;
     cba.srcColorBlendFactor = cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_CONSTANT_ALPHA;
     cba.dstColorBlendFactor = cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
     cba.colorBlendOp = cba.alphaBlendOp = VK_BLEND_OP_ADD;
@@ -230,7 +263,7 @@ class VKRenderer : public Renderer {
     cb.pAttachments = &cba;
     VkDynamicState dyn[3] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS};
     VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    ds.dynamicStateCount = 3;
+    ds.dynamicStateCount = blend ? 3 : 2;
     ds.pDynamicStates = dyn;
     VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pi.stageCount = 2;
@@ -242,13 +275,11 @@ class VKRenderer : public Renderer {
     pi.pMultisampleState = &ms;
     pi.pColorBlendState = &cb;
     pi.pDynamicState = &ds;
-    pi.layout = pipeLayout_;
+    pi.layout = layout;
     pi.renderPass = pass_;
-    auto* p = new VKProgram;
-    VkResult r = vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &pi, nullptr, &p->pipeline);
-    vkDestroyShaderModule(ctx_.device, frag, nullptr);
-    if (r != VK_SUCCESS) { err = "vkCreateGraphicsPipelines failed (" + std::to_string((int)r) + ")"; delete p; return nullptr; }
-    return p;
+    VkPipeline pl = VK_NULL_HANDLE;
+    if (vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &pi, nullptr, &pl) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return pl;
   }
   void destroyProgram(void* h) override {
     auto* p = (VKProgram*)h;
@@ -310,6 +341,45 @@ class VKRenderer : public Renderer {
     });
   }
   void flushAndWait() override {}  // threaded draws are already finished (immediate)
+  void resolve(const RenderTarget& src, RenderTarget& dst) override {
+    if (src.id < 0 || targets_[src.id].current < 0) return;
+    int sw = targets_[src.id].v[targets_[src.id].current].w, sh = targets_[src.id].v[targets_[src.id].current].h;
+    VKImage& d = ensure(dst, sw, sh);
+    VKImage& s = targets_[src.id].v[targets_[src.id].current];
+    auto rec = [&](VkCommandBuffer cmd) {
+      VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+      dai.descriptorPool = res().pool;
+      dai.descriptorSetCount = 1;
+      dai.pSetLayouts = &resolveSetLayout_;
+      VkDescriptorSet set = VK_NULL_HANDLE;
+      if (vkAllocateDescriptorSets(ctx_.device, &dai, &set) != VK_SUCCESS) return;
+      VkDescriptorImageInfo ii{sampler_, s.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+      VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      wr.dstSet = set;
+      wr.descriptorCount = 1;
+      wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      wr.pImageInfo = &ii;
+      vkUpdateDescriptorSets(ctx_.device, 1, &wr, 0, nullptr);
+      VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+      rb.renderPass = pass_;
+      rb.framebuffer = d.fb;
+      rb.renderArea.extent = {(uint32_t)sw, (uint32_t)sh};
+      vkCmdBeginRenderPass(cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
+      VkViewport vpt{0, 0, (float)sw, (float)sh, 0, 1};
+      VkRect2D sc{{0, 0}, {(uint32_t)sw, (uint32_t)sh}};
+      vkCmdSetViewport(cmd, 0, 1, &vpt);
+      vkCmdSetScissor(cmd, 0, 1, &sc);
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, resolvePipe_);
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, resolveLayout_, 0, 1, &set, 0, nullptr);
+      vkCmdDraw(cmd, 3, 1, 0, 0);
+      vkCmdEndRenderPass(cmd);
+    };
+    if (immediate_) {
+      ctx_.immediate(rec);
+      for (auto& c : imm_.chunks) c.used = 0;
+      vkResetDescriptorPool(ctx_.device, imm_.pool, 0);
+    } else if (ctx_.recording) rec(ctx_.cmd());
+  }
   bool compilingClear_ = false;
 
   bool readPixels(const RenderTarget& rt, Pixels& out) override {
@@ -429,7 +499,10 @@ class VKRenderer : public Renderer {
   FrameRes frames_[VulkanContext::FRAMES];
   FrameRes imm_;  // immediate (offline) draws
   bool immediate_ = false;
-  bool threaded_ = false;  // a render thread's renderer: every draw immediate, frame hooks left to the UI's
+  bool threaded_ = false;
+  VkDescriptorSetLayout resolveSetLayout_ = VK_NULL_HANDLE;
+  VkPipelineLayout resolveLayout_ = VK_NULL_HANDLE;
+  VkPipeline resolvePipe_ = VK_NULL_HANDLE;  // a render thread's renderer: every draw immediate, frame hooks left to the UI's
   std::vector<VKTarget> targets_;
   uint64_t frameCounter_ = 0;
 

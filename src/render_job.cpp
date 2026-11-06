@@ -224,7 +224,7 @@ void App::renderStep(double budget) {
     fp.tile[0] = (j.tile % tx) * TILE;
     fp.tile[1] = (j.tile / tx) * TILE;
     fp.tile[2] = fp.tile[3] = TILE;
-    bool ok = renderer->render(j.rt, j.w, j.h, j.frameRoot, reg, j.world, {}, fp);
+    bool ok = renderer->render(fp.pathTrace ? j.acc : j.rt, j.w, j.h, j.frameRoot, reg, j.world, {}, fp);
     fp.tile[2] = 0;
     if (renderer->compiling()) break;  // this frame's program is still being compiled: try again next UI frame
     if (!ok) {
@@ -238,6 +238,7 @@ void App::renderStep(double budget) {
     renderer->finish();
     if (++j.tile >= tx * ty) {
       j.tile = 0;
+      if (fp.pathTrace) renderer->resolve(j.acc, j.rt);  // the average so far, gamma-encoded (preview / saving)
       if (++j.sample >= j.samples) finishJobFrame();
     }
     if (wallClock() - t0 > budget) break;

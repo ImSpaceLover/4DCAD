@@ -128,7 +128,8 @@ void RenderThread::loop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (s < 0) break;
-    r->copyTarget(acc, disp[s]);
+    if (cur.fp.pathTrace) r->resolve(acc, disp[s]);  // linear average -> gamma-encoded
+    else r->copyTarget(acc, disp[s]);
     r->flushAndWait();  // finished before the UI may sample it
     uint64_t tex = r->texture(disp[s]);
     {
