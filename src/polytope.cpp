@@ -1,6 +1,7 @@
 #include "polytope.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace fd {
@@ -43,11 +44,97 @@ std::vector<std::vector<V4>> makeFaces() {
   return f;
 }
 
-const std::vector<std::vector<V4>>& faces() {
-  static auto f = makeFaces();
-  return f;
+// ---- the regular 4D polytopes ----
+// 600-cell (unit circumradius): 8 permutations of (+-1, 0, 0, 0), 16 of (+-1/2, ...), 96 even
+// permutations of (+-phi, +-1, +-1/phi, 0) / 2
+std::vector<V4> cell600Vertices() {
+  std::vector<V4> v;
+  for (int a = 0; a < 4; a++)
+    for (int s = -1; s <= 1; s += 2) { V4 x{0, 0, 0, 0}; x[a] = s; v.push_back(x); }
+  for (int m = 0; m < 16; m++) v.push_back({m & 1 ? -0.5 : 0.5, m & 2 ? -0.5 : 0.5, m & 4 ? -0.5 : 0.5, m & 8 ? -0.5 : 0.5});
+  const int even[12][4] = {{0, 1, 2, 3}, {0, 2, 3, 1}, {0, 3, 1, 2}, {1, 0, 3, 2}, {1, 2, 0, 3}, {1, 3, 2, 0},
+                           {2, 0, 1, 3}, {2, 1, 3, 0}, {2, 3, 0, 1}, {3, 0, 2, 1}, {3, 1, 0, 2}, {3, 2, 1, 0}};
+  const double base[4] = {PHI / 2, 0.5, 0.5 / PHI, 0};
+  for (auto& pm : even)
+    for (int m = 0; m < 8; m++) {
+      double b[3] = {m & 1 ? -base[0] : base[0], m & 2 ? -base[1] : base[1], m & 4 ? -base[2] : base[2]};
+      V4 x{0, 0, 0, 0};
+      for (int i = 0; i < 3; i++) x[pm[i]] = b[i];  // (the fourth entry, 0, goes to pm[3])
+      v.push_back(x);
+    }
+  return v;
 }
+
+// the 600 tetrahedral cells' centre directions (= the 120-cell's vertex directions): 4 mutually
+// adjacent vertices (edge 1/phi at circumradius 1)
+std::vector<V4> cell600Centroids() {
+  auto v = cell600Vertices();
+  size_t n = v.size();
+  double e2 = 1 / (PHI * PHI);
+  std::vector<std::vector<int>> adj(n);
+  for (size_t i = 0; i < n; i++)
+    for (size_t j = 0; j < n; j++)
+      if (i != j && std::abs(dot(v[i] - v[j], v[i] - v[j]) - e2) < 1e-6) adj[i].push_back((int)j);
+  auto isAdj = [&](int a, int b) { return std::find(adj[a].begin(), adj[a].end(), b) != adj[a].end(); };
+  std::vector<V4> c;
+  for (int a = 0; a < (int)n; a++)
+    for (int b : adj[a]) if (b > a)
+      for (int cc : adj[a]) if (cc > b && isAdj(b, cc))
+        for (int d : adj[a]) if (d > cc && isAdj(b, d) && isAdj(cc, d)) c.push_back(normalize(v[a] + v[b] + v[cc] + v[d]));
+  return c;
+}
+
+std::vector<V4> cell5Vertices() {  // a regular simplex around the origin, unit directions
+  const double s10 = std::sqrt(10.0), s6 = std::sqrt(6.0), s3 = std::sqrt(3.0);
+  return normed({{1 / s10, 1 / s6, 1 / s3, 1}, {1 / s10, 1 / s6, 1 / s3, -1}, {1 / s10, 1 / s6, -2 / s3, 0},
+                 {1 / s10, -std::sqrt(1.5), 0, 0}, {-2 * std::sqrt(0.4), 0, 0, 0}});
+}
+
+struct Sets { std::vector<std::vector<V4>> faces, verts, folded; };
+
+const Sets& sets() {
+  static Sets S = [] {
+    Sets s;
+    s.faces = makeFaces();
+    s.verts.resize(POLY_COUNT);
+    s.faces.resize(POLY_COUNT);
+    std::vector<V4> axes, halves, sq2;
+    for (int a = 0; a < 4; a++)
+      for (int g = -1; g <= 1; g += 2) { V4 x{0, 0, 0, 0}; x[a] = g; axes.push_back(x); }
+    for (int m = 0; m < 16; m++) halves.push_back({m & 1 ? -0.5 : 0.5, m & 2 ? -0.5 : 0.5, m & 4 ? -0.5 : 0.5, m & 8 ? -0.5 : 0.5});
+    for (int a = 0; a < 4; a++)
+      for (int b = a + 1; b < 4; b++)
+        for (int m = 0; m < 4; m++) { V4 x{0, 0, 0, 0}; x[a] = m & 1 ? -1 : 1; x[b] = m & 2 ? -1 : 1; sq2.push_back(normalize(x)); }
+    auto c5 = cell5Vertices();
+    std::vector<V4> neg5;
+    for (auto& x : c5) neg5.push_back(-x);
+    auto v600 = cell600Vertices(), c600 = cell600Centroids();
+    std::vector<V4> n24 = axes;
+    n24.insert(n24.end(), halves.begin(), halves.end());
+    s.faces[POLY_5CELL] = neg5;   s.verts[POLY_5CELL] = c5;
+    s.faces[POLY_8CELL] = axes;   s.verts[POLY_8CELL] = halves;
+    s.faces[POLY_16CELL] = halves; s.verts[POLY_16CELL] = axes;
+    s.faces[POLY_24CELL] = n24;   s.verts[POLY_24CELL] = sq2;
+    s.faces[POLY_120CELL] = v600; s.verts[POLY_120CELL] = c600;
+    s.faces[POLY_600CELL] = c600; s.verts[POLY_600CELL] = v600;
+    s.folded.resize(POLY_COUNT);
+    for (int t = POLY_3D_COUNT; t < POLY_COUNT; t++)
+      for (auto& f : s.faces[t]) {
+        if (f[0] < -1e-9 || f[1] < -1e-9 || f[2] < -1e-9 || f[3] < -1e-9) continue;
+        bool dup = false;
+        for (auto& g : s.folded[t]) if (dot(f - g, f - g) < 1e-12) dup = true;
+        if (!dup) s.folded[t].push_back(f);
+      }
+    return s;
+  }();
+  return S;
+}
+
+const std::vector<std::vector<V4>>& faces() { return sets().faces; }
 }  // namespace
+
+bool polySignSymmetric(int type) { return polyIs4D(type) && type != POLY_5CELL; }
+const std::vector<V4>& polyFacesFolded(int type) { return sets().folded[std::clamp(type, 0, POLY_COUNT - 1)]; }
 
 const std::vector<V4>& polyFaces(int type) { return faces()[std::clamp(type, 0, POLY_COUNT - 1)]; }
 
@@ -79,8 +166,21 @@ const std::vector<std::pair<int, int>>& polyEdges(int type) {
 }
 
 double polyCircumRatio(int type) {
-  static const double r[POLY_COUNT] = {3.0, std::sqrt(3.0), std::sqrt(3.0), 1.2584, 1.2584};
-  return r[std::clamp(type, 0, POLY_COUNT - 1)];
+  static const double r3[POLY_3D_COUNT] = {3.0, std::sqrt(3.0), std::sqrt(3.0), 1.2584, 1.2584};
+  type = std::clamp(type, 0, POLY_COUNT - 1);
+  if (!polyIs4D(type)) return r3[type];
+  // a vertex direction v reaches the boundary where max_i v.n_i = 1 (inradius 1)
+  static double r4[POLY_COUNT] = {0};
+  if (r4[type] == 0) {
+    double worst = 1;
+    for (auto& v : sets().verts[type]) {
+      double m = -1e30;
+      for (auto& f : polyFaces(type)) m = std::max(m, dot(v, f));
+      if (m > 1e-9) worst = std::max(worst, 1 / m);
+    }
+    r4[type] = worst;
+  }
+  return r4[type];
 }
 
 double polyFlatDihedral(int type) { return PI - std::acos(polyAdjCos(type)); }
@@ -119,13 +219,19 @@ double honeycombInradius(const Honeycomb& h) {
 // ---------------------------------------------------------------- distances
 double polyDistFlat(int type, double h, const V4& u) {
   double d = -1e30;
-  for (auto& f : polyFaces(type)) d = std::max(d, u[0] * f[0] + u[1] * f[1] + u[2] * f[2] - h);
+  if (polySignSymmetric(type)) {
+    V4 a{std::abs(u[0]), std::abs(u[1]), std::abs(u[2]), std::abs(u[3])};
+    for (auto& f : polyFacesFolded(type)) d = std::max(d, dot(a, f) - h);
+    return d;
+  }
+  for (auto& f : polyFaces(type)) d = std::max(d, dot(u, f) - h);  // (3D: f.w = 0)
   return d;
 }
 
 static double asinK(double k, double x) { return k > 0 ? std::asin(std::clamp(x, -1.0, 1.0)) : std::asinh(x); }
 
 double polyDistCurved(const Space& s, int type, double hWorld, const V4& q) {
+  if (polyIs4D(type)) type = POLY_CUBE;  // (4D polytopes exist in flat 4D only)
   double k = s.k(), t = hWorld / s.R(), Ct = cs::C(k, t), St = cs::S(k, t);
   double d = -1e30;
   for (auto& f : polyFaces(type)) {

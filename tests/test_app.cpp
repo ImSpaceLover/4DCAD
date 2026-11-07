@@ -1027,6 +1027,26 @@ int main() {
   }
 #endif
 
+  {  // undo keeps differences, not copies of the scene
+    App u;
+    u.loadScene(playgroundScene());
+    for (int i = 0; i < 300; i++) u.root.children.push_back(makeShape("sphere", "s" + std::to_string(i), {double(i), 1, 0, 0}));
+    u.commit();
+    std::string start = u.snapshotForTest();
+    size_t sceneBytes = start.size();
+    Node* s0 = &u.root.children.back();
+    std::string id = s0->id;
+    for (int i = 0; i < 100; i++) { findNode(u.root, id)->xf.pos[1] = 2 + i * 0.01; u.commit(); }
+    CHECK(u.undoSteps() >= 100, "100 undo steps (%zu)", u.undoSteps());
+    CHECK(u.undoBytes() < sceneBytes * 2, "undo memory %zu bytes for 100 edits of a %zu-byte scene", u.undoBytes(), sceneBytes);
+    for (int i = 0; i < 100; i++) u.undo();
+    CHECK(u.snapshotForTest() == start, "undo restores the scene exactly");
+    for (int i = 0; i < 100; i++) u.redo();
+    CHECK(std::abs(findNode(u.root, id)->xf.pos[1] - (2 + 99 * 0.01)) < 1e-9, "redo restores the last edit");
+    for (int i = 0; i < 50; i++) u.undo();
+    CHECK(std::abs(findNode(u.root, id)->xf.pos[1] - (2 + 49 * 0.01)) < 1e-9, "undo after redo");
+  }
+
   std::printf("%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

@@ -16,7 +16,8 @@ fields (SDFs) and drawn by ray marching on the GPU. It has two rendering methods
 
 ## Running
 
-**Windows:** run `release/4DCAD.exe`. No installation is needed. It draws with
+**Windows:** download `4DCAD.exe` from the repository's **Releases** page (or the latest CI
+run's artifact, below) and run it. No installation is needed. It draws with
 **Vulkan** when the graphics driver supports it (better on AMD cards) and otherwise with
 **OpenGL 3.3+**; Settings > Rendering > Graphics API (or `--vulkan` / `--gl`) chooses. Keep the
 driver up to date.
@@ -24,6 +25,7 @@ driver up to date.
 **CI builds:** every push is built and tested by GitHub Actions (`.github/workflows/build.yml`).
 The latest Windows exe can be downloaded from the run's **4DCAD-windows** artifact
 (Actions tab → the run → Artifacts). Pushing a tag such as `v1.2` also attaches the exe to a GitHub Release.
+Executables are not committed to the repository (they would grow its history with every build).
 
 **Building from source** (Windows or Linux) needs CMake ≥ 3.16, a C++17
 compiler and git. Dependencies (GLFW, Dear ImGui, nlohmann/json) are downloaded
@@ -40,7 +42,9 @@ cmake --build build --config Release
 The executable is `build/4DCAD` (or `build/Release/4DCAD.exe` with Visual
 Studio). On Linux, install the X11/GL development packages first:
 `sudo apt install libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev`.
-Run the tests with `ctest --test-dir build`.
+Run the tests with `ctest --test-dir build`: `fdtests` (core: geometry, SDFs, scene files, animation),
+`fdapptests` (editor logic) and `fdshadertests` (the generated shader of every example and test scene,
+in every view and lighting model, compiles with glslang for Vulkan and OpenGL; no GPU needed).
 
 To cross-compile the Windows exe on Linux (MinGW-w64):
 
@@ -171,6 +175,10 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
   Examples: Point → Extrude → Extrude → Extrude → Extrude is a tesseract. Point → Extrude → Revolve → Extrude (infinite) is an infinite rod. A whole group can be extruded or revolved into the next dimension.
 * **Library** (left):
   * Built-in folders (Basic, 3D shapes, 4D shapes) are read-only. Their items are just points with modifiers, so you can tweak them after placing.
+  * **Polyhedra & tilings** also holds the six **regular 4D polytopes** (flat 4D scenes): 5-cell,
+    8-cell (tesseract), 16-cell, 24-cell, 120-cell and 600-cell, solids bounded by flat 3D cells
+    (tetrahedra, cubes, octahedra, dodecahedra), sized by their inradius. The view shows their 3D
+    cross-section; move along W or rotate them in 4D to see it change.
   * "Save to library" (scene tree button or right-click) stores the selected object in **Custom**.
   * **+ Folder** adds folders. Right-click folders and items to rename, move, export or delete.
   * Drag items onto a folder to move them (built-ins are copied). Drag scene-tree rows onto a folder to save them there.
@@ -239,8 +247,18 @@ Settings > Rendering > **Lighting model** (saved, part of render presets):
     sampling), so small and large lights both converge.
   * Light bounces between surfaces (Bounces setting; Russian roulette after 3).
   * No ambient light: with **Sky intensity** 0 and nothing glowing, the image is black.
-  * Works in Full 4D (directions in 4D), the Geodesic view (light travels along the world surface;
-    there the sun and glowing objects found by the paths light the scene) and curved spaces.
+  * Works in Full 4D (directions in 4D), the Geodesic view and curved spaces. In the Geodesic view
+    light travels along the world surface: shadow rays home in on glowing objects and point lights
+    along it (as the simple model's point lights do), with the light's solid angle measured on arrival.
+  * **4D light falloff** (Full 4D): light spreads over 3D spheres in 4D, so it fades with distance³ and
+    lamps look weak. "Like 3D" (default) makes glowing objects fade with distance², as you know it;
+    "Physical" keeps the true 4D falloff.
+  * **Display:** samples are averaged as linear light, then **Exposure** (stops), **Tone mapping**
+    (filmic ACES: bright light rolls off instead of burning out; or clip) and gamma are applied.
+  * **Denoise** (with a strength): an edge-aware à-trous filter (5 passes) guided by a cheap extra
+    pass with the first surface's colour and depth, so edges and textures stay sharp. It does less
+    as samples add up. Light that reaches a path after a diffuse bounce is capped (fireflies from
+    caustics), a common, slight bias.
 * **Sky intensity** (both models): brightness of the sky. In the Geodesic view the "sky" is the
   colour of the world surface that far rays reach, so it also darkens the fog there. With simple
   lighting, the rim light on grazing surfaces now follows the ambient setting, so sun 0, ambient 0
@@ -310,6 +328,15 @@ Settings > Rendering > **Lighting model** (saved, part of render presets):
   the UI always gets its turn. Offline renders and headless screenshots still
   render on the UI thread (`--threads` forces the threads in headless runs;
   `FD_FRAME_STATS=1` prints UI frame times at exit).
+* **Shader cache on disk** (settings folder, `shadercache/`, at most 400 files): Vulkan keeps the
+  compiled SPIR-V of each shader (glslang is the slow part) and a pipeline cache; OpenGL keeps
+  program binaries where the driver offers them. Reopening a scene does not compile it again.
+* **Unchanged scene data is reused:** the per-object data is packed (and, with OpenGL, uploaded)
+  only when the scene, the selection highlight or (curved spaces) the camera changed, not for
+  every tile, refinement sample or extra pass.
+* **Custom code watchdog:** every `for` / `while` loop in custom SDF code also stops after 4096
+  iterations per call, so a loop that never ends gives a wrong shape instead of freezing the GPU
+  (and resetting the driver).
 * **Bounding spheres.** Each node has a bounding hypersphere, so distant
   subtrees are skipped while marching.
 * **One `map()` call site.** The shader's main loop is a single state machine
@@ -335,13 +362,19 @@ src/codegen.*, shaders.hpp    scene → GLSL, ray-marching shader
 src/renderer.*, gl.*          renderer (shared part), OpenGL / Vulkan backends, function loader
 src/media.*                   PNG / JPEG / GIF / AVI writers, ffmpeg pipe
 src/render_job.cpp            offline renders (Render window)
+src/render_thread.*           viewport / thumbnail render threads
+src/vk_context.*, render_vk   Vulkan device, frame loop, backend; render_gl.cpp: OpenGL backend
 src/space.*                   curved spaces: hyperboloid / 3-sphere model, isometries, geodesics
-src/polytope.*                regular polyhedra and honeycombs
-src/app.*                     state, tools, undo, explore movement, thumbnail
+src/polytope.*                regular polyhedra, 4D polytopes and honeycombs
+src/app.*                     state, scene lifecycle, undo, animation, selection, placement
+src/app_camera.cpp            camera objects, views and modes
+src/app_edit.cpp              transforms, gizmos, snapping, viewport input
+src/app_render.cpp            frame parameters, lights, what the viewport / thumbnail draw
+src/app_settings.cpp          per-user settings, render presets
 src/ui*.cpp, ui_common.hpp    ImGui interface (ui.cpp core, ui_toolbar / ui_library / ui_tree /
                               ui_properties / ui_viewport / ui_windows / ui_timeline / ui_render panels)
 src/filedialog.*, main.cpp    native file dialogs, window
-tests/                        core and app-level unit tests (ctest)
+tests/                        core, app-level and shader-compile tests (ctest); tests/scenes: test scenes
 ```
 
 ## Files

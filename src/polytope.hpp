@@ -19,16 +19,29 @@
 
 namespace fd {
 
-enum PolyType { POLY_TETRA = 0, POLY_CUBE, POLY_OCTA, POLY_DODECA, POLY_ICOSA, POLY_COUNT };
-inline const char* POLY_NAMES[POLY_COUNT] = {"Tetrahedron", "Cube", "Octahedron", "Dodecahedron", "Icosahedron"};
+// 3D polyhedra (flat 4D: thin along w; curved spaces: true polyhedra) and the regular 4D polytopes
+// (polychora; flat 4D only), all as intersections of half-spaces: a facet plane at the inradius
+// along each facet normal. A polytope's facet normals are its dual's vertex directions.
+enum PolyType {
+  POLY_TETRA = 0, POLY_CUBE, POLY_OCTA, POLY_DODECA, POLY_ICOSA,
+  POLY_5CELL, POLY_8CELL, POLY_16CELL, POLY_24CELL, POLY_120CELL, POLY_600CELL, POLY_COUNT
+};
+constexpr int POLY_3D_COUNT = 5;
+inline const char* POLY_NAMES[POLY_COUNT] = {"Tetrahedron", "Cube", "Octahedron", "Dodecahedron", "Icosahedron",
+                                             "5-cell", "8-cell (tesseract)", "16-cell", "24-cell", "120-cell", "600-cell"};
+inline bool polyIs4D(int type) { return type >= POLY_3D_COUNT; }
 
-/** Unit face directions (x, y, z, 0). */
+/** Unit facet normals (3D polyhedra: (x, y, z, 0)). */
 const std::vector<V4>& polyFaces(int type);
+/** 4D polytopes symmetric under every coordinate sign change (all but the 5-cell): distances fold
+ *  the point into the positive orthant and need only these normals (all components >= 0). */
+bool polySignSymmetric(int type);
+const std::vector<V4>& polyFacesFolded(int type);
 /** Pairs of adjacent faces (one per edge). */
 const std::vector<std::pair<int, int>>& polyEdges(int type);
 /** cos of the angle between adjacent face directions. */
 double polyAdjCos(int type);
-/** Flat circumradius / inradius. */
+/** Flat circumradius / inradius (3D and 4D). */
 double polyCircumRatio(int type);
 /** Flat dihedral angle (radians). */
 double polyFlatDihedral(int type);

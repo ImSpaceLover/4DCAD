@@ -172,8 +172,13 @@ void UI::propertiesPanel() {
     if (n->isPolytope()) {
       PolyParams& pp = n->poly;
       if (n->isPoly()) {
-        ImGui::SeparatorText("Polyhedron (flat faces)");
-        if (ImGui::Combo("Type", &pp.type, POLY_NAMES, POLY_COUNT)) done = true;
+        ImGui::SeparatorText(polyIs4D(pp.type) ? "Regular 4D polytope (flat cells)" : "Polyhedron (flat faces)");
+        // (4D polytopes: flat 4D only; curved spaces are 3D)
+        if (ImGui::Combo("Type", &pp.type, POLY_NAMES, app.curved() ? POLY_3D_COUNT : POLY_COUNT)) done = true;
+        if (polyIs4D(pp.type) && ImGui::IsItemHovered())
+          ImGui::SetTooltip("A 4D solid bounded by 3D cells: 5-cell (5 tetrahedra), 8-cell (8 cubes), 16-cell (16 tetrahedra),\n"
+                            "24-cell (24 octahedra), 120-cell (120 dodecahedra), 600-cell (600 tetrahedra).\n"
+                            "The view shows its 3D cross-section; move along W to see it change");
         float sz = (float)pp.size;
         if (ImGui::DragFloat("Inradius", &sz, 0.01f, 0.01f, 100.f)) { pp.size = std::max(0.01f, sz); live = true; }
         if (ImGui::IsItemDeactivatedAfterEdit()) done = true;

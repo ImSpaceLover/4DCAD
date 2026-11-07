@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -80,6 +83,21 @@ bool VulkanContext::init(GLFWwindow* win, std::string& err) {
   dci.enabledExtensionCount = 1;
   dci.ppEnabledExtensionNames = dext;
   VKCHECK(vkCreateDevice(phys, &dci, nullptr, &device));
+  {  // the pipeline cache (the driver checks the saved data and ignores it if it is from another device / version)
+    std::vector<char> data;
+    if (!pipelineCachePath.empty()) {
+      std::ifstream in(pipelineCachePath, std::ios::binary);
+      if (in) data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    VkPipelineCacheCreateInfo pci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    pci.initialDataSize = data.size();
+    pci.pInitialData = data.empty() ? nullptr : data.data();
+    if (vkCreatePipelineCache(device, &pci, nullptr, &pipelineCache) != VK_SUCCESS) {
+      pci.initialDataSize = 0;
+      pci.pInitialData = nullptr;
+      vkCreatePipelineCache(device, &pci, nullptr, &pipelineCache);
+    }
+  }
   volkLoadDevice(device);
   vkGetDeviceQueue(device, queueFamily, 0, &queue);
 
@@ -413,6 +431,20 @@ void VulkanContext::shutdown() {
   }
   vkDeviceWaitIdle(device);
   destroySwapchain();
+  if (pipelineCache) {
+    size_t n = 0;
+    if (!pipelineCachePath.empty() && vkGetPipelineCacheData(device, pipelineCache, &n, nullptr) == VK_SUCCESS && n > 0) {
+      std::vector<char> data(n);
+      if (vkGetPipelineCacheData(device, pipelineCache, &n, data.data()) == VK_SUCCESS) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(pipelineCachePath).parent_path(), ec);
+        std::ofstream out(pipelineCachePath, std::ios::binary);
+        out.write(data.data(), (std::streamsize)n);
+      }
+    }
+    vkDestroyPipelineCache(device, pipelineCache, nullptr);
+    pipelineCache = VK_NULL_HANDLE;
+  }
   for (auto& [t, p] : pools_) vkDestroyCommandPool(device, p, nullptr);
   pools_.clear();
   for (auto& f : frames) {

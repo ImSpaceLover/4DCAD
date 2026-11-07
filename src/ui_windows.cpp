@@ -85,6 +85,24 @@ void UI::qualityWindow() {
                             "Used where the image is refined (the still viewport, renders); moving views stay simple.");
       }
       Ff("Sky intensity", q.skyIntensity, 0, 3, "%.2f", "Brightness of the sky (Geodesic view: of the world surface seen far away).\n0 = black. Path traced: the sky's light on the scene");
+      if (q.lighting == 1) {
+        ImGui::Indent();
+        Ff("Exposure", q.exposure, -6, 6, "%+.1f stops", "Path traced: brightness of the image (x 2^stops)");
+        const char* tms[2] = {"Clip", "Filmic (ACES)"};
+        ImGui::Combo("Tone mapping", &q.tonemap, tms, 2);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Filmic: very bright light rolls off smoothly instead of burning out to flat white");
+        ImGui::Checkbox("Denoise", &q.denoise);
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Smooths the noise of path tracing, keeping edges (guided by the surfaces' colour and depth).\n"
+                            "It does less as samples add up");
+        if (q.denoise) { ImGui::SameLine(); ImGui::SetNextItemWidth(120); ImGui::SliderFloat("##dns", &q.denoiseStrength, 0.1f, 3.f, "strength %.1f"); }
+        const char* l4[2] = {"Physical (distance^3)", "Like 3D (distance^2)"};
+        ImGui::Combo("4D light falloff", &q.light4D, l4, 2);
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Full 4D: light spreads over 3D spheres, so it fades with distance^3 and lamps\n"
+                            "look weak. \"Like 3D\" makes glowing objects fade with distance^2, as you know it");
+        ImGui::Unindent();
+      }
       ImGui::Checkbox("Soft shadows", &q.shadows);
       Ff("Shadow sharpness", q.shadowK, 2, 64, "%.0f");
       Ff("Shadow distance", q.shadowMax, 1, 50, "%.0f");

@@ -824,8 +824,36 @@ bool lightCone(int j, vec4 x, out vec4 c, out float a, out float dist) {
   a = asin(s);
   return true;
 }
+// the area light (glowing object in the light list) whose sphere contains x, -1 if none
+int areaLightAt(vec4 x) {
+  for (int j = 0; j < 8; j++) {
+    if (j >= u_nLights) break;
+    if (u_lext[j].y < 0.5) continue;
+#ifdef VIEW_CURVED
+    if (cdist(x, u_lpos[j]) <= u_lext[j].x * 1.05) return j;
+#else
+    if (length(x - u_lpos[j]) <= u_lext[j].x * 1.05) return j;
+#endif
+  }
+  return -1;
+}
+// Full 4D, "like 3D" falloff (setting): light from a glowing object dist away is scaled by
+// dist / its radius, so it fades with distance^2 instead of ^3 (the same factor whichever way
+// the light is found, so the two sampling strategies still agree)
+float lightComp(vec4 x, float dist) {
+#ifdef PT_DIM3
+  return 1.0;
+#else
+  if (f_f.y < 0.5) return 1.0;
+  int j = areaLightAt(x);
+  return j < 0 ? 1.0 : max(dist / max(u_lext[j].x, 1e-3), 1.0);
+#endif
+}
 // probability density of light sampling choosing direction w at x (all cones containing it)
 float lightPdf(vec4 x, vec4 w, int nl, float ncand) {
+#ifdef VIEW_GEO
+  return 0.0;  // (the Geodesic view finds its lights by homing along the surface: no cones)
+#endif
   float p = 0.0;
   for (int j = 0; j < 8; j++) {
     if (j >= nl) break;
@@ -834,6 +862,14 @@ float lightPdf(vec4 x, vec4 w, int nl, float ncand) {
     if (lightCone(j, x, c, a, dist) && mdot(w, c) >= cos(a)) p += capPdf(a);
   }
   return p / max(ncand, 1.0);
+}
+// light reaching a path after a diffuse bounce is capped: rare very bright paths (a lamp seen
+// through glass from a floor: caustics) would show as fireflies for a long time (a common, slight
+// bias; mirrors and glass seen directly keep their full brightness)
+bool g_hadDiffuse = false;
+vec3 capIndirect(vec3 c, int depth) {
+  float m = max(c.r, max(c.g, c.b));
+  return g_hadDiffuse && m > 4.0 ? c * (4.0 / m) : c;
 }
 float G1(float x, float a2) { return 2.0 * x / (x + sqrt(a2 + (1.0 - a2) * x * x)); }
 vec3 fresnel(vec3 F0, float c) { return F0 + (1.0 - F0) * pow(1.0 - clamp(c, 0.0, 1.0), 5.0); }
@@ -858,7 +894,11 @@ const int MARCH = 0, NORMAL = 1, SHADOW = 3, DONE = 4;
 
 void main() {
   g_seed = pcg(uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(u_sample) * 26699u) | 1u;
+#ifdef PT_GUIDE
+  vec2 jit = vec2(0.0);  // the denoiser's guide: pixel centres
+#else
   vec2 jit = (vec2(rnd(), rnd()) - 0.5) * 2.0 / u_res.y;  // a random point inside the pixel
+#endif
   vec2 uv = v_uv * vec2(u_res.x / u_res.y, 1.0) + jit;
   vec4 ro = u_eye;
   vec4 rd = normalize(u_frame * vec4(uv * u_tanHalf, 1.0, 0.0));
@@ -903,11 +943,13 @@ void main() {
   // after a diffuse bounce: the light-sampling and the BSDF densities of the direction taken (MIS)
   bool lastDiffuse = false;
   float misPL = 0.0, misPB = 1.0;
-#ifdef VIEW_GEO
-  int nLights = 0;  // the Geodesic view: the sun only (light travels along the surface)
-#else
   int nLights = u_nLights;
-#endif
+  // Geodesic view: light travels along the surface, so a shadow ray homes in on its light (slp)
+  // the way the simple model's point lights do; neeR = the glowing object's radius
+  bool homing = false;
+  vec4 slp = vec4(0.0);
+  float neeR = 0.0;
+  int neeLi = 0;
   float ncand = float((u_sunI > 0.0 ? 1 : 0) + nLights);
 
   for (int it = 0; it < 3000; it++) {
@@ -994,8 +1036,21 @@ void main() {
         }
         // ---- a surface: its own light, then one light's direct light, then the path goes on ----
         g_base = hm[0].rgb;
+#ifdef PT_GUIDE
+        accum = g_base;  // the guide: the first surface's colour (and depth, below)
+        phase = DONE; toSky = false;
+        continue;
+#endif
         float emis = clamp(hm[1].x, 0.0, 1.0);
-        if (emis > 0.0) accum += thr * g_base * emis * max(hm[2].z, 0.0) * (lastDiffuse ? misPB / (misPB + misPL) : 1.0);
+        if (emis > 0.0) {
+#ifdef VIEW_GEO
+          // glowing objects in the light list are found by the homing shadow rays after diffuse bounces
+          float w = lastDiffuse && areaLightAt(hp) >= 0 ? 0.0 : 1.0;
+#else
+          float w = lastDiffuse ? misPB / (misPB + misPL) : 1.0;
+#endif
+          accum += capIndirect(thr * g_base * emis * max(hm[2].z, 0.0) * w * (depth > 0 ? lightComp(hp, t - t0) : 1.0), depth);
+        }
         if (depth == 0 && hm[0].a > 0.0) accum += vec3(1.0, 0.6, 0.15) * hm[0].a * 0.3;  // selection highlight
         float metal = clamp(hm[2].x, 0.0, 1.0);
         g_alpha = max(clamp(hm[1].y, 0.02, 1.0) * clamp(hm[1].y, 0.02, 1.0), 0.002);
@@ -1011,8 +1066,26 @@ void main() {
           int pick = min(int(rnd() * ncand), int(ncand) - 1);
           int li = u_sunI > 0.0 ? pick : pick + 1;  // 0 = the sun, 1.. = lights
           neeArea = li > 0 && u_lext[li - 1].y > 0.5;
+          neeLi = li;
+          homing = false;
           vec4 L = n;
           float cosL = 0.0;
+#ifdef VIEW_GEO
+          if (li > 0) {
+            // home in on the light along the surface (a glowing object: a random point inside it, so
+            // its shadows come out soft); its solid angle is known when the ray arrives
+            homing = true;
+            neeR = u_lext[li - 1].x;
+            slp = u_lpos[li - 1];
+            if (neeArea) { vec4 g = vec4(rndGauss(), rndGauss(), rndGauss(), rndGauss()); slp += normalize(g) * neeR * 0.7 * pow(rnd(), 0.25); }
+            L = slp - hp;
+            L -= dot(L, wn) * wn;
+            L = dot(L, L) > 1e-12 ? normalize(L) : n;
+            cosL = mdot(n, L);
+            neeF = neeArea ? thr * ncand * (g_kd * g_base / COS_NORM) * cosL : thr * ncand * evalBsdfCos(n, -dir, L) * COS_NORM;
+            shMax = neeArea ? u_maxDist : u_lcol[li - 1].w;
+          } else
+#endif
           if (neeArea) {
             vec4 c; float a, dist;
             if (lightCone(li - 1, hp, c, a, dist)) {
@@ -1045,14 +1118,29 @@ void main() {
     } else {  // SHADOW: does the light get here?
       sSteps++;
       bool blocked = d < max(u_eps * 2.0, 0.002);
-      bool outOfSteps = sSteps > u_shadowSteps * (neeArea ? 2 : 1);
-      if (blocked || st > shMax || outOfSteps) {
-        if (neeArea) { if (blocked && mm[1].x > 0.0) accum += neeF * mm[0].rgb * clamp(mm[1].x, 0.0, 1.0) * max(mm[2].z, 0.0); }
-        else if (!blocked && !outOfSteps) accum += neeF;  // (a ray that ran out of steps cannot confirm its light)
+      bool outOfSteps = sSteps > u_shadowSteps * (homing ? 4 : neeArea ? 2 : 1);
+      bool arrived = homing && !neeArea && length(slp - sp) < max(u_lightRadius, 0.15);  // (Geodesic: a point light reached)
+      if (blocked || st > shMax || outOfSteps || arrived) {
+        if (neeArea) {
+          if (blocked && mm[1].x > 0.0) {
+            vec3 Le = mm[0].rgb * clamp(mm[1].x, 0.0, 1.0) * max(mm[2].z, 0.0);
+#ifdef VIEW_GEO
+            // (the light's solid angle seen from where the shadow ray started, at the distance it travelled)
+            float sa = min(neeR / max(st, 1e-3), 1.0);
+            accum += capIndirect(neeF * Le * (2.0 * PT_PI * (1.0 - sqrt(1.0 - sa * sa))), depth);
+#else
+            accum += capIndirect(neeF * Le * lightComp(sp, st + 0.01), depth);
+#endif
+          }
+        } else if (arrived) {
+          float a = clamp(1.0 - st / max(u_lcol[neeLi - 1].w, 1e-3), 0.0, 1.0);  // (fades along the surface, as in the simple model)
+          accum += neeF * u_lcol[neeLi - 1].rgb * a * a;
+        } else if (!homing && !blocked && !outOfSteps) accum += neeF;  // (a ray that ran out of steps cannot confirm its light)
         bounce = true;
       } else {
 #ifdef VIEW_GEO
         h = clamp(d, 0.03, u_geoMaxStep);
+        if (homing && !neeArea) h = min(h, max(length(slp - sp) * 0.5, 0.03));  // (do not overshoot a point light)
 #else
         float remain = max(shMax - st, 0.0);
         h = clamp(d, 0.02, max(0.4, remain / float(max(u_shadowSteps - sSteps, 1))));
@@ -1103,6 +1191,7 @@ void main() {
             misPB = (1.0 - g_ps) * max(mdot(n, L), 0.0) / COS_NORM;
             misPL = lightPdf(hp, L, nLights, ncand);
             lastDiffuse = true;
+            g_hadDiffuse = true;
             dir = L;
           }
           p = geoPoint(hp, n, u_eps * 4.0);
@@ -1123,6 +1212,7 @@ void main() {
 #ifdef VIEW_GEO
       ap += adir * h;
       vec4 nn = projectToWorld(ap);   // the only world-projection site
+      if (phase == SHADOW && homing) adir = slp - ap;  // homing in on the light along the surface
       adir = adir - dot(adir, nn) * nn;
       adir = dot(adir, adir) > 1e-12 ? normalize(adir) : sdir;
 #elif defined(VIEW_CURVED)
@@ -1142,6 +1232,10 @@ void main() {
     }
   }
 
+#ifdef PT_GUIDE
+  fragColor = vec4(firstT >= 0.0 ? accum : vec3(-1.0), firstT >= 0.0 ? firstT : 1e4);
+  return;
+#endif
   vec3 col = accum;
   if (toSky) col += thr * sky(p, dir, rayWorldCol);  // the sky's light (Geodesic: the world surface's colour)
   if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
@@ -1156,13 +1250,48 @@ void main() {
 // unit ball) or the stereographic projection (spherical: the half of the space around the origin
 // fills the unit ball, more out to radius 1.6). Rays are straight in the ball; each step converts
 // the scene distance with the conformal factor (lengths in the ball = world / R * (1 -+ |x|^2) / 2).
-/** Path tracing's display pass: the linear accumulated image, gamma-encoded. */
-inline std::string resolveShader(ShaderTarget t) {
-  std::string body = "void main() {\n  vec3 c = texelFetch(u_src, ivec2(gl_FragCoord.xy), 0).rgb;\n"
-                     "  fragColor = vec4(pow(max(c, vec3(0.0)), vec3(0.4545)), 1.0);\n}\n";
-  if (t == ShaderTarget::OpenGL) return "#version 330 core\nuniform sampler2D u_src;\nin vec2 v_uv;\nout vec4 fragColor;\n" + body;
-  return "#version 450\nlayout(set = 0, binding = 0) uniform sampler2D u_src;\nlayout(location = 0) in vec2 v_uv;\n"
-         "layout(location = 0) out vec4 fragColor;\n" + body;
+/** Full-screen post passes of path-traced images (PostOp): inputs u_a, u_b, parameters u_p0, u_p1. */
+inline std::string postShader(int op, ShaderTarget t) {
+  std::string head = t == ShaderTarget::OpenGL
+                         ? "#version 330 core\nuniform sampler2D u_a;\nuniform sampler2D u_b;\nuniform vec4 u_p0;\nuniform vec4 u_p1;\nout vec4 fragColor;\n"
+                         : "#version 450\nlayout(set = 0, binding = 0) uniform sampler2D u_a;\nlayout(set = 0, binding = 1) uniform sampler2D u_b;\n"
+                           "layout(push_constant) uniform Post { vec4 u_p0; vec4 u_p1; };\nlayout(location = 0) out vec4 fragColor;\n";
+  if (op == 0)  // resolve: exposure, tone mapping (filmic ACES fit / clip), gamma
+    return head + R"(
+vec3 aces(vec3 x) { return clamp(x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+void main() {
+  vec3 c = max(texelFetch(u_a, ivec2(gl_FragCoord.xy), 0).rgb, vec3(0.0)) * u_p0.x;
+  c = u_p0.y > 0.5 ? aces(c) : min(c, vec3(1.0));
+  fragColor = vec4(pow(c, vec3(0.4545)), 1.0);
+}
+)";
+  // a-trous wavelet filter (5x5 B3 spline at step u_p0.x), stopped at edges: colour differences
+  // (compared after a soft tone curve, relative), the guide's surface colour and its depth
+  return head + R"(
+vec3 soft(vec3 c) { return c / (1.0 + c); }
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy), sz = textureSize(u_a, 0);
+  vec3 c0 = texelFetch(u_a, c, 0).rgb;
+  if (any(isnan(c0)) || any(isinf(c0))) c0 = vec3(0.0);
+  vec3 s0 = soft(max(c0, vec3(0.0)));
+  vec4 g0 = texelFetch(u_b, c, 0);
+  int step = int(u_p0.x);
+  float sc = max(u_p0.y, 1e-4), sa = u_p0.z, sd = u_p0.w;
+  float k[3] = float[3](0.375, 0.25, 0.0625);
+  vec4 sum = vec4(0.0);  // (rgb: weighted colours, a: the weights)
+  for (int y = -2; y <= 2; y++)
+    for (int x = -2; x <= 2; x++) {
+      ivec2 q = clamp(c + ivec2(x, y) * step, ivec2(0), sz - 1);
+      vec4 ci = vec4(texelFetch(u_a, q, 0).rgb, 1.0);
+      if (any(isnan(ci)) || any(isinf(ci))) continue;  // (one bad value would spread over the whole kernel)
+      vec4 gi = texelFetch(u_b, q, 0);
+      vec3 dc = soft(max(ci.rgb, vec3(0.0))) - s0, da = gi.rgb - g0.rgb;
+      float dd = abs(gi.a - g0.a) / max(min(gi.a, g0.a), 1e-3);
+      sum += ci * (k[abs(x)] * k[abs(y)] * exp(-dot(dc, dc) / (sc * sc) - dot(da, da) / (sa * sa) - dd / sd));
+    }
+  fragColor = vec4(sum.rgb / max(sum.a, 1e-8), 1.0);
+}
+)";
 }
 
 inline const char* BALL_MAIN = R"(
@@ -1220,9 +1349,11 @@ void main() {
 }
 )";
 
-inline std::string buildFragmentShader(const std::string& sceneGLSL, bool geo, ShaderTarget t, int curved = 0, bool ball = false, bool pathTrace = false) {
+inline std::string buildFragmentShader(const std::string& sceneGLSL, bool geo, ShaderTarget t, int curved = 0, bool ball = false, bool pathTrace = false,
+                                       bool guide = false) {
   if (ball && curved) return shaderPrelude(t, false, curved) + sceneGLSL + BALL_MAIN;
-  return shaderPrelude(t, geo, curved) + sceneGLSL + RAYMARCH_COMMON + RAYMARCH_GRID + (pathTrace ? PATHTRACE_MAIN : SIMPLE_MAIN);
+  return shaderPrelude(t, geo, curved) + (pathTrace && guide ? "#define PT_GUIDE\n" : "") + sceneGLSL + RAYMARCH_COMMON + RAYMARCH_GRID +
+         (pathTrace ? PATHTRACE_MAIN : SIMPLE_MAIN);
 }
 
 }  // namespace fd

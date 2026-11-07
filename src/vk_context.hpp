@@ -53,6 +53,9 @@ struct VulkanContext {
   uint32_t imageIndex = 0;
   bool recording = false;
   VkDescriptorPool imguiPool = VK_NULL_HANDLE;
+  // compiled pipelines kept between runs (set the path before init; saved by shutdown)
+  std::string pipelineCachePath;
+  VkPipelineCache pipelineCache = VK_NULL_HANDLE;
   /** Called at the start of each frame once its previous use finished (renderer resets per-frame allocators). */
   std::function<void(int slot)> onFrameStart;
 

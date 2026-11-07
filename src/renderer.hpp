@@ -79,7 +79,25 @@ struct FrameParams {
   int tile[4] = {0, 0, 0, 0};
   bool ballView = false;   // curved: the Poincare ball / stereographic overview (view = outside camera in the ball)
   bool pathTrace = false;  // physically based path tracing (a separate shader; needs random samples)
+  bool ptGuide = false;    // path tracing: the denoiser's guide image (first hit's colour and depth), no jitter
+  // identifies the scene's content (changes with every edit); 0 = unknown. With it, the node data
+  // of an unchanged scene is reused instead of being packed (and uploaded) again
+  uint64_t sceneVersion = 0;
 };
+
+/** Full-screen post passes (path tracing). */
+enum PostOp { POST_RESOLVE = 0, POST_ATROUS = 1, POST_COUNT };
+/** How a path-traced image is shown. */
+struct PostSettings {
+  float exposure = 0;  // stops
+  int tonemap = 1;     // 0 = clip, 1 = filmic (ACES)
+  bool denoise = true;
+  float strength = 1;
+  int samples = 1;     // samples averaged so far (the denoiser does less as they add up)
+};
+inline PostSettings postSettings(const QualitySettings& q, int samples) {
+  return {q.exposure, q.tonemap, q.denoise, q.denoiseStrength, samples};
+}
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */
 struct FrameUniforms {
@@ -89,7 +107,7 @@ struct FrameUniforms {
   float a[4], b[4], c[4], d[4];
   int32_t i[4], j[4], k[4], l[4];
   float e[4];  // aperture, focus distance, accumulation weight (backend blend), 0
-  float f[4];  // sky intensity (path tracing), 0, 0, 0
+  float f[4];  // sky intensity, 4D light like 3D (path tracing), 0, 0
   float lpos[MAX_LIGHTS][4], lcol[MAX_LIGHTS][4];
   float lext[MAX_LIGHTS][4];  // radius, area light (1) / point light (0), 0, 0
   float dbg[MAX_DEBUG_PTS][4];
@@ -121,6 +139,8 @@ class Renderer {
   bool async() const { return async_; }
   /** The last render() waited for a program that is still being compiled. */
   bool compiling() const { return compiling_; }
+  /** Compiled shaders are kept in this folder between runs (empty: no disk cache). */
+  void setCacheDir(const std::string& dir) { cacheDir_ = dir; }
   /** Programs (and custom code checks) still being compiled. */
   int pendingCompiles() const { return (int)pending_.size() + (int)pendingCode_.size(); }
   /** The target's image for ImGui::Image (ImTextureID). */
@@ -130,9 +150,14 @@ class Renderer {
   virtual void destroy(RenderTarget& rt) = 0;
   /** Copies src into dst (resized to src's size). */
   virtual void copyTarget(const RenderTarget& src, RenderTarget& dst) = 0;
+  /** A full-screen pass: dst (resized to a's size) = op(a, b) with parameters p[8].
+   *  POST_RESOLVE: p0 = exposure factor, p1 = tonemap. POST_ATROUS: b = guide, p0 = step,
+   *  p1 = colour sigma, p2 = colour-guide sigma, p3 = depth sigma (relative). */
+  virtual void post(int op, const RenderTarget& a, const RenderTarget* b, RenderTarget& dst, const float* p) = 0;
   /** Path tracing accumulates linear light (averaging gamma-encoded samples would darken rare bright
-   *  ones): this writes src gamma-encoded into dst (resized to src's size) for display / saving. */
-  virtual void resolve(const RenderTarget& src, RenderTarget& dst) = 0;
+   *  ones). This shows it: optional denoising (guide: see FrameParams::ptGuide; tmp: two scratch
+   *  targets), exposure, tone mapping and gamma, into dst (display / saving). */
+  void present(const RenderTarget& acc, const RenderTarget* guide, RenderTarget* tmp, RenderTarget& dst, const PostSettings& s);
   /** Waits until this renderer's drawing has finished (render threads, before publishing an image). */
   virtual void flushAndWait() { finish(); }
   /** Sends the queued drawing to the GPU without waiting (OpenGL: glFlush). */
@@ -166,7 +191,13 @@ class Renderer {
   virtual void workerEnd() {}
   /** Call first in the backend destructor: stops the compile worker (before its context goes). */
   void stopWorker();
+  // ---- the shader disk cache (any thread): files named by a hash of the key (source + driver)
+  std::string cacheDir_;
+  std::string cachePath(const std::string& key, const char* ext) const;
+  bool cacheRead(const std::string& path, std::vector<uint8_t>& out) const;
+  void cacheWrite(const std::string& path, const void* data, size_t bytes) const;
   int scissor_[4] = {0, 0, 0, 0};  // the current draw's rectangle (x, y top-left, w, h; w = 0: all)
+  bool nodesChanged_ = true;       // the current draw's node data differs from the previous draw's
   /** Call from the backend destructor: frees all cached programs. */
   void clearPrograms();
 
@@ -176,11 +207,13 @@ class Renderer {
     CompiledScene cs;
   };
   std::unordered_map<std::string, Program> cache_;
+  std::vector<float> lastNodes_;
+  uint64_t lastNodesKey_ = 0;
   std::list<std::string> lru_;
   std::unordered_set<std::string> failed_;
   std::unordered_set<std::string> badCode_;
   std::unordered_map<std::string, std::string> codeErrors_;
-  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball, bool pt, bool& pending);
+  Program* get(Node& root, const PrimitiveRegistry& reg, const std::string& world, bool geo, SpaceKind space, bool ball, int pt, bool& pending);
   void insert(const std::string& key, Program p);
 
   // ---- background compiles: jobs run on worker_, results are applied on the calling thread

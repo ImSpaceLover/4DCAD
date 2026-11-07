@@ -208,6 +208,14 @@ struct QualitySettings {
   // moving / fast views use the simple model.
   int lighting = 0;
   float skyIntensity = 1.0f;      // path traced: brightness of the sky's light (0 = black)
+  // path traced images: display (applied after averaging the samples)
+  float exposure = 0.0f;          // stops (x 2^exposure)
+  int tonemap = 1;                // 0 = clip, 1 = filmic (ACES): bright light rolls off instead of burning out
+  bool denoise = true;            // edge-aware filter guided by the surfaces' colour and depth
+  float denoiseStrength = 1.0f;
+  // Full 4D: light from a glowing object falls off with distance^3 (physical, 4D) or like in 3D
+  // (distance^2: brightness behaves as you would expect from the real world)
+  int light4D = 1;                // 0 = physical (4D), 1 = like 3D
 };
 
 std::string newId(const char* prefix = "n");

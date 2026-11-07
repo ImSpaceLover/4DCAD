@@ -70,6 +70,9 @@ typedef std::ptrdiff_t GLsizeiptr;
 #define GL_ALREADY_SIGNALED 0x911A
 #define GL_CONDITION_SATISFIED 0x911C
 #define GL_SYNC_FLUSH_COMMANDS_BIT 0x00000001
+#define GL_PROGRAM_BINARY_LENGTH 0x8741
+#define GL_PROGRAM_BINARY_RETRIEVABLE_HINT 0x8257
+#define GL_NUM_PROGRAM_BINARY_FORMATS 0x87FE
 typedef struct __GLsync* GLsync;
 typedef uint64_t GLuint64;
 
@@ -138,9 +141,16 @@ typedef uint64_t GLuint64;
   X(GLenum, ClientWaitSync, (GLsync, GLbitfield, GLuint64))                                             \
   X(void, DeleteSync, (GLsync))
 
+// optional (GL 4.1 / ARB_get_program_binary): compiled shader programs cached on disk; null if missing
+#define FD_GL_OPTIONAL(X)                                                                               \
+  X(void, GetProgramBinary, (GLuint, GLsizei, GLsizei*, GLenum*, void*))                                \
+  X(void, ProgramBinary, (GLuint, GLenum, const void*, GLsizei))                                        \
+  X(void, ProgramParameteri, (GLuint, GLenum, GLint))
+
 namespace gl {
 #define FD_DECL(ret, name, args) typedef ret(FD_APIENTRY* PFN_##name) args; extern PFN_##name name;
 FD_GL_FUNCS(FD_DECL)
+FD_GL_OPTIONAL(FD_DECL)
 #undef FD_DECL
 /** Loads all functions; returns the name of the first missing one, or nullptr on success. */
 const char* load(void* (*getProc)(const char*));
