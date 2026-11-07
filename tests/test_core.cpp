@@ -994,6 +994,19 @@ int main() {
       md.code = "float shape(float d, vec4 p) {\n  return d - amount * q;\n}\n";
       CHECK(checkModifierDef(md).rfind("2:", 0) == 0, "modifier errors on the user's line: %s", checkModifierDef(md).c_str());
     }
+    // definition files: import registers them; ids of new definitions are free
+    {
+      TextureDef imp = td;
+      imp.id = "checker";  // (a built-in id: gets a fresh one)
+      imp.name = "Imported tex";
+      std::string nm = importDefinition(textureDefToJson(imp).dump());
+      CHECK(nm == "Imported tex" && defs().texture("user_imported_tex") != nullptr, "texture import with a fresh id");
+      CHECK(newDefId("Imported tex", true) == "user_imported_tex2", "next free id");
+      bool threw = false;
+      try { importDefinition("{\"format\":\"4dcad-scene\"}"); } catch (...) { threw = true; }
+      CHECK(threw, "importing a non-definition fails");
+      defs().eraseTexture("user_imported_tex");
+    }
     // animation paths of texture slots
     double v = 0;
     CHECK(setValue(leaf, "tex.bump.p.width", 0.6) && getValue(leaf, "tex.bump.p.width", v) && std::abs(v - 0.6) < 1e-12, "texture parameter path");

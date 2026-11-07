@@ -178,6 +178,8 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
 
   Examples: Point → Extrude → Extrude → Extrude → Extrude is a tesseract. Point → Extrude → Revolve → Extrude (infinite) is an infinite rod. A whole group can be extruded or revolved into the next dimension.
 * **Library** (left):
+  * **Modifiers** and **Textures** sections list every definition (built-in ones by category, then yours). Double-click adds a modifier to the selected objects / puts a texture on their colour; right-click: "Use on the selection" (any channel), Edit / View code, **Duplicate to edit**, **Export...** (`.4dmod.json` / `.4dtex.json`, imported with the Library's Import button), Delete (not while the scene uses it).
+  * **+ New modifier / + New texture** open the **definition editor**: name, category, description, a parameter table (name, label, type float / int / bool / enum / axis / colour, default, range or options), the code (with a template explaining the hooks and helpers) and, for modifiers, the safety factor and "adds a dimension". **Apply** checks the code (errors with line numbers) and updates every object using it. Your definitions are kept in `definitions.json` in the data folder and saved into scenes that use them.
   * Built-in folders (Basic, 3D shapes, 4D shapes) are read-only. Their items are just points with modifiers, so you can tweak them after placing.
   * **Polyhedra & tilings** also holds the six **regular 4D polytopes** (flat 4D scenes): 5-cell,
     8-cell (tesseract), 16-cell, 24-cell, 120-cell and 600-cell, solids bounded by flat 3D cells

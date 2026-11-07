@@ -1,4 +1,8 @@
 #include "library.hpp"
+#include <stdexcept>
+#include <cctype>
+#include <nlohmann/json.hpp>
+#include "defs.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -40,7 +44,55 @@ bool writeFile(const std::string& path, const std::string& text) {
 
 static std::string libPath() { return (std::filesystem::path(dataDir()) / "library.json").string(); }
 
+static std::string defsPath() { return (std::filesystem::path(dataDir()) / "definitions.json").string(); }
+
+void loadUserDefs() {
+  std::string text;
+  if (!readFile(defsPath(), text)) return;
+  try {
+    auto j = nlohmann::json::parse(text);
+    for (auto& d : j.value("modifiers", nlohmann::json::array())) try { defs().setModifier(modifierDefFromJson(d)); } catch (...) {}
+    for (auto& d : j.value("textures", nlohmann::json::array())) try { defs().setTexture(textureDefFromJson(d)); } catch (...) {}
+  } catch (...) { /* corrupt: ignore */ }
+}
+
+void saveUserDefs() {
+  nlohmann::json j = {{"format", "4dcad-definitions"}, {"version", 1}, {"modifiers", nlohmann::json::array()}, {"textures", nlohmann::json::array()}};
+  for (auto& d : defs().modifiers()) if (!d->builtin) j["modifiers"].push_back(modifierDefToJson(*d));
+  for (auto& d : defs().textures()) if (!d->builtin) j["textures"].push_back(textureDefToJson(*d));
+  writeFile(defsPath(), j.dump(1));
+}
+
+std::string importDefinition(const std::string& text) {
+  auto j = nlohmann::json::parse(text);
+  std::string fmt = j.value("format", std::string());
+  if (fmt == "4dcad-modifier") {
+    ModifierDef d = modifierDefFromJson(j);
+    if (auto old = defs().modifier(d.id); old && old->builtin) d.id = newDefId(d.name, false);
+    defs().setModifier(d);
+    saveUserDefs();
+    return d.name;
+  }
+  if (fmt == "4dcad-texture") {
+    TextureDef d = textureDefFromJson(j);
+    if (auto old = defs().texture(d.id); old && old->builtin) d.id = newDefId(d.name, true);
+    defs().setTexture(d);
+    saveUserDefs();
+    return d.name;
+  }
+  throw std::runtime_error("not a modifier or texture definition");
+}
+
+std::string newDefId(const std::string& name, bool texture) {
+  std::string base = "user_";
+  for (char c : name) base += std::isalnum((unsigned char)c) ? (char)std::tolower((unsigned char)c) : '_';
+  std::string id = base;
+  for (int k = 2; texture ? defs().texture(id) != nullptr : defs().modifier(id) != nullptr; k++) id = base + std::to_string(k);
+  return id;
+}
+
 LibraryStore::LibraryStore() {
+  loadUserDefs();
   folders = builtinFolders();
   std::string text;
   std::vector<LibraryFolder> user;

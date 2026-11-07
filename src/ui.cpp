@@ -1,5 +1,7 @@
 // UI core: frame, keys, file actions, unsaved-changes prompts.
 #include "ui_common.hpp"
+#include <nlohmann/json.hpp>
+#include "library.hpp"
 
 namespace fd {
 
@@ -30,6 +32,7 @@ void UI::frame(double dt) {
   if (showSdf_) sdfWindow();
   if (app.showLights) lightsWindow();
   if (showRender_) renderWindow();
+  if (showDefEditor_) defEditorWindow();
   pathPrompt();
   newSceneDialog();
   unsavedPrompt();
@@ -90,13 +93,19 @@ void UI::onKey(int key, int action, int mods) {
 // ============================================================ file actions
 void UI::fileAction(int action) {
   const char* titles[] = {"", "Open scene", "Save scene", "Import library item", "Export library", "Export object", "Export library object",
-                          "Import render preset", "Export render preset"};
+                          "Import render preset", "Export render preset", "Export definition"};
   std::string def;
   if (action == 2) def = app.currentFile.empty() ? "scene.4dscene.json" : app.currentFile;
   if (action == 4) def = "4dcad-library.json";
   if (action == 5) def = (app.selected() ? app.selected()->name : std::string("object")) + ".4dobj.json";
   if (action == 6) { auto* o = app.lib.find(exportPrimId_); def = (o ? o->name : std::string("object")) + ".4dobj.json"; }
   if (action == 8) def = presetSel_ + ".4dpreset.json";
+  if (action == 9) {
+    std::string nm = exportDefId_;
+    if (exportDefTex_) { if (auto d = defs().texture(exportDefId_)) nm = d->name; }
+    else if (auto d = defs().modifier(exportDefId_)) nm = d->name;
+    def = nm + (exportDefTex_ ? ".4dtex.json" : ".4dmod.json");
+  }
   if (!nativeDialogsAvailable()) {
     pendingAction_ = action;
     std::snprintf(pathBuf_, sizeof pathBuf_, "%s", def.c_str());
@@ -115,6 +124,11 @@ void UI::doFileAction(int action, const std::string& path) {
     case 3: {
       std::string text;
       if (!readFile(path, text)) { app.toast("Cannot read " + path, true); break; }
+      // a modifier / texture definition (.4dmod.json / .4dtex.json) or library objects
+      if (text.find("\"4dcad-modifier\"") != std::string::npos || text.find("\"4dcad-texture\"") != std::string::npos) {
+        try { app.toast("Imported the definition " + importDefinition(text)); } catch (const std::exception& e) { app.toast(e.what(), true); }
+        break;
+      }
       try { app.toast("Imported " + app.lib.importText(text) + " into the library"); } catch (const std::exception& e) { app.toast(e.what(), true); }
       break;
     }
@@ -131,6 +145,13 @@ void UI::doFileAction(int action, const std::string& path) {
       break;
     }
     case 8: if (app.exportPreset(presetSel_, path, err)) app.toast("Exported preset " + presetSel_); else app.toast(err, true); break;
+    case 9: {
+      std::string text;
+      if (exportDefTex_) { if (auto d = defs().texture(exportDefId_)) text = textureDefToJson(*d).dump(1); }
+      else if (auto d = defs().modifier(exportDefId_)) text = modifierDefToJson(*d).dump(1);
+      if (!text.empty()) writeFile(path, text) ? app.toast("Exported " + path) : app.toast("Cannot write " + path, true);
+      break;
+    }
     case 6: {
       if (auto* o = app.lib.find(exportPrimId_)) writeFile(path, libraryObjectToJson(*o)) ? app.toast("Exported " + o->name) : app.toast("Cannot write", true);
       break;

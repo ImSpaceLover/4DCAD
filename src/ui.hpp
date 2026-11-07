@@ -1,5 +1,6 @@
 #pragma once
 #include "app.hpp"
+#include "defs.hpp"
 #include "imgui.h"
 
 #include <functional>
@@ -19,7 +20,7 @@ class UI {
   void onScroll(double y) { wheel_ += y; }
   bool exitNow = false;  // set once quitting is confirmed
   void requestQuit();    // asks to save unsaved changes first
-  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "new") openNewScene_ = true; if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
+  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "new") openNewScene_ = true; if (what == "defs") openDefEditor(false, "twist", true); if (what == "texdefs") openDefEditor(true, "", false); if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
 
  private:
   App& app;
@@ -96,6 +97,16 @@ class UI {
   /** Per-value keying in Properties: a diamond next to the last widget, right-click menu. */
   void keyable(const std::string& target, const std::vector<std::string>& paths);
   void textureSlot(Node& n, int ch, bool& live, bool& done);  // a material channel's texture (Properties)
+  // modifier / texture definitions: Library sections and the editor window (ui_defs.cpp)
+  void defsLibrary();
+  void defEditorWindow();
+  void openDefEditor(bool texture, const std::string& id, bool duplicate);  // id "" = a new one
+  bool showDefEditor_ = false, defIsTex_ = false, defReadOnly_ = false;
+  ModifierDef defMod_;
+  TextureDef defTex_;
+  std::string defOrigId_, defErr_, defOk_, defCode_;
+  std::string exportDefId_;
+  bool exportDefTex_ = false;
   bool showTimeline_ = true, showGraph_ = false, graphFit_ = true, resetView_ = true;
   double tl0_ = 0, tl1_ = 0;           // visible frame range
   bool scrub_ = false, keyDrag_ = false, timelineHovered_ = false, graphHovered_ = false;

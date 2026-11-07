@@ -113,6 +113,7 @@ void UI::libraryPanel() {
     }
     ImGui::PopID();
   }
+  defsLibrary();
   ImGui::End();
   if (deferred) deferred();
 }
