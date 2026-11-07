@@ -27,9 +27,17 @@ enum class Role { Empty, Normal, Tangent, Hug };
 Role nodeRole(const Node& n, EvalCtx ctx, const std::string& activeWorld, const std::function<bool(const std::string&)>& worldExists);
 void applyModifier(V4& q, const Modifier& m);  // mirror / repeat / rotate
 /** Coordinate pass of a node's modifier stack (outermost first); captures extrude coordinates in t. */
-double modifierCoords(const Node& n, const std::vector<ModAxis>& ax, V4& q, double* t);
+/** Per-evaluation scratch of a modifier stack: extrusion coordinates, points before each warp. */
+struct ModScratch {
+  double t[64];
+  V4 pre[64];
+};
+double modifierCoords(const Node& n, const std::vector<ModAxis>& ax, V4& q, ModScratch& s);
+/** Data-driven modifiers: the bounding radius after it (its bound hook), whether it has one. */
+double modifierBound(const Modifier& m, const ModAxis& ax, double r);
+bool modifierHasBound(const Modifier& m);
 /** Distance pass (innermost first): applies the captured extrusions. */
-double modifierDistance(const Node& n, const std::vector<ModAxis>& ax, double d, const double* t);
+double modifierDistance(const Node& n, const std::vector<ModAxis>& ax, double d, const ModScratch& s);
 /** Radial repeat: angle (radians) of the copy nearest to polar angle a. */
 double radialCopyAngle(const Modifier& m, double a);
 double opExtrudeD(double d, double wy);

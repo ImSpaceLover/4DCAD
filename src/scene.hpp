@@ -24,8 +24,10 @@ inline bool isSmooth(BoolOp o) { return o >= BoolOp::SmoothUnion; }
 // (first = innermost). Dimension-raising modifiers (Extrude, Revolve) each add
 // the next axis (X -> Y -> Z -> W) after the node's base dimension.
 // MOD_RADIAL replaced the old Rotate modifier (an old rotation = one radial copy at its angle).
-enum ModType { MOD_MIRROR = 1, MOD_REPEAT = 2, MOD_EXTRUDE = 3, MOD_REVOLVE = 4, MOD_RADIAL = 5 };
-inline const char* MOD_NAMES[6] = {"", "Mirror", "Repeat", "Extrude", "Revolve", "Radial repeat"};
+// MOD_DEF: a data-driven modifier (defs.hpp): code + parameters, `def` names its definition. The
+// five engine types are built-in definitions too (with native code paths), named by their type.
+enum ModType { MOD_MIRROR = 1, MOD_REPEAT = 2, MOD_EXTRUDE = 3, MOD_REVOLVE = 4, MOD_RADIAL = 5, MOD_DEF = 6 };
+inline const char* MOD_NAMES[7] = {"", "Mirror", "Repeat", "Extrude", "Revolve", "Radial repeat", "Modifier"};
 
 struct Modifier {
   int type = MOD_MIRROR;
@@ -40,7 +42,15 @@ struct Modifier {
   double startAngle = 0; // radial: angle of the first copy (degrees)
   double offset = 0;     // mirror: shape and mirror image sit this far from the mirror plane
   // (new fields go last: code brace-initialises the leading ones)
-  bool raises() const { return type == MOD_EXTRUDE || type == MOD_REVOLVE; }
+  std::string def;             // MOD_DEF: the definition's id
+  std::vector<double> params;  // MOD_DEF: parameter values (packed scalars, see defs.hpp)
+  /** Adds a dimension (Extrude, Revolve, or a definition flagged so). */
+  bool raises() const;
+  bool operator==(const Modifier& o) const {
+    return type == o.type && axis == o.axis && spacing == o.spacing && count == o.count && mode == o.mode && length == o.length &&
+           radius == o.radius && i == o.i && j == o.j && angle == o.angle && startAngle == o.startAngle && offset == o.offset && def == o.def &&
+           params == o.params;
+  }
 };
 
 struct Transform {
@@ -111,7 +121,7 @@ struct Node {
   std::string prim;
   std::array<double, 3> color{0.8, 0.5, 0.3};
   double thickness = 0.1;  // extent along unused axes for objects with dim < 4
-  std::optional<double> round, shell;
+  // (round / shell are modifiers now: Round, Onion; old files convert on load)
   Material mat;
   std::string code;        // custom SDF (prim == "custom"): GLSL defining float sdf(vec4 p)
   // camera: position = eye, rotation = view frame (right, up, forward, slider direction);

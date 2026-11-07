@@ -9,6 +9,7 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include "defs.hpp"
 #include "examples.hpp"
 
 #include <nlohmann/json.hpp>
@@ -144,6 +145,17 @@ void App::loadScene(SceneFile f) {
   }
   lights = std::move(f.lights);
   anim = f.animation.empty() ? Animation{} : animationFromJson(f.animation);
+  // old files animated the rounding / shell fields: those are the Round / Onion modifiers now
+  for (auto& t : anim.tracks) {
+    if (t.path != "round" && t.path != "shell") continue;
+    Node* n = findNode(root, t.target);
+    if (!n) continue;
+    const char* id = t.path == "round" ? "round" : "onion";
+    int k = -1;
+    for (int i = 0; i < (int)n->mods.size(); i++) if (n->mods[i].type == MOD_DEF && n->mods[i].def == id) k = i;
+    if (k < 0) { n->mods.push_back(makeModifier(*defs().modifier(id))); k = (int)n->mods.size() - 1; }
+    t.path = "mods." + std::to_string(k) + ".p." + (t.path == "round" ? "radius" : "thickness");
+  }
   playing = false;
   recordLinks(root, linkDefs_);
   isolate.clear();

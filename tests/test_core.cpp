@@ -8,6 +8,7 @@
 #include "codegen.hpp"
 #include "polytope.hpp"
 #include "shaderlang.hpp"
+#include "defs.hpp"
 #include "shaders.hpp"
 #include "evaluator.hpp"
 #include "examples.hpp"
@@ -154,7 +155,10 @@ int main() {
     }
     // a group of two squares extruded along Z == two boxes
     Node sq1 = makeShape("square", "a", {-2, 0, 0, 0}), sq2 = makeShape("square", "b", {2, 0, 0, 0});
-    sq1.round.reset(); sq2.round.reset();
+    auto noRound = [](Node& n) {
+      n.mods.erase(std::remove_if(n.mods.begin(), n.mods.end(), [](const Modifier& m) { return m.type == MOD_DEF && m.def == "round"; }), n.mods.end());
+    };
+    noRound(sq1); noRound(sq2);
     Node g = makeGroup(BoolOp::Union, {sq1, sq2});
     Modifier ex; ex.type = MOD_EXTRUDE; ex.length = 2;
     g.mods.push_back(ex);
@@ -235,14 +239,15 @@ int main() {
   // shell / rounding act on a thin object's own shape (not on its 4D slab)
   {
     Node cube = makeShape("cube", "c");  // 3D, thickness 0.1, half size 1
-    cube.shell = 0.2;
+    appendRoundShell(cube.mods, 0, 0.2);
     Node r = makeGroup(BoolOp::Union, {cube});
     SceneEvaluator ev(r, reg, "");
     CHECK(ev.evalFull({0, 0, 0, 0}).d > 0.5, "shelled cube is hollow: %.3f", ev.evalFull({0, 0, 0, 0}).d);
     CHECK(ev.evalFull({0.9, 0, 0, 0}).d < 0, "shelled cube has a skin");
     CLOSE(ev.evalFull({0.9, 0, 0, 0.5}).d, 0.45, 1e-6);  // slab thickness unchanged: still 0.1 in W
     Node c2 = makeShape("cube", "c2");
-    c2.round = -0.06;  // more than half the thickness: used to delete the object
+    c2.mods.erase(std::remove_if(c2.mods.begin(), c2.mods.end(), [](const Modifier& m) { return m.type == MOD_DEF && m.def == "round"; }), c2.mods.end());
+    appendRoundShell(c2.mods, -0.06, 0);  // more than half the thickness: used to delete the object
     Node r2 = makeGroup(BoolOp::Union, {c2});
     SceneEvaluator ev2(r2, reg, "");
     CHECK(ev2.evalFull({0, 0, 0, 0}).d < 0, "negative rounding shrinks, keeps the object");
@@ -333,11 +338,14 @@ int main() {
     Modifier ex; ex.type = MOD_EXTRUDE; ex.length = 2;
     Modifier rp; rp.type = MOD_REPEAT; rp.axis = 0; rp.spacing = 3; rp.count = 2;
     l.mods = {rp, ex};
+    appendRoundShell(l.mods, 0.01, 0.01);  // (Onion, Round)
     Node r = makeGroup(BoolOp::Union, {l});
     std::string k0 = structureKey(r, reg, "", false, SpaceKind::Flat);
     Node e = r;
     Node& c = e.children[0];
-    c.mods[1].length = 5; c.mods[0].spacing = 1.5; c.mods[0].count = 0; c.shell = 0.1; c.round = 0.05;
+    c.mods[1].length = 5; c.mods[0].spacing = 1.5; c.mods[0].count = 0;
+    setModParam(c.mods[2], *defs().modifier("onion"), 0, 0.1);
+    setModParam(c.mods[3], *defs().modifier("round"), 0, 0.05);
     c.mat.texture = TEX_CHECKER; c.mat.emissive = 2; c.xf.scale = 3; c.color = {0.1, 0.2, 0.3};
     CHECK(structureKey(e, reg, "", false, SpaceKind::Flat) == k0, "value edits keep the structure key");
     auto cs = compileScene(e, reg, "", false, nullptr);
@@ -348,8 +356,8 @@ int main() {
     CHECK(d[row * NODE_VEC4S * 4 + 1] > 1e8, "infinite repeat count packed as huge");
     CLOSE(d[row * NODE_VEC4S * 4 + 4], 2.5, 1e-6);   // extrude half length
     CLOSE(d[1 * NODE_VEC4S * 4 + 12 * 4 + 1], TEX_CHECKER, 1e-6);
-    CLOSE(d[1 * NODE_VEC4S * 4 + 12 * 4 + 2], 0.1, 1e-6);
-    CLOSE(d[1 * NODE_VEC4S * 4 + 12 * 4 + 3], 0.05, 1e-6);
+    CLOSE(d[row * NODE_VEC4S * 4 + 8], 0.1, 1e-6);    // onion thickness (data-driven modifier: its own vec4)
+    CLOSE(d[row * NODE_VEC4S * 4 + 12], 0.05, 1e-6);  // round radius
     Node f = r;
     Modifier mi; mi.type = MOD_MIRROR;
     f.children[0].mods.push_back(mi);
@@ -809,6 +817,50 @@ int main() {
     c.code = "float sdf(vec4 p) { return nope; }";
     c.codeBound = 1;
     CLOSE(customSdf(c, {2, 0, 0, 0}), 1.0, 1e-12);
+  }
+  {  // modifier definitions: the engine modifiers' reference code equals their native code
+    for (const char* id : {"mirror", "repeat", "extrude", "revolve", "radial", "round", "onion"}) {
+      auto d = defs().modifier(id);
+      CHECK(d != nullptr, "built-in definition %s", id);
+      if (!d) continue;
+      CHECK(checkModifierDef(*d).empty(), "%s checks: %s", id, checkModifierDef(*d).c_str());
+    }
+    uint32_t seed = 3;
+    auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) * (1.0 / 16777216.0) * 8 - 4; };
+    struct Case { int type; Modifier m; };
+    std::vector<Modifier> cases;
+    { Modifier m; m.type = MOD_MIRROR; m.axis = 1; m.offset = 0.7; cases.push_back(m); }
+    { Modifier m; m.type = MOD_REPEAT; m.axis = 2; m.spacing = 1.3; m.count = 2; cases.push_back(m); }
+    { Modifier m; m.type = MOD_REPEAT; m.axis = 0; m.spacing = 0.9; m.count = 0; cases.push_back(m); }
+    { Modifier m; m.type = MOD_RADIAL; m.i = 0; m.j = 3; m.radius = 1.5; m.count = 5; m.angle = 72; m.startAngle = 10; cases.push_back(m); }
+    for (auto& m : cases) {
+      auto d = modifierDefOf(m);
+      Modifier g = makeModifier(*d);  // the same values through the generic path
+      for (int i = 0; i < (int)d->params.size(); i++) setModParam(g, *d, i, modParam(m, *d, i));
+      g.type = MOD_DEF; g.def = "copy-of-" + d->id;
+      ModifierDef c = *d; c.id = g.def; c.role = 0;
+      for (int i = 0; i < (int)d->params.size(); i++) g.params.clear();
+      for (int i = 0; i < (int)c.params.size(); i++) { conformParams(g, c); g.params[paramOffset(c.params, i)] = modParam(m, *d, i); }
+      auto rt = modRuntime(c);
+      CHECK(rt->prog != nullptr, "%s runtime: %s", d->id.c_str(), rt->error.c_str());
+      if (!rt->prog) continue;
+      auto P = packedParams(g, c);
+      for (int k = 0; k < 20; k++) {
+        V4 q{rnd(), rnd(), rnd(), rnd()}, nq = q;
+        applyModifier(nq, m);
+        std::vector<sl::Value> args = {sl::Value::vec4(q[0], q[1], q[2], q[3])};
+        for (size_t v = 0; v < P.size(); v += 4) args.push_back(sl::Value::vec4(P[v], P[v + 1], P[v + 2], P[v + 3]));
+        args.push_back(sl::Value::i(-1));
+        args.push_back(sl::Value::i(-1));
+        sl::Value out;
+        std::string e;
+        bool ok = sl::call(*rt->prog, "warp_d", args, out, &e);
+        CHECK(ok, "%s warp: %s", d->id.c_str(), e.c_str());
+        double diff = 0;
+        for (int a = 0; a < 4; a++) diff = std::max(diff, std::abs(out.v[a] - nq[a]));
+        CHECK(diff < 1e-9, "%s reference code = native (%g)", d->id.c_str(), diff);
+      }
+    }
   }
   {  // the regular 4D polytopes
     const int counts[6] = {5, 8, 16, 24, 120, 600};

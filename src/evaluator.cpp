@@ -1,7 +1,10 @@
 #include "evaluator.hpp"
 
 #include "codegen.hpp"
+#include "defs.hpp"
 #include "shaderlang.hpp"
+
+#include <unordered_map>
 
 namespace fd {
 
@@ -64,10 +67,55 @@ void applyModifier(V4& q, const Modifier& m) {
   }
 }
 
-double modifierCoords(const Node& n, const std::vector<ModAxis>& ax, V4& q, double* t) {
+// ---- data-driven modifiers on the CPU: their hooks, interpreted ----
+namespace {
+struct DefCache {
+  std::shared_ptr<const ModifierDef> def;
+  std::shared_ptr<const ModRuntime> rt;
+};
+// per thread: definition id -> its runtime (refreshed when the definition is replaced)
+const DefCache* defCache(const Modifier& m) {
+  thread_local std::unordered_map<std::string, DefCache> cache;
+  auto d = modifierDefOf(m);
+  if (!d) return nullptr;
+  DefCache& c = cache[m.def];
+  if (c.def != d) { c.def = d; c.rt = modRuntime(*d); }
+  return c.rt->prog ? &c : nullptr;
+}
+bool callHook(const Modifier& m, const DefCache& c, const char* hook, std::vector<sl::Value> args, const ModAxis& ax, sl::Value& out) {
+  auto P = packedParams(m, *c.def);
+  for (size_t v = 0; v + 3 < P.size(); v += 4) args.push_back(sl::Value::vec4(P[v], P[v + 1], P[v + 2], P[v + 3]));
+  args.push_back(sl::Value::i(ax.newAxis));
+  args.push_back(sl::Value::i(ax.srcAxis));
+  return sl::call(*c.rt->prog, std::string(hook) + "_d", args, out);
+}
+sl::Value v4(const V4& q) { return sl::Value::vec4(q[0], q[1], q[2], q[3]); }
+}  // namespace
+
+bool modifierHasBound(const Modifier& m) {
+  const DefCache* c = defCache(m);
+  return c && c->rt->hooks.bound;
+}
+double modifierBound(const Modifier& m, const ModAxis& ax, double r) {
+  const DefCache* c = defCache(m);
+  if (!c || !c->rt->hooks.bound) return r;
+  sl::Value out;
+  if (!callHook(m, *c, "bound", {sl::Value::f(r)}, ax, out) || !std::isfinite(out.v[0])) return INFINITY;
+  return std::max(0.0, out.v[0]);
+}
+
+double modifierCoords(const Node& n, const std::vector<ModAxis>& ax, V4& q, ModScratch& s) {
+  double* t = s.t;
   for (int k = (int)n.mods.size() - 1; k >= 0; k--) {
     const Modifier& m = n.mods[k];
     if (!ax[k].valid) continue;
+    if (m.type == MOD_DEF) {
+      s.pre[k] = q;
+      const DefCache* c = defCache(m);
+      sl::Value out;
+      if (c && c->rt->hooks.warp && callHook(m, *c, "warp", {v4(q)}, ax[k], out)) q = {out.v[0], out.v[1], out.v[2], out.v[3]};
+      continue;
+    }
     if (m.type == MOD_EXTRUDE) { t[k] = q[ax[k].newAxis]; q[ax[k].newAxis] = 0; }
     else if (m.type == MOD_REVOLVE) {
       int a = ax[k].srcAxis, nn = ax[k].newAxis;
@@ -78,9 +126,18 @@ double modifierCoords(const Node& n, const std::vector<ModAxis>& ax, V4& q, doub
   return 0;
 }
 
-double modifierDistance(const Node& n, const std::vector<ModAxis>& ax, double d, const double* t) {
+double modifierDistance(const Node& n, const std::vector<ModAxis>& ax, double d, const ModScratch& s) {
+  const double* t = s.t;
   for (size_t k = 0; k < n.mods.size(); k++) {
     const Modifier& m = n.mods[k];
+    if (m.type == MOD_DEF && ax[k].valid) {
+      const DefCache* c = defCache(m);
+      if (!c) continue;
+      sl::Value out;
+      if (c->rt->hooks.shape && callHook(m, *c, "shape", {sl::Value::f(d), v4(s.pre[k])}, ax[k], out)) d = out.v[0];
+      if (c->def->safety < 1) d *= c->def->safety;
+      continue;
+    }
     if (!ax[k].valid || m.type != MOD_EXTRUDE || m.mode == ExtrudeMode::Infinite) continue;
     d = opExtrudeD(d, m.mode == ExtrudeMode::Half ? t[k] : std::abs(t[k]) - m.length / 2);
   }
@@ -127,7 +184,7 @@ double leafLocalRadius(const Node& n, const PrimitiveDef* def) {
   auto e = primitiveExtents(*def);
   for (int a = primitiveDim(*def); a < 4; a++) e[a] = n.thickness / 2;
   double r = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2] + e[3] * e[3]);
-  return r + std::max(0.0, n.round.value_or(0.0)) + std::max(0.0, n.shell.value_or(0.0));
+  return r;
 }
 
 std::unordered_map<std::string, Bound> computeBounds(const Node& root, const PrimitiveRegistry& reg) {
@@ -163,12 +220,12 @@ std::unordered_map<std::string, Bound> computeBounds(const Node& root, const Pri
       else if (m.type == MOD_EXTRUDE) e[ax[k].newAxis] = m.mode == ExtrudeMode::Finite ? m.length / 2 : INFINITY;
       else if (m.type == MOD_REVOLVE) { double v = m.radius + e[ax[k].srcAxis]; e[ax[k].srcAxis] = v; e[ax[k].newAxis] = v; }
       else if (m.type == MOD_RADIAL) { double v = m.radius + std::hypot(e[m.i], e[m.j]); e[m.i] = v; e[m.j] = v; }
+      else if (m.type == MOD_DEF && m.raises() && ax[k].newAxis >= 0 && !modifierHasBound(m)) e[ax[k].newAxis] = INFINITY;  // (unknown reach)
     }
     double r = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2] + e[3] * e[3]);
-    if (n.isLeaf()) {
-      auto* def = reg.get(n.prim);
-      r += std::max(0.0, n.round.value_or(0.0)) + std::max(0.0, n.shell.value_or(0.0));
-    }
+    // data-driven modifiers: their bound hook gives the new radius (in the stack's order)
+    for (size_t k = 0; k < n.mods.size(); k++)
+      if (n.mods[k].type == MOD_DEF && ax[k].valid && std::isfinite(r)) r = modifierBound(n.mods[k], ax[k], r);
     Bound b;
     if (!std::isfinite(r)) b = {n.xf.pos, INFINITY};
     else {
@@ -323,22 +380,21 @@ double anchoredRadius(const Node& n, const PrimitiveRegistry& reg) {
 Sample SceneEvaluator::evalCurved(const V4& p) const { return evalCurvedNode(root_, p); }
 
 double SceneEvaluator::leafShape(const Node& n, const Prep& pr, V4& q) const {
-  double t[64];
+  ModScratch t;
+  if (n.mods.size() > 64) return INF;
   if (n.isPoly() || n.isHoneycomb()) {  // flat polyhedra / honeycombs (curved ones: evalCurvedNode)
+    modifierCoords(n, pr.axes, q, t);
     double d = n.isPoly() ? polyDistFlat(n.poly.type, n.poly.size, q) : honeycombDist(Space{}, n.poly, q);
-    d -= n.round.value_or(0.0);
-    for (int a = 3; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
+    d = modifierDistance(n, pr.axes, d, t);
+    for (int a = pr.dim; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
     return d;
   }
-  if (n.mods.size() > 64 || !pr.prim) return INF;
+  if (!pr.prim) return INF;
   modifierCoords(n, pr.axes, q, t);
   double d;
   if (n.isCustom()) d = customSdf(n, q);
   else d = evalPrimitive(*pr.prim, q);
-  d = modifierDistance(n, pr.axes, d, t);
-  double shell = n.shell.value_or(0.0);
-  if (shell > 0) d = std::abs(d) - shell;
-  d -= n.round.value_or(0.0);
+  d = modifierDistance(n, pr.axes, d, t);  // (round / onion are modifiers: before the thickness along unused axes)
   for (int a = pr.dim; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
   return d;
 }
@@ -351,7 +407,12 @@ Sample SceneEvaluator::evalCurvedNode(const Node& n, const V4& p) const {
     int par = 0;
     double d = n.isPoly() ? polyDistCurved(space, n.poly.type, n.poly.size * pr.S, q) : honeycombDist(space, n.poly, q, &par);
     if (d >= INF * 0.5) return {};
-    d -= n.round.value_or(0.0) * pr.S;
+    if (!n.mods.empty() && n.mods.size() <= 64) {  // (their distance modifiers, e.g. Round, in local units)
+      ModScratch t;
+      V4 lq = cs::logO(space, q) * (1.0 / pr.S);
+      for (size_t k = 0; k < n.mods.size(); k++) t.pre[k] = lq;
+      d = modifierDistance(n, pr.axes, d / pr.S, t) * pr.S;
+    }
     return {d, par && n.poly.alternate && n.isHoneycomb() ? n.mat.color2 : n.color, &n};
   }
   if (n.isLeaf()) {
@@ -378,7 +439,7 @@ Sample SceneEvaluator::evalCurvedNode(const Node& n, const V4& p) const {
     if (d >= INF * 0.5) return {};
     return {d * pr.S * pr.factor, n.color, &n};
   }
-  double t[64];
+  ModScratch t;
   bool mods = !n.mods.empty() && n.mods.size() <= 64;
   if (mods) {  // group modifiers act on its normal coordinates
     V4 u = cs::logO(space, q) * (1.0 / pr.S);
@@ -441,7 +502,7 @@ Sample SceneEvaluator::worldSample(const V4& g, const std::string& worldId) cons
   for (size_t i = 0; i + 1 < path.size(); i++) {
     p = toLocal(*path[i], p);
     s *= path[i]->xf.scale;
-    double t[64];
+    ModScratch t;
     if (path[i]->mods.size() <= 64) modifierCoords(*path[i], prep_.at(path[i]->id).axes, p, t);
   }
   Sample r = evalNode(*path.back(), p, g, s, EvalCtx::World);
@@ -475,7 +536,7 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
     q[3] = wd / (sAcc * s);
   }
   auto& pr = prep_.at(n.id);
-  double t[64];
+  ModScratch t;
   if (n.mods.size() > 64) return {};
   modifierCoords(n, pr.axes, q, t);
   Sample r;
@@ -488,12 +549,9 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
     double d;
     if (n.isCustom()) d = customSdf(n, q);  // (the GLSL code itself, interpreted)
     else d = evalPrimitive(*pr.prim, q);
+    // (round / onion are modifiers: they act on the object's own shape, before it gets its
+    // thickness along the unused axes)
     d = modifierDistance(n, pr.axes, d, t);
-    // shell / rounding act on the object's own shape, before it gets its thickness along
-    // the unused axes (otherwise they would act on that thin 4D slab instead)
-    double shell = n.shell.value_or(0.0);
-    if (shell > 0) d = std::abs(d) - shell;
-    d -= n.round.value_or(0.0);
     for (int a = pr.dim; a < 4; a++) d = opExtrudeD(d, std::abs(q[a]) - n.thickness / 2);
     r = {d, n.color, &n};
   } else {

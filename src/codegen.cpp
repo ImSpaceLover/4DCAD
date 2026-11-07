@@ -7,6 +7,8 @@
 #include <regex>
 #include "math4.hpp"
 #include "shaders.hpp"
+#include "defs.hpp"
+#include <set>
 #include <sstream>
 #include <unordered_map>
 
@@ -236,14 +238,79 @@ std::string renameCustomCode(const std::string& code, const std::string& suffix)
 // standalone code viewer).
 static std::string modP(const char* mb, int k) { return std::string("ndatx(") + mb + ", " + std::to_string(k) + ")"; }
 
+// ---- data-driven modifiers (defs.hpp) in the generated code ----
+// Each definition a scene uses is emitted once, its hooks renamed with a per-scene suffix; the
+// node functions call them with the modifier's parameters (node data rows, or constants in the
+// standalone code viewer). g_defUse is set while a scene is being compiled.
+struct DefUse {
+  std::string suffix;
+  HookInfo hooks;
+  int vec4s = 1;
+  double safety = 1;
+};
+static thread_local std::map<std::string, DefUse>* g_defUse = nullptr;
+
+// first parameter vec4 of modifier k (each takes as many vec4 as its parameters need; engine ones 1)
+static int modVec4s(const Modifier& m) {
+  if (m.type != MOD_DEF) return 1;
+  auto d = defs().modifier(m.def);
+  return d ? paramsVec4s(d->params) : 1;
+}
+static int modOffset(const Node& n, int k) {
+  int o = 0;
+  for (int j = 0; j < k && j < (int)n.mods.size(); j++) o += modVec4s(n.mods[j]);
+  return o;
+}
+static int modTotalVec4s(const Node& n) { return modOffset(n, (int)n.mods.size()); }
+
+// emits every definition used under root (sorted by id: stable code), filling `use`
+static void emitModifierDefs(const Node& root, std::ostream& o, std::map<std::string, DefUse>& use) {
+  std::set<std::string> ids;
+  walkc(root, [&](const Node& n, const Node*, int) { for (auto& m : n.mods) if (m.type == MOD_DEF) ids.insert(m.def); });
+  int k = 0;
+  for (auto& id : ids) {
+    auto d = defs().modifier(id);
+    if (!d) continue;
+    DefUse u;
+    u.suffix = "_md" + std::to_string(k++);
+    std::string code = guardLoops(transformedModifierCode(*d, u.suffix, &u.hooks));
+    u.vec4s = paramsVec4s(d->params);
+    u.safety = d->safety;
+    o << "// modifier: " << d->name << "\n" << code << "\n";
+    use[id] = u;
+  }
+}
+
+// the arguments after the point / distance: the parameter vec4s, then newAxis, srcAxis
+static std::string defArgs(const Node& n, int k, const ModAxis& ax, const char* mb) {
+  const Modifier& m = n.mods[k];
+  std::string a;
+  if (mb) {
+    int off = modOffset(n, k);
+    for (int v = 0; v < (*g_defUse)[m.def].vec4s; v++) a += ", " + modP(mb, off + v);
+  } else if (auto d = defs().modifier(m.def)) {
+    auto P = packedParams(m, *d);
+    for (size_t v = 0; v + 3 < P.size(); v += 4)
+      a += ", vec4(" + glslFloat(P[v]) + ", " + glslFloat(P[v + 1]) + ", " + glslFloat(P[v + 2]) + ", " + glslFloat(P[v + 3]) + ")";
+  }
+  return a + ", " + std::to_string(ax.newAxis) + ", " + std::to_string(ax.srcAxis);
+}
+
 static std::string modifierCoordsGLSL(const Node& n, const std::vector<ModAxis>& ax, const char* v, const std::string& tag, const char* mb = nullptr) {
   std::ostringstream o;
   auto c = [&](int a) { return std::string(v) + "." + C[a]; };
   for (int k = (int)n.mods.size() - 1; k >= 0; k--) {
     const Modifier& m = n.mods[k];
     if (!ax[k].valid) continue;
+    if (m.type == MOD_DEF) {
+      if (!g_defUse || !g_defUse->count(m.def)) continue;  // (unknown definition: no effect)
+      const DefUse& u = (*g_defUse)[m.def];
+      if (u.hooks.shape) o << "  vec4 qk" << tag << k << " = " << v << ";\n";  // (the point before its warp, for its shape hook)
+      if (u.hooks.warp) o << "  g_loopGuard = 0;\n  " << v << " = warp" << u.suffix << "(" << v << defArgs(n, k, ax[k], mb) << ");\n";
+      continue;
+    }
     if (mb) {
-      std::string P = modP(mb, k);
+      std::string P = modP(mb, modOffset(n, k));
       switch (m.type) {
         case MOD_MIRROR: o << "  " << c(m.axis) << " = abs(" << c(m.axis) << ") - " << P << ".x;\n"; break;
         case MOD_REPEAT:  // (count 0 = infinite: packed as a huge count)
@@ -298,13 +365,21 @@ static std::string modifierCoordsGLSL(const Node& n, const std::vector<ModAxis>&
   return o.str();
 }
 
+// distance pass (innermost first): extrusions and the shape hooks of data-driven modifiers
 static std::string extrudeGLSL(const Node& n, const std::vector<ModAxis>& ax, const std::string& tag, const char* mb = nullptr) {
   std::ostringstream o;
   for (size_t k = 0; k < n.mods.size(); k++) {
     const Modifier& m = n.mods[k];
+    if (m.type == MOD_DEF) {
+      if (!ax[k].valid || !g_defUse || !g_defUse->count(m.def)) continue;
+      const DefUse& u = (*g_defUse)[m.def];
+      if (u.hooks.shape) o << "  g_loopGuard = 0;\n  d = shape" << u.suffix << "(d, qk" << tag << k << defArgs(n, (int)k, ax[k], mb) << ");\n";
+      if (u.safety < 1) o << "  d *= " << glslFloat(u.safety) << ";\n";
+      continue;
+    }
     if (!ax[k].valid || m.type != MOD_EXTRUDE || m.mode == ExtrudeMode::Infinite) continue;
     if (m.mode == ExtrudeMode::Half) o << "  d = opExtrude(d, t" << tag << k << ");\n";
-    else if (mb) o << "  d = opExtrude(d, abs(t" << tag << k << ") - " << modP(mb, (int)k) << ".x);\n";  // .x: half length
+    else if (mb) o << "  d = opExtrude(d, abs(t" << tag << k << ") - " << modP(mb, modOffset(n, (int)k)) << ".x);\n";  // .x: half length
     else o << "  d = opExtrude(d, abs(t" << tag << k << ") - " << glslFloat(m.length / 2) << ");\n";
   }
   return o.str();
@@ -443,6 +518,10 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
   walk(root, [&](Node& n, Node*, int) { index[n.id] = (int)cs.nodeIds.size(); cs.nodeIds.push_back(n.id); });
   std::ostringstream o;
   o << SDF_HELPERS << SCENE_HELPERS << CURVED_HELPERS;
+  std::map<std::string, DefUse> defUse;
+  emitModifierDefs(root, o, defUse);
+  struct DefScope { std::map<std::string, DefUse>* prev; ~DefScope() { g_defUse = prev; } } defScope{g_defUse};
+  g_defUse = &defUse;
   std::map<std::string, std::string> primFn;
   walk(root, [&](Node& n, Node*, int) {
     if (n.isCustom()) {
@@ -502,7 +581,12 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
         L << "  float hpar;\n  float d = honey_c" << i << "(qm, 0.0, " << D(i, 10) << ".w, " << D(i, 13) << ".z, hpar);\n";
         L << "  col = mix(col, " << D(i, 10) << ".rgb, hpar * " << D(i, 13) << ".w);\n";  // .w: alternate colours
       }
-      L << "  vec4 x12 = " << D(i, 12) << ";\n  d -= x12.w * s;\n";  // rounding
+      if (!n.mods.empty()) {  // its distance modifiers (Round, Onion, ...), in local units
+        L << "  int mrow = int(" << D(i, 12) << ".x);\n  if (d < INF * 0.5) {\n    vec4 q = q0;\n";
+        for (size_t k = 0; k < n.mods.size(); k++) L << "    vec4 qk" << k << " = q;\n";
+        L << "    d /= s;\n" << extrudeGLSL(n, ax, "", "mrow") << "    d *= s;\n  }\n";
+      }
+      L << "  vec4 x12 = " << D(i, 12) << ";\n";
       L << "  if (u_textures == 1 && x12.y > 0.5) col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), q0 * m9.y) * m9.z);\n";
       L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
       L << "  return d;\n}\n";
@@ -518,7 +602,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       Node shape = n;
       if (const Modifier* rm = exactRepeat(n)) {
         L << "  int mrow = int(" << D(i, 12) << ".x);\n";
-        L << "  { vec4 rp = ndatx(mrow, " << (int)n.mods.size() - 1 << "); qm = repeatExact(qm, " << rm->axis << ", rp.x * s, rp.y); }\n";
+        L << "  { vec4 rp = ndatx(mrow, " << modOffset(n, (int)n.mods.size() - 1) << "); qm = repeatExact(qm, " << rm->axis << ", rp.x * s, rp.y); }\n";
         shape.mods.pop_back();
         ax = modifierAxes(shape, reg);
       } else if (!n.mods.empty()) L << "  int mrow = int(" << D(i, 12) << ".x);\n";
@@ -527,7 +611,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       if (n.isCustom()) L << "  g_loopGuard = 0;\n  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
       L << extrudeGLSL(shape, ax, "", "mrow");
-      L << "  vec4 x12 = " << D(i, 12) << ";\n  if (x12.z > 0.0) d = abs(d) - x12.z;\n  d -= x12.w;\n";  // shell, rounding (data)
+      L << "  vec4 x12 = " << D(i, 12) << ";\n";  // (.y: texture type)
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
       L << "  if (u_textures == 1 && x12.y > 0.5) {\n    vec4 tq = q0 * m9.y;\n";
@@ -573,6 +657,10 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
   // per-node data comes from the node buffer (see packNodes): ndat(node, slot)
   (void)N;
   o << SDF_HELPERS << SCENE_HELPERS << FOLLOW_GLSL;
+  std::map<std::string, DefUse> defUse;
+  emitModifierDefs(root, o, defUse);
+  struct DefScope { std::map<std::string, DefUse>* prev; ~DefScope() { g_defUse = prev; } } defScope{g_defUse};
+  g_defUse = &defUse;
 
   // primitives
   std::map<std::string, std::string> primFn;
@@ -651,7 +739,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
       L << extrudeGLSL(n, ax, "", "mrow");
       // shell / rounding act on the shape itself, before its thickness along the unused axes (data: slot 12)
-      L << "  vec4 x12 = " << D(i, 12) << ";\n  if (x12.z > 0.0) d = abs(d) - x12.z;\n  d -= x12.w;\n";
+      L << "  vec4 x12 = " << D(i, 12) << ";\n";  // (.y: texture type; rounding / shell are modifiers now)
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
       if (n.isHoneycomb()) L << "  col = mix(col, " << D(i, 10) << ".rgb, hpar * " << D(i, 13) << ".w);\n";
@@ -756,8 +844,6 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       slot(10)[3] = (float)n.poly.width;  // honeycomb edge radius / gap
       // slot 12 = (modifier rows, texture type, shell, round), 13 = (follow rows, emissive, honeycomb style, alternate)
       slot(12)[1] = (float)n.mat.texture;
-      slot(12)[2] = (float)std::max(n.shell.value_or(0.0), 0.0);
-      slot(12)[3] = (float)n.round.value_or(0.0);
       slot(13)[1] = n.mat.emissive > 0 ? 1.f : 0.f;
       slot(13)[2] = (float)n.poly.style;
       slot(13)[3] = n.poly.alternate ? 1.f : 0.f;
@@ -778,12 +864,18 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
     if (it == byId.end() || it->second->mods.empty()) continue;
     const Node& n = *it->second;
     size_t base = d.size() / S;
-    size_t rows = (n.mods.size() + NODE_VEC4S - 1) / NODE_VEC4S;
+    size_t rows = ((size_t)modTotalVec4s(n) + NODE_VEC4S - 1) / NODE_VEC4S;
     d.resize(d.size() + rows * S, 0.f);
     for (size_t k = 0; k < n.mods.size(); k++) {
       const Modifier& m = n.mods[k];
-      float* x = &d[base * S + k * 4];
+      float* x = &d[base * S + (size_t)modOffset(n, (int)k) * 4];
       switch (m.type) {
+        case MOD_DEF:  // its parameters, packed (see defs.hpp)
+          if (auto def = defs().modifier(m.def)) {
+            auto P = packedParams(m, *def);
+            for (size_t c = 0; c < P.size(); c++) x[c] = (float)P[c];
+          }
+          break;
         case MOD_MIRROR: x[0] = (float)m.offset; break;
         case MOD_REPEAT:
           x[0] = m.spacing > 0 ? (float)m.spacing : 1e9f;
@@ -888,7 +980,13 @@ std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const s
     o << depth << n.id << (n.isLeaf() ? "L" + n.prim : n.isCamera() ? std::string("C") : "G" + std::to_string((int)n.op)) << (n.hidden ? "h" : "") << (n.anchor ? "a" + n.anchor->world : "");
     if (n.anchor && n.anchor->follow) o << "F";
     // only what decides the code: every number is node data (packNodes), so editing values never recompiles
-    for (auto& m : n.mods) o << "m" << m.type << m.axis << (m.type == MOD_EXTRUDE ? (int)m.mode : 0) << m.i << m.j << (m.spacing > 0 ? "+" : "-");
+    for (auto& m : n.mods) {
+      o << "m" << m.type << m.axis << (m.type == MOD_EXTRUDE ? (int)m.mode : 0) << m.i << m.j << (m.spacing > 0 ? "+" : "-");
+      if (m.type == MOD_DEF) {  // a data-driven one: which definition and its code (parameters are data)
+        auto d = defs().modifier(m.def);
+        o << m.def << ":" << (d ? d->hash() : 0);
+      }
+    }
     if (n.isCustom()) o << "c" << std::hash<std::string>()(n.code) << ":" << n.codeBound;
     if (n.isPolytope()) o << "p" << n.poly.type << ":" << n.poly.honey;
     o << ";";
@@ -911,6 +1009,10 @@ static std::string vec4Const(const V4& v) {
 
 std::string standaloneGLSL(const Node& top, const PrimitiveRegistry& reg) {
   std::ostringstream pre, body;
+  std::map<std::string, DefUse> defUse;
+  emitModifierDefs(top, pre, defUse);
+  struct DefScope { std::map<std::string, DefUse>* prev; ~DefScope() { g_defUse = prev; } } defScope{g_defUse};
+  g_defUse = &defUse;
   int counter = 0;
   std::function<std::string(const Node&, const std::string&, bool)> emit = [&](const Node& n, const std::string& pin, bool isTop) -> std::string {
     int k = counter++;
@@ -951,8 +1053,6 @@ std::string standaloneGLSL(const Node& top, const PrimitiveRegistry& reg) {
     std::string ex = extrudeGLSL(n, ax, tag);
     if (!ex.empty()) body << std::regex_replace(ex, std::regex("\\bd\\b"), d);
     if (n.isLeaf()) {
-      if (n.shell.value_or(0) > 0) body << "  " << d << " = abs(" << d << ") - " << glslFloat(*n.shell) << ";\n";
-      if (n.round.value_or(0) != 0) body << "  " << d << " -= " << glslFloat(*n.round) << ";\n";
       if (!n.isCustom())
         for (int a = nodeDim(n, reg); a < 4; a++)
           body << "  " << d << " = opExtrude(" << d << ", abs(" << q << "." << C[a] << ") - " << glslFloat(n.thickness / 2) << ");  // thin along " << AXIS[a] << "\n";

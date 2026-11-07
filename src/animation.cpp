@@ -1,5 +1,7 @@
 #include "animation.hpp"
 
+#include "defs.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -31,6 +33,17 @@ static void modValues(const Node& n, std::vector<AnimValue>& out) {
         out.push_back({p + "startAngle", L + "start angle"});
         out.push_back({p + "count", L + "copies", true});
         break;
+      case MOD_DEF:
+        if (auto d = defs().modifier(m.def)) {
+          L = d->name + " " + std::to_string(k + 1) + ": ";
+          for (auto& pd : d->params) {
+            std::string lab = L + (pd.label.empty() ? pd.name : pd.label);
+            bool stepped = pd.type != P_FLOAT && pd.type != P_COLOR;
+            if (pd.type == P_COLOR) for (int c = 0; c < 3; c++) out.push_back({p + "p." + pd.name + "." + RGB[c], lab + " " + RGB[c]});
+            else out.push_back({p + "p." + pd.name, lab, stepped});
+          }
+        }
+        break;
     }
   }
 }
@@ -56,8 +69,6 @@ std::vector<AnimValue> animatableValues(const Node& n) {
   if (n.isLeaf()) {
     for (int i = 0; i < 3; i++) v.push_back({std::string("color.") + RGB[i], std::string("Colour ") + RGB[i]});
     v.push_back({"thickness", "Thickness"});
-    v.push_back({"round", "Rounding"});
-    v.push_back({"shell", "Shell"});
     v.push_back({"mat.emissive", "Emissive"});
     v.push_back({"mat.roughness", "Roughness"});
     v.push_back({"mat.specular", "Specular"});
@@ -104,10 +115,6 @@ static bool access(Node& n, const std::string& p, double& v, bool put) {
   auto D = [&](double& x) { if (put) x = v; else v = x; return true; };
   auto I = [&](int& x) { if (put) x = (int)std::lround(v); else v = x; return true; };
   auto B = [&](bool& x) { if (put) x = v >= 0.5; else v = x ? 1 : 0; return true; };
-  auto O = [&](std::optional<double>& x) {
-    if (put) x = v; else v = x.value_or(0);
-    return true;
-  };
   if (p.rfind("pos.", 0) == 0) { int a = axisOf(p, 4); return a >= 0 && D(n.xf.pos[a]); }
   if (p == "scale") { if (put) n.xf.scale = std::max(1e-3, v); else v = n.xf.scale; return true; }
   if (p == "hidden") return B(n.hidden);
@@ -130,6 +137,20 @@ static bool access(Node& n, const std::string& p, double& v, bool put) {
     if (k >= n.mods.size()) return false;
     Modifier& m = n.mods[k];
     std::string f = p.substr(dot + 1);
+    if (f.rfind("p.", 0) == 0 && m.type == MOD_DEF) {  // a data-driven modifier's parameter (colour: .r / .g / .b)
+      auto d = defs().modifier(m.def);
+      if (!d) return false;
+      std::string name = f.substr(2);
+      int comp = 0;
+      if (name.size() > 2 && name[name.size() - 2] == '.') { comp = rgbOf(name, (int)name.size() - 1); name = name.substr(0, name.size() - 2); }
+      for (int i = 0; i < (int)d->params.size(); i++)
+        if (d->params[i].name == name) {
+          if (put) setModParam(m, *d, i, v, std::max(0, comp));
+          else v = modParam(m, *d, i, std::max(0, comp));
+          return true;
+        }
+      return false;
+    }
     if (f == "offset") return D(m.offset);
     if (f == "axis") return I(m.axis);
     if (f == "spacing") return D(m.spacing);
@@ -143,8 +164,6 @@ static bool access(Node& n, const std::string& p, double& v, bool put) {
   if (!n.isLeaf()) return false;
   if (p.rfind("color.", 0) == 0) { int c = rgbOf(p, 6); return c >= 0 && D(n.color[c]); }
   if (p == "thickness") return D(n.thickness);
-  if (p == "round") return O(n.round);
-  if (p == "shell") return O(n.shell);
   if (p == "codeBound") return D(n.codeBound);
   if (p == "mat.emissive") return D(n.mat.emissive);
   if (p == "mat.roughness") return D(n.mat.roughness);

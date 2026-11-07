@@ -1,5 +1,9 @@
 #include "scene.hpp"
 
+#include <set>
+
+#include "defs.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <random>
@@ -155,7 +159,7 @@ void pruneEmptyGroups(Node& root) {
 // ============================================================ multi-object editing
 bool sameModifierTypes(const Node& a, const Node& b) {
   if (a.mods.size() != b.mods.size()) return false;
-  for (size_t i = 0; i < a.mods.size(); i++) if (a.mods[i].type != b.mods[i].type) return false;
+  for (size_t i = 0; i < a.mods.size(); i++) if (a.mods[i].type != b.mods[i].type || a.mods[i].def != b.mods[i].def) return false;
   return true;
 }
 
@@ -165,8 +169,6 @@ void propagateEdit(const Node& B, const Node& A, Node& T, bool stacksMatch, cons
     if (T.isLeaf()) {
       ch(B.color, A.color, T.color);
       ch(B.thickness, A.thickness, T.thickness);
-      ch(B.round, A.round, T.round);
-      ch(B.shell, A.shell, T.shell);
       ch(B.mat.emissive, A.mat.emissive, T.mat.emissive);
       ch(B.mat.texture, A.mat.texture, T.mat.texture);
       ch(B.mat.texScale, A.mat.texScale, T.mat.texScale);
@@ -213,6 +215,7 @@ void propagateEdit(const Node& B, const Node& A, Node& T, bool stacksMatch, cons
     ch(b.angle, a.angle, t.angle);
     ch(b.offset, a.offset, t.offset);
     ch(b.startAngle, a.startAngle, t.startAngle);
+    ch(b.params, a.params, t.params);
   }
 }
 
@@ -266,6 +269,7 @@ std::vector<ModAxis> modifierAxes(const Node& n, const PrimitiveRegistry& reg) {
       else {
         a.newAxis = dim;
         if (m.type == MOD_REVOLVE) a.srcAxis = (m.axis < 0 || m.axis >= dim) ? dim - 1 : m.axis;
+        else if (m.type == MOD_DEF) a.srcAxis = dim - 1;  // (a data-driven one: the newest existing axis, -1 for a point)
         dim++;
       }
     } else if (m.type == MOD_RADIAL) a.valid = m.i != m.j;
@@ -296,6 +300,7 @@ std::vector<std::pair<int, std::string>> modifierProblems(const Node& n, const P
       if (!axes[k].valid) out.push_back({(int)k, dim >= 4 ? "already 4D: ignored" : "needs at least a 1D shape: ignored"});
       else { if (m.type == MOD_REVOLVE && m.axis >= dim) out.push_back({(int)k, "axis does not exist yet: newest used"}); dim++; }
     } else if (!axes[k].valid) out.push_back({(int)k, "plane needs two different axes"});
+    if (m.type == MOD_DEF && !modifierDefOf(m)) out.push_back({(int)k, "unknown modifier definition \"" + m.def + "\": no effect"});
   }
   return out;
 }
@@ -315,8 +320,7 @@ std::vector<Modifier> stepsToModifiers(const std::vector<Step>& steps) {
 Node nodeFromPrimitive(const PrimitiveDef& p, const std::string& name) {
   Node n = makeLeaf("point", name);
   n.mods = stepsToModifiers(p.steps);
-  if (p.round != 0) n.round = p.round;
-  if (p.shell != 0) n.shell = p.shell;
+  appendRoundShell(n.mods, p.round, p.shell);
   return n;
 }
 
@@ -355,18 +359,46 @@ static PrimitiveDef jPrim(const json& j) {
   return p;
 }
 
+// custom (non-built-in) modifier definitions a tree uses / registering those a file carries
+static json usedModifierDefs(const Node& root) {
+  std::set<std::string> ids;
+  walkc(root, [&](const Node& n, const Node*, int) { for (auto& m : n.mods) if (m.type == MOD_DEF) ids.insert(m.def); });
+  json a = json::array();
+  for (auto& id : ids)
+    if (auto d = defs().modifier(id); d && !d->builtin) a.push_back(modifierDefToJson(*d));
+  return a;
+}
+static void registerModifierDefs(const json& j) {
+  for (auto& dj : j.value("modifierDefs", json::array())) {
+    try { defs().setModifier(modifierDefFromJson(dj)); } catch (...) {}
+  }
+}
+
 static json modJ(const Modifier& m) {
   switch (m.type) {
     case MOD_MIRROR: return {{"type", "mirror"}, {"axis", m.axis}, {"offset", m.offset}};
     case MOD_REPEAT: return {{"type", "repeat"}, {"axis", m.axis}, {"spacing", m.spacing}, {"count", m.count}};
     case MOD_EXTRUDE: return {{"type", "extrude"}, {"mode", modeName(m.mode)}, {"length", m.length}};
     case MOD_REVOLVE: return {{"type", "revolve"}, {"radius", m.radius}, {"axis", m.axis}};
+    case MOD_DEF: {
+      json j = {{"type", "def"}, {"def", m.def}};
+      if (auto d = defs().modifier(m.def)) j["params"] = modParamsToJson(m, *d);
+      else j["values"] = m.params;  // (unknown definition: kept as they are)
+      return j;
+    }
     default: return {{"type", "radial"}, {"i", m.i}, {"j", m.j}, {"radius", m.radius}, {"count", m.count}, {"angle", m.angle}, {"startAngle", m.startAngle}};
   }
 }
 static Modifier jMod(const json& mj) {
   Modifier m;
   std::string t = mj.value("type", std::string("mirror"));
+  if (t == "def") {
+    m.type = MOD_DEF;
+    m.def = mj.value("def", std::string());
+    if (auto d = defs().modifier(m.def)) modParamsFromJson(m, *d, mj.value("params", json::object()));
+    else m.params = mj.value("values", std::vector<double>());
+    return m;
+  }
   m.type = t == "repeat" ? MOD_REPEAT : t == "extrude" ? MOD_EXTRUDE : t == "revolve" ? MOD_REVOLVE : (t == "radial" || t == "rotate") ? MOD_RADIAL : MOD_MIRROR;
   m.axis = std::clamp(mj.value("axis", m.type == MOD_REVOLVE ? -1 : 0), -1, 3);
   if (m.type != MOD_REVOLVE && m.axis < 0) m.axis = 0;
@@ -411,8 +443,6 @@ static json nodeJ(const Node& n) {
     j["prim"] = n.prim;
     j["color"] = {n.color[0], n.color[1], n.color[2]};
     j["thickness"] = n.thickness;
-    if (n.round) j["round"] = *n.round;
-    if (n.shell) j["shell"] = *n.shell;
     const Material& m = n.mat;
     j["material"] = {{"emissive", m.emissive}, {"texture", TEXTURE_NAMES[m.texture]}, {"texScale", m.texScale},
                      {"texStrength", m.texStrength}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}},
@@ -490,8 +520,9 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
     n.name = j.value("name", n.prim);
     if (j.contains("color")) for (int i = 0; i < 3; i++) n.color[i] = j["color"][i].get<double>();
     n.thickness = j.value("thickness", 0.1);
-    if (j.contains("round") && j["round"].is_number()) n.round = j["round"].get<double>();
-    if (j.contains("shell") && j["shell"].is_number()) n.shell = j["shell"].get<double>();
+    // old files: rounding / shell were fields (now the Onion / Round modifiers, at the end of the stack)
+    appendRoundShell(n.mods, j.contains("round") && j["round"].is_number() ? j["round"].get<double>() : 0.0,
+                     j.contains("shell") && j["shell"].is_number() ? j["shell"].get<double>() : 0.0);
     if (j.contains("material") && j["material"].is_object()) {
       auto& mj = j["material"];
       n.mat.emissive = std::clamp(mj.value("emissive", 0.0), 0.0, 1.0);
@@ -530,8 +561,9 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
       if (!def) throw std::runtime_error("Unknown primitive: " + n.prim);
       auto steps = stepsToModifiers(def->steps);
       n.mods.insert(n.mods.begin(), steps.begin(), steps.end());
-      if (!n.round && def->round != 0) n.round = def->round;
-      if (!n.shell && def->shell != 0) n.shell = def->shell;
+      bool hasRS = false;
+      for (auto& m : n.mods) if (m.type == MOD_DEF && (m.def == "round" || m.def == "onion")) hasRS = true;
+      if (!hasRS) appendRoundShell(n.mods, def->round, def->shell);
       n.prim = "point";
     }
   } else if (n.isCamera()) {
@@ -631,6 +663,7 @@ std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::s
                         const std::string& activeCamera, const std::string* animationJson, const Space* space,
                         const CurvedCamState* curvedCam) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
+  if (json md = usedModifierDefs(root); !md.empty()) j["modifierDefs"] = md;  // (custom definitions the scene uses)
   j["world"] = world.empty() ? json(nullptr) : json(world);
   if (cam) j["camera"] = camJ(*cam);
   if (bookmarks && !bookmarks->empty()) j["bookmarks"] = marksJ(*bookmarks);
@@ -661,7 +694,7 @@ static void copyDef(Node& d, const Node& s, bool top) {
   if (!top) { d.xf = s.xf; d.name = s.name; d.hidden = s.hidden; d.locked = s.locked; d.anchor = s.anchor; }
   d.kind = s.kind;
   d.mods = s.mods;
-  d.prim = s.prim; d.color = s.color; d.thickness = s.thickness; d.round = s.round; d.shell = s.shell;
+  d.prim = s.prim; d.color = s.color; d.thickness = s.thickness;
   d.mat = s.mat; d.code = s.code; d.codeBound = s.codeBound; d.poly = s.poly;
   d.op = s.op; d.k = s.k;
   bool same = d.children.size() == s.children.size();
@@ -734,6 +767,7 @@ SceneFile sceneFromJson(const std::string& text) {
   ReadCtx ctx;
   ctx.version = j.value("version", 1);
   for (auto& p : j.value("primitives", json::array())) ctx.filePrims.push_back(jPrim(p));
+  registerModifierDefs(j);
   SceneFile f;
   f.root = jNode(j.at("root"), ctx);
   if (f.root.isLeaf()) throw std::runtime_error("Scene root must be a group");
@@ -783,12 +817,15 @@ LibraryObject makeLibraryObject(const Node& n, const PrimitiveRegistry&, const s
 }
 
 static json objJ(const LibraryObject& o) {
-  return {{"format", "4dcad-object"}, {"version", 3}, {"id", o.id}, {"name", o.name}, {"node", nodeJ(o.node)}};
+  json j = {{"format", "4dcad-object"}, {"version", 3}, {"id", o.id}, {"name", o.name}, {"node", nodeJ(o.node)}};
+  if (json md = usedModifierDefs(o.node); !md.empty()) j["modifierDefs"] = md;
+  return j;
 }
 static LibraryObject jObj(const json& j, const ReadCtx& outer) {
   ReadCtx ctx = outer;
   if (j.contains("version")) ctx.version = j["version"].get<int>();
   for (auto& p : j.value("primitives", json::array())) ctx.filePrims.push_back(jPrim(p));
+  registerModifierDefs(j);
   LibraryObject o;
   o.id = j.value("id", newId("o"));
   o.name = j.value("name", std::string("Object"));

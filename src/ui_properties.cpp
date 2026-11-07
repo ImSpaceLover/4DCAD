@@ -1,5 +1,6 @@
 // Properties panel (single and multi-object editing, modifiers).
 #include "ui_common.hpp"
+#include "defs.hpp"
 
 namespace fd {
 
@@ -239,17 +240,6 @@ void UI::propertiesPanel() {
     mixed([](const Node& x) { return x.thickness; });
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Extent along the unused axes%s", n->anchor ? " (here: across the world surface)" : "");
     }
-    float rd = (float)n->round.value_or(0), sh = (float)n->shell.value_or(0);
-    if (ImGui::DragFloat("Rounding", &rd, 0.005f, -2.f, 5.f)) n->round = rd;
-    keyable(nid, {"round"});
-    track();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Inflates the solid by this distance: rounds edges and corners (negative shrinks it)");
-    mixed([](const Node& x) { return x.round.value_or(0); });
-    if (ImGui::DragFloat("Shell", &sh, 0.005f, 0.f, 5.f)) n->shell = std::max(0.f, sh);
-    keyable(nid, {"shell"});
-    track();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hollows the shape: keeps only a skin 2 x this thick around its surface\n(visible when cut open, e.g. by a subtraction)");
-    mixed([](const Node& x) { return x.shell.value_or(0); });
     ImGui::SeparatorText("Material");
     float em = (float)n->mat.emissive;
     if (ImGui::SliderFloat("Emissive", &em, 0, 1)) { bool was = n->mat.emissive > 0; n->mat.emissive = em; if (was != (em > 0)) done = true; }
@@ -406,9 +396,11 @@ void UI::propertiesPanel() {
   for (size_t i = 0; i < n->mods.size(); i++) {
     auto& m = n->mods[i];
     ImGui::PushID((int)i);
-    std::string title = MOD_NAMES[m.type];
+    auto mdef = modifierDefOf(m);
+    std::string title = m.type == MOD_DEF ? (mdef ? mdef->name : "Unknown modifier (" + m.def + ")") : std::string(MOD_NAMES[m.type]);
     if (m.raises() && axes[i].valid) title += std::string(" -> ") + AXIS[axes[i].newAxis];
     ImGui::TextColored(m.raises() ? ImVec4(0.6f, 0.85f, 1, 1) : ImVec4(0.9f, 0.9f, 0.9f, 1), "%s", title.c_str());
+    if (mdef && !mdef->description.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", mdef->description.c_str());
     float ww = ImGui::GetWindowWidth();
     ImGui::SameLine(ww - 75);
     if (i > 0 && ImGui::SmallButton("^")) moveUp = (int)i;
@@ -416,6 +408,56 @@ void UI::propertiesPanel() {
     if (ImGui::SmallButton("x")) remove = (int)i;
     ImGui::Indent(10);
     switch (m.type) {
+      case MOD_DEF: {  // a data-driven modifier: its parameters, drawn from their descriptions
+        if (!mdef) break;
+        conformParams(m, *mdef);
+        for (int pi = 0; pi < (int)mdef->params.size(); pi++) {
+          const ParamDef& pd = mdef->params[pi];
+          std::string lab = pd.label.empty() ? pd.name : pd.label, key = "mods." + std::to_string(i) + ".p." + pd.name;
+          ImGui::PushID(pi);
+          ImGui::SetNextItemWidth(pd.type == P_COLOR ? 180.f : 120.f);
+          bool keyed = true;
+          switch (pd.type) {
+            case P_FLOAT: {
+              float v = (float)modParam(m, *mdef, pi);
+              float speed = (float)std::max(1e-4, (pd.max - pd.min) / 300.0);
+              if (ImGui::DragFloat(lab.c_str(), &v, speed, (float)pd.min, (float)pd.max, "%.3f")) setModParam(m, *mdef, pi, v);
+              break;
+            }
+            case P_INT: {
+              int v = (int)std::lround(modParam(m, *mdef, pi));
+              if (ImGui::DragInt(lab.c_str(), &v, 0.1f, (int)pd.min, (int)pd.max)) setModParam(m, *mdef, pi, v);
+              break;
+            }
+            case P_BOOL: {
+              bool v = modParam(m, *mdef, pi) > 0.5;
+              if (ImGui::Checkbox(lab.c_str(), &v)) { setModParam(m, *mdef, pi, v ? 1 : 0); done = true; }
+              break;
+            }
+            case P_ENUM: case P_AXIS: {
+              int v = (int)std::lround(modParam(m, *mdef, pi));
+              std::vector<const char*> opts;
+              if (pd.type == P_AXIS) opts = {"X", "Y", "Z", "W"};
+              else for (auto& o : pd.options) opts.push_back(o.c_str());
+              if (ImGui::Combo(lab.c_str(), &v, opts.data(), (int)opts.size())) { setModParam(m, *mdef, pi, v); done = true; }
+              break;
+            }
+            case P_COLOR: {
+              float c[3] = {(float)modParam(m, *mdef, pi, 0), (float)modParam(m, *mdef, pi, 1), (float)modParam(m, *mdef, pi, 2)};
+              if (ImGui::ColorEdit3(lab.c_str(), c)) for (int k = 0; k < 3; k++) setModParam(m, *mdef, pi, c[k], k);
+              keyed = false;
+              break;
+            }
+            default: break;
+          }
+          track();
+          if (!pd.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pd.tip.c_str());
+          if (keyed) keyable(nid, {key});
+          else keyable(nid, {key + ".r", key + ".g", key + ".b"});
+          ImGui::PopID();
+        }
+        break;
+      }
       case MOD_MIRROR: {
         ImGui::SetNextItemWidth(60);
         if (ImGui::Combo("Axis", &m.axis, axn, 4)) done = true;
@@ -516,16 +558,26 @@ void UI::propertiesPanel() {
   if (moveUp > 0) { std::swap(n->mods[moveUp], n->mods[moveUp - 1]); done = true; modOp = {ModStackOp::MoveUp, moveUp, {}}; }
   if (ImGui::Button("+ Add modifier")) ImGui::OpenPopup("addmod");
   if (ImGui::BeginPopup("addmod")) {
-    auto add = [&](int type, const char* label, const char* tip) {
-      if (ImGui::MenuItem(label)) { Modifier m; m.type = type; if (type == MOD_REVOLVE) { m.axis = -1; m.radius = 0; }
-        if (type == MOD_RADIAL) { m.i = 0; m.j = 2; m.radius = 2; m.count = 6; m.angle = 60; m.startAngle = 0; } n->mods.push_back(m); done = true; modOp = {ModStackOp::Add, -1, m}; }
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-    };
-    add(MOD_EXTRUDE, "Extrude", "Adds the next axis: sweeps the shape along it (finite, infinite or half-space)");
-    add(MOD_REVOLVE, "Revolve", "Adds the next axis: spins an existing axis into it at a radius");
-    add(MOD_RADIAL, "Radial repeat", "Copies the shape built so far around an axis: radius, number of copies, angle between them");
-    add(MOD_MIRROR, "Mirror", "Mirrors the shape built so far across an axis");
-    add(MOD_REPEAT, "Repeat", "Repeats the shape built so far along an axis");
+    // every modifier definition (built-in and custom), grouped by category
+    auto all = defs().modifiers();
+    std::vector<std::string> cats;
+    for (auto& d : all) {
+      std::string c = d->category.empty() ? "Custom" : d->category;
+      if (std::find(cats.begin(), cats.end(), c) == cats.end()) cats.push_back(c);
+    }
+    for (auto& c : cats) {
+      ImGui::SeparatorText(c.c_str());
+      for (auto& d : all) {
+        if ((d->category.empty() ? "Custom" : d->category) != c) continue;
+        if (ImGui::MenuItem(d->name.c_str())) {
+          Modifier m = makeModifier(*d);
+          n->mods.push_back(m);
+          done = true;
+          modOp = {ModStackOp::Add, -1, m};
+        }
+        if (!d->description.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", d->description.c_str());
+      }
+    }
     ImGui::EndPopup();
   }
 
