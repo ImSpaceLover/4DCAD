@@ -98,7 +98,7 @@ static std::string readFile(const std::filesystem::path& p) {
 int main() {
   glslang::InitializeProcess();
   for (auto& ex : EXAMPLES) scene(std::string("example:") + ex.id, ex.make());
-  for (const char* dir : {"examples", "tests/scenes"}) {
+  for (const char* dir : {"examples", "test_worlds", "tests/scenes"}) {
     std::vector<std::filesystem::path> files;
     for (auto& e : std::filesystem::directory_iterator(std::filesystem::path(FD_SOURCE_DIR) / dir))
       if (e.path().extension() == ".json") files.push_back(e.path());

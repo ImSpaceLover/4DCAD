@@ -358,7 +358,7 @@ int main() {
   // an object attached to a world surface stays on its own sheet (double wormhole: not in the other room)
   {
     std::string text;
-    CHECK(readFile(std::string(FD_SOURCE_DIR) + "/examples/double_wormhole.4dscene.json", text), "read example");
+    CHECK(readFile(std::string(FD_SOURCE_DIR) + "/test_worlds/double_wormhole.4dscene.json", text), "read example");
     SceneFile f = sceneFromJson(text);
     PrimitiveRegistry r2;
     for (auto& p : f.primitives) r2.set(p);

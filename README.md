@@ -219,7 +219,7 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
     * Keying any of them (right-click, or the diamonds) switches the object to surface motion; from then on **I** keys these instead of position and rotation.
     * The motion follows the surface exactly (also through a throat) and doesn't distort the object.
     * Moving the object by hand moves its rest pose, i.e. the whole motion.
-  * Example: `examples/rod_through_wormhole.4dscene.json`, a rod travelling through the double wormhole (Render > Render animation).
+  * Example: `test_worlds/rod_through_wormhole.4dscene.json`, a rod travelling through the double wormhole (Render > Render animation).
 * **Extrapolation** (timeline combo next to Interpolation, or right-click keys): what a value does before its first and after its last key.
   * **Hold** stays at the key.
   * **Linear** keeps moving at the speed the curve has there, like Blender's linear extrapolation: a spin keeps turning, a move keeps going.
