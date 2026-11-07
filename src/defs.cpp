@@ -151,6 +151,108 @@ const std::vector<ModifierDef>& builtinModifierDefs() {
           "float bound(float r) { return r + max(thickness, 0.0); }\n";
       add(d);
     }
+    // ---- after Inigo Quilez's distance-function operators (iquilezles.org), in 4D ----
+    {
+      ModifierDef d;
+      d.id = "elongate"; d.name = "Elongate"; d.category = "Deform";
+      d.description = "Stretches the shape by cutting it in the middle and inserting straight parts (per axis): a sphere becomes a capsule / rounded box";
+      d.params = {pf("hx", "X", 0.5, 0, 10), pf("hy", "Y", 0, 0, 10), pf("hz", "Z", 0, 0, 10), pf("hw", "W", 0, 0, 10)};
+      d.code =
+          "vec4 warp(vec4 p) { vec4 h = vec4(hx, hy, hz, hw); return p - clamp(p, -h, h); }\n"
+          "float bound(float r) { return r + length(vec4(hx, hy, hz, hw)); }\n";
+      add(d);
+    }
+    {
+      ModifierDef d;
+      d.id = "twist"; d.name = "Twist"; d.category = "Deform"; d.safety = 0.6;
+      d.description = "Turns the shape's cross-sections in a plane, more the further along an axis";
+      d.params = {pa("from", "Plane from", 0), pa("to", "Plane to", 2), pa("along", "Along", 1),
+                  pf("rate", "Rate", 45, -720, 720, "", "Degrees of turn per unit along the axis")};
+      d.code =
+          "vec4 warp(vec4 p) {\n"
+          "  if (from == to) return p;\n"
+          "  vec2 v = rot2(vec2(axisGet(p, from), axisGet(p, to)), -radians(rate) * axisGet(p, along));\n"
+          "  return axisSet(axisSet(p, from, v.x), to, v.y);\n"
+          "}\n";
+      add(d);
+    }
+    {
+      ModifierDef d;
+      d.id = "bend"; d.name = "Bend"; d.category = "Deform"; d.safety = 0.6;
+      d.description = "Bends the shape in a plane: the turn grows along the plane's first axis (Inigo Quilez's cheap bend)";
+      d.params = {pa("from", "Along", 0), pa("to", "Towards", 1), pf("rate", "Amount", 20, -360, 360, "", "Degrees of bend per unit")};
+      d.code =
+          "vec4 warp(vec4 p) {\n"
+          "  if (from == to) return p;\n"
+          "  vec2 v = rot2(vec2(axisGet(p, from), axisGet(p, to)), -radians(rate) * axisGet(p, from));\n"
+          "  return axisSet(axisSet(p, from, v.x), to, v.y);\n"
+          "}\n";
+      add(d);
+    }
+    {
+      ModifierDef d;
+      d.id = "displace"; d.name = "Displace"; d.category = "Surface";
+      d.description = "Ripples the surface with a sine pattern (a 3D or 4D grid of bumps)";
+      d.params = {pf("amp", "Amplitude", 0.05, -1, 1), pf("freq", "Frequency", 8, 0, 50, "", "Bumps per 2 pi units"),
+                  ParamDef{"useW", "Along W too", "Also ripples along the 4th axis (4D objects)", P_BOOL, 0, 1, 0}};
+      d.code =
+          "float shape(float d, vec4 p) {\n"
+          "  vec4 s = sin(freq * p);\n"
+          "  float b = s.x * s.y * s.z * (useW ? s.w : 1.0);\n"
+          "  return (d + amp * b) / (1.0 + abs(amp) * freq);  // (scaled: stays a safe distance)\n"
+          "}\n"
+          "float bound(float r) { return r + abs(amp); }\n";
+      add(d);
+    }
+    {
+      ModifierDef d;
+      d.id = "noisedisplace"; d.name = "Noise displace"; d.category = "Surface";
+      d.description = "Roughens the surface with smooth 4D noise (fbm): rocks, blobs, wobbly shapes";
+      d.params = {pf("amp", "Amplitude", 0.15, -2, 2), pf("scale", "Scale", 2, 0.01, 30, "", "Noise features per unit")};
+      d.code =
+          "float shape(float d, vec4 p) {\n"
+          "  float n = (fbm(p * scale) - 0.4375) * 2.0;\n"
+          "  return (d + amp * n) / (1.0 + 2.0 * abs(amp) * scale);  // (scaled: stays a safe distance)\n"
+          "}\n"
+          "float bound(float r) { return r + abs(amp); }\n";
+      add(d);
+    }
+    {
+      ModifierDef d;
+      d.id = "taper"; d.name = "Taper"; d.category = "Deform"; d.safety = 0.8;
+      d.description = "Shrinks or widens the cross-sections steadily along an axis (a cone from a cylinder, a frustum from a box)";
+      d.params = {pa("axis", "Axis", 1), pf("rate", "Rate", -0.3, -2, 2, "", "Change of size per unit along the axis (negative: narrower upwards)")};
+      d.code =
+          "vec4 warp(vec4 p) {\n"
+          "  float x = axisGet(p, axis);\n"
+          "  float s = max(1.0 + rate * x, 0.05);\n"
+          "  return axisSet(p / s, axis, x);\n"
+          "}\n"
+          "float shape(float d, vec4 p) { return d * min(max(1.0 + rate * axisGet(p, axis), 0.05), 1.0); }\n"
+          "float bound(float r) { return r * (1.0 + abs(rate) * r); }\n";
+      add(d);
+    }
+    {
+      ModifierDef d;
+      d.id = "softmirror"; d.name = "Soft mirror"; d.category = "Basic";
+      d.description = "Mirror with a smooth seam: the shape and its image melt together where they meet";
+      d.params = {pa("axis", "Axis", 0), pf("softness", "Smoothness", 0.3, 0.001, 5), pf("offset", "Offset", 0.5, 0, 10)};
+      d.code =
+          "vec4 warp(vec4 p) { float x = axisGet(p, axis); return axisSet(p, axis, sqrt(x * x + softness * softness) - offset); }\n"
+          "float bound(float r) { return r + offset; }\n";
+      add(d);
+    }
+    {
+      ModifierDef d;
+      d.id = "stretch"; d.name = "Stretch"; d.category = "Deform";
+      d.description = "Scales the shape differently along each axis (distances stay safe)";
+      d.params = {pf("sx", "X", 1.5, 0.05, 10), pf("sy", "Y", 1, 0.05, 10), pf("sz", "Z", 1, 0.05, 10), pf("sw", "W", 1, 0.05, 10)};
+      d.code =
+          "vec4 warp(vec4 p) { return p / vec4(sx, sy, sz, sw); }\n"
+          "float shape(float d, vec4 p) { return d * min(min(sx, sy), min(sz, sw)); }\n"
+          "float bound(float r) { return r * max(max(sx, sy), max(sz, sw)); }\n";
+      add(d);
+    }
     return v;
   }();
   return defs;
@@ -357,7 +459,14 @@ std::string checkModifierDef(const ModifierDef& d) {
       "float", "int", "bool", "vec2", "vec3", "vec4", "mat2", "mat3", "mat4", "void", "if", "else", "for", "while", "do", "return", "break",
       "continue", "true", "false", "const", "in", "out", "inout", "uniform", "p", "d", "r", "newAxis", "srcAxis", "length", "step", "mix",
       "min", "max", "abs", "sign", "floor", "ceil", "fract", "mod", "clamp", "smoothstep", "sqrt", "pow", "exp", "log", "sin", "cos", "tan",
-      "dot", "cross", "normalize", "distance", "radians", "degrees", "PI", "INF"};
+      "dot", "cross", "normalize", "distance", "radians", "degrees", "PI", "INF",
+      // GLSL keywords / reserved words that are not types or statements
+      "smooth", "flat", "noperspective", "centroid", "sample", "patch", "layout", "attribute", "varying", "precision", "highp", "mediump",
+      "lowp", "invariant", "discard", "struct", "switch", "case", "default", "buffer", "shared", "coherent", "volatile", "restrict",
+      "readonly", "writeonly", "subroutine", "uint", "double", "input", "output", "filter", "common", "partition", "active", "asm",
+      "class", "union", "enum", "typedef", "template", "this", "goto", "inline", "noinline", "public", "static", "extern", "external",
+      "interface", "long", "short", "half", "fixed", "unsigned", "superp", "namespace", "using", "sizeof", "cast", "texture", "atan",
+      "sinh", "cosh", "tanh", "trunc", "round", "transpose", "inversesqrt", "exp2", "log2", "asin", "acos"};
   std::set<std::string> seen;
   for (auto& p : d.params) {
     if (!validIdent(p.name)) return "parameter name '" + p.name + "' is not a valid name (letters, digits, _)";

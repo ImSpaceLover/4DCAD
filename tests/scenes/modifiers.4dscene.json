@@ -1,0 +1,620 @@
+{
+ "format": "4dcad-scene",
+ "version": 3,
+ "camera": {
+  "distance": 11,
+  "pitch": -0.4,
+  "yaw": 0.2,
+  "target": [
+   0,
+   1,
+   0,
+   0
+  ],
+  "rot4": [
+   1,
+   0,
+   0,
+   0,
+   0,
+   1,
+   0,
+   0,
+   0,
+   0,
+   1,
+   0,
+   0,
+   0,
+   0,
+   1
+  ]
+ },
+ "root": {
+  "id": "root",
+  "name": "Scene",
+  "kind": "group",
+  "op": "union",
+  "k": 0.3,
+  "children": [
+   {
+    "id": "m0",
+    "name": "elongate",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.4,
+     0.7,
+     0.9
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      -5.2,
+      1.2,
+      -1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "elongate",
+      "params": {
+       "hx": 0.6
+      }
+     }
+    ]
+   },
+   {
+    "id": "m1",
+    "name": "twist",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.45,
+     0.7,
+     0.85
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      -2.6,
+      1.2,
+      -1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "twist",
+      "params": {
+       "rate": 60
+      }
+     }
+    ]
+   },
+   {
+    "id": "m2",
+    "name": "bend",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.5,
+     0.7,
+     0.8
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      0.0,
+      1.2,
+      -1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "bend",
+      "params": {
+       "rate": 25
+      }
+     }
+    ]
+   },
+   {
+    "id": "m3",
+    "name": "displace",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.55,
+     0.7,
+     0.75
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      2.6000000000000005,
+      1.2,
+      -1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "displace",
+      "params": {
+       "amp": 0.05
+      }
+     }
+    ]
+   },
+   {
+    "id": "m4",
+    "name": "noisedisplace",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.6000000000000001,
+     0.7,
+     0.7
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      5.2,
+      1.2,
+      -1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "noisedisplace",
+      "params": {
+       "amp": 0.1
+      }
+     }
+    ]
+   },
+   {
+    "id": "m5",
+    "name": "taper",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.65,
+     0.7,
+     0.65
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      -5.2,
+      1.2,
+      1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "taper",
+      "params": {
+       "rate": -0.3
+      }
+     }
+    ]
+   },
+   {
+    "id": "m6",
+    "name": "softmirror",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7000000000000001,
+     0.7,
+     0.6
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      -2.6,
+      1.2,
+      1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "softmirror",
+      "params": {
+       "offset": 0.6
+      }
+     }
+    ]
+   },
+   {
+    "id": "m7",
+    "name": "stretch",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.75,
+     0.7,
+     0.55
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      0.0,
+      1.2,
+      1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "stretch",
+      "params": {
+       "sx": 1.6
+      }
+     }
+    ]
+   },
+   {
+    "id": "m8",
+    "name": "round",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.8,
+     0.7,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      2.6000000000000005,
+      1.2,
+      1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "round",
+      "params": {
+       "radius": 0.1
+      }
+     }
+    ]
+   },
+   {
+    "id": "m9",
+    "name": "onion",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.8500000000000001,
+     0.7,
+     0.45
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      5.2,
+      1.2,
+      1.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.8
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "def",
+      "def": "onion",
+      "params": {
+       "thickness": 0.05
+      }
+     }
+    ]
+   },
+   {
+    "id": "ground",
+    "name": "Ground",
+    "kind": "leaf",
+    "prim": "hyperplane",
+    "color": [
+     0.6,
+     0.6,
+     0.62
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 1
+    },
+    "modifiers": []
+   }
+  ],
+  "xf": {
+   "pos": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "rot": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "scale": 1
+  },
+  "modifiers": []
+ }
+}

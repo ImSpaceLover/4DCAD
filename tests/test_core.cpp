@@ -819,7 +819,8 @@ int main() {
     CLOSE(customSdf(c, {2, 0, 0, 0}), 1.0, 1e-12);
   }
   {  // modifier definitions: the engine modifiers' reference code equals their native code
-    for (const char* id : {"mirror", "repeat", "extrude", "revolve", "radial", "round", "onion"}) {
+    for (const char* id : {"mirror", "repeat", "extrude", "revolve", "radial", "round", "onion", "elongate", "twist", "bend", "displace",
+                           "noisedisplace", "taper", "softmirror", "stretch"}) {
       auto d = defs().modifier(id);
       CHECK(d != nullptr, "built-in definition %s", id);
       if (!d) continue;
@@ -861,6 +862,46 @@ int main() {
         CHECK(diff < 1e-9, "%s reference code = native (%g)", d->id.c_str(), diff);
       }
     }
+  }
+  {  // data-driven modifiers on the CPU (Inigo Quilez's operators, Onion layers)
+    auto withMods = [&](Node n, std::vector<std::pair<std::string, std::vector<double>>> ms) {
+      for (auto& [id, vals] : ms) {
+        auto d = defs().modifier(id);
+        Modifier m = makeModifier(*d);
+        for (size_t i = 0; i < vals.size(); i++) setModParam(m, *d, (int)i, vals[i]);
+        n.mods.push_back(m);
+      }
+      return n;
+    };
+    auto distAt = [&](const Node& leaf, V4 p) {
+      Node r = makeGroup(BoolOp::Union, {leaf});
+      SceneEvaluator ev(r, reg, "");
+      return ev.evalFull(p).d;
+    };
+    Node hs = makeLeaf("hypersphere", "h");  // radius 1 in 4D
+    Node ball = makeShape("hypersphere", "b");
+    // elongate: a hypersphere stretched 1 along X keeps radius 1 around a segment
+    CLOSE(distAt(withMods(ball, {{"elongate", {1, 0, 0, 0}}}), {3, 0, 0, 0}), 1, 1e-9);
+    CLOSE(distAt(withMods(ball, {{"elongate", {1, 0, 0, 0}}}), {1.5, 0, 0, 0}), -0.5, 1e-9);
+    // twist keeps distances from the origin: a hypersphere stays one (with the safety factor 0.6)
+    CLOSE(distAt(withMods(ball, {{"twist", {0, 2, 1, 90}}}), {0.3, 2, 0.4, 0}), (std::sqrt(0.09 + 4 + 0.16) - 1) * 0.6, 1e-9);
+    // stretch: conservative (never more than the true distance)
+    CLOSE(distAt(withMods(ball, {{"stretch", {2, 1, 1, 1}}}), {3, 0, 0, 0}), 0.5, 1e-9);
+    // onion twice: two thin skins
+    double d1 = std::abs(1.1 - 1) - 0.1;
+    CLOSE(distAt(withMods(ball, {{"onion", {0.1}}, {"onion", {0.03}}}), {1.1, 0, 0, 0}), std::abs(d1) - 0.03, 1e-9);
+    // round, soft mirror, taper at its neutral height, displace at a node of the sine grid
+    CLOSE(distAt(withMods(ball, {{"round", {0.2}}}), {2, 0, 0, 0}), 0.8, 1e-9);
+    CLOSE(distAt(withMods(ball, {{"taper", {1, -0.3}}}), {0, 0, 2, 0}), 0.8, 1e-9);  // safety 0.8
+    CLOSE(distAt(withMods(ball, {{"displace", {0.1, 8, 0}}}), {2, 0, 0, 0}), 1 / (1 + 0.8), 1e-9);
+    double sm = std::sqrt(1 + 0.09) - 0.5;  // soft |x| of x = 1 (softness 0.3, offset 0.5)
+    CLOSE(distAt(withMods(ball, {{"softmirror", {0, 0.3, 0.5}}}), {1, 0, 0, 0}), std::abs(sm) - 1, 1e-9);
+    // bounds follow the bound hooks
+    auto bnd = computeBounds(makeGroup(BoolOp::Union, {withMods(ball, {{"elongate", {3, 0, 0, 0}}})}), reg);
+    double br = 0;
+    for (auto& [id, b] : bnd) if (id != "root" && std::isfinite(b.r)) br = std::max(br, b.r);
+    CHECK(br >= 4 - 1e-9, "elongate bound %.3f", br);
+    (void)hs;
   }
   {  // the regular 4D polytopes
     const int counts[6] = {5, 8, 16, 24, 120, 600};

@@ -171,6 +171,10 @@ There are no world objects or W slider: the curved spaces are 3D. 4D shapes show
   * **Revolve**: adds the next axis by spinning an existing axis into it at a radius. R = 0 makes a disk/sphere; R > 0 makes a torus-like shape.
   * **Mirror** (axis, **offset**: the shape and its mirror image sit that far from the mirror plane) and **Repeat** (spacing, copies; 0 = infinite).
   * **Radial repeat**: copies the shape around an axis (a plane of rotation in 4D), with a **radius** (distance from the axis), number of **copies**, **angle step** between them and a **start angle**. Copies × step may be less than 360° (an arc); "Fill 360" spreads them around the full circle. One copy at radius 0 just rotates the shape. (It replaces the old Rotate modifier; files using Rotate load as a one-copy Radial repeat with the same result.)
+  * **Round** (radius) and **Onion** (thickness: turns the shape into a hollow skin). Onion can be added several times; each one splits every layer in two, as in Inigo Quilez's onion example. They replace the old Round / Shell fields (old files convert on load).
+  * **Deform** (adapted from Inigo Quilez's SDF operators to 4D): **Elongate** (per-axis stretch of the middle), **Twist** (rotate a plane by an angle growing along an axis), **Bend**, **Taper**, **Stretch** (non-uniform scale with a conservative distance), **Soft mirror** (a mirror with a smooth seam).
+  * **Surface:** **Displace** (sine ripples) and **Noise displace** (fbm noise).
+  * Every modifier is a **definition**: code in a GLSL subset plus parameters (sliders, checkboxes, drop-down lists, colours), all keyable. The same code runs in the shader and, through a built-in interpreter, exactly on the CPU (picking, placement, bounds). Warps that stretch space carry a safety factor so ray marching stays stable.
 
   Examples: Point → Extrude → Extrude → Extrude → Extrude is a tesseract. Point → Extrude → Revolve → Extrude (infinite) is an infinite rod. A whole group can be extruded or revolved into the next dimension.
 * **Library** (left):
@@ -382,8 +386,8 @@ tests/                        core, app-level and shader-compile tests (ctest); 
 * **Scenes** `.4dscene.json` (`format: "4dcad-scene"`): a tree of nodes. Each
   node has `xf: {pos[4], rotm[16], scale}`, `modifiers`, an optional `anchor`,
   and either leaf fields or group fields.
-  * Leaves: `prim` (always `point`; older files with other primitive types are converted), `color`, `thickness`, `round`, `shell`.
-  * `modifiers`: a list of `{type: extrude|revolve|radial|mirror|repeat, ...}`, applied in order (old `rotate` entries load as `radial`).
+  * Leaves: `prim` (always `point`; older files with other primitive types are converted), `color`, `thickness` (older `round` / `shell` fields become Round / Onion modifiers).
+  * `modifiers`: a list of `{type: extrude|revolve|radial|mirror|repeat, ...}` or `{type: def, def: <id>, params: {name: value}}`, applied in order (old `rotate` entries load as `radial`). Custom modifier definitions a scene uses are saved in `modifierDefs`.
   * Groups: `op`, `k`, `children`.
   * Custom primitives are embedded in the file.
   * Files from the earlier browser version (6 rotation angles) still load.
