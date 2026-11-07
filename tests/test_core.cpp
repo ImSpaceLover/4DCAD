@@ -9,6 +9,8 @@
 #include "polytope.hpp"
 #include "shaderlang.hpp"
 #include "defs.hpp"
+#include "textures.hpp"
+#include <nlohmann/json.hpp>
 #include "shaders.hpp"
 #include "evaluator.hpp"
 #include "examples.hpp"
@@ -205,10 +207,10 @@ int main() {
     Node cust = makeCustom("C");
     cust.codeBound = 2;
     cust.mat.emissive = 0.5;
-    cust.mat.texture = TEX_CHECKER;
+    cust.mat.tex[CH_COLOR] = legacyColorSlot(TEX_CHECKER, 1, 0.7, {0, 0, 0});
     cust.mat.color2 = {0.1, 0.2, 0.3};
     Node back = nodeFromJson(nodeToJson(cust));
-    CHECK(back.isCustom() && back.code == cust.code && back.codeBound == 2 && back.mat.emissive == 0.5 && back.mat.texture == TEX_CHECKER &&
+    CHECK(back.isCustom() && back.code == cust.code && back.codeBound == 2 && back.mat.emissive == 0.5 && back.mat.tex[CH_COLOR] == cust.mat.tex[CH_COLOR] &&
           back.mat.color2[2] == 0.3, "material/custom json");
     CHECK(nodeDim(back, reg) == 4, "custom SDFs are 4D");
     Node r = makeGroup(BoolOp::Union, {back});
@@ -339,6 +341,7 @@ int main() {
     Modifier rp; rp.type = MOD_REPEAT; rp.axis = 0; rp.spacing = 3; rp.count = 2;
     l.mods = {rp, ex};
     appendRoundShell(l.mods, 0.01, 0.01);  // (Onion, Round)
+    l.mat.tex[CH_COLOR] = legacyColorSlot(TEX_CHECKER, 1, 0.7, {0, 0, 0});
     Node r = makeGroup(BoolOp::Union, {l});
     std::string k0 = structureKey(r, reg, "", false, SpaceKind::Flat);
     Node e = r;
@@ -346,7 +349,7 @@ int main() {
     c.mods[1].length = 5; c.mods[0].spacing = 1.5; c.mods[0].count = 0;
     setModParam(c.mods[2], *defs().modifier("onion"), 0, 0.1);
     setModParam(c.mods[3], *defs().modifier("round"), 0, 0.05);
-    c.mat.texture = TEX_CHECKER; c.mat.emissive = 2; c.xf.scale = 3; c.color = {0.1, 0.2, 0.3};
+    c.mat.tex[CH_COLOR].strength = 0.4; c.mat.tex[CH_COLOR].map.scale = 2.5; c.mat.tex[CH_COLOR].map.rot[2] = 30; c.mat.emissive = 2; c.xf.scale = 3; c.color = {0.1, 0.2, 0.3};
     CHECK(structureKey(e, reg, "", false, SpaceKind::Flat) == k0, "value edits keep the structure key");
     auto cs = compileScene(e, reg, "", false, nullptr);
     auto d = packNodes(e, reg, cs, {});
@@ -355,7 +358,16 @@ int main() {
     CLOSE(d[row * NODE_VEC4S * 4 + 0], 1.5, 1e-6);   // repeat spacing
     CHECK(d[row * NODE_VEC4S * 4 + 1] > 1e8, "infinite repeat count packed as huge");
     CLOSE(d[row * NODE_VEC4S * 4 + 4], 2.5, 1e-6);   // extrude half length
-    CLOSE(d[1 * NODE_VEC4S * 4 + 12 * 4 + 1], TEX_CHECKER, 1e-6);
+    int trow = (int)d[1 * NODE_VEC4S * 4 + 12 * 4 + 1];  // texture rows (after the modifier rows)
+    CHECK(trow > row, "texture rows after the modifier rows (%d, %d)", trow, row);
+    CLOSE(d[trow * NODE_VEC4S * 4 + 20], 0.4, 1e-6);   // strength
+    CLOSE(d[trow * NODE_VEC4S * 4 + 5], 2.5, 1e-6);    // A: scale on Y (the XW rotation leaves Y alone)
+    {
+      Node e2 = e;
+      e2.children[0].mat.tex[CH_BUMP] = legacyColorSlot(TEX_NOISE, 1, 1, {0, 0, 0});
+      CHECK(structureKey(e2, reg, "", false, SpaceKind::Flat) != k0, "adding a texture changes the structure key");
+      CHECK(compileScene(e2, reg, "", false, nullptr).glsl.find("SCENE_BUMP") != std::string::npos, "bump scenes take the centre normal sample");
+    }
     CLOSE(d[row * NODE_VEC4S * 4 + 8], 0.1, 1e-6);    // onion thickness (data-driven modifier: its own vec4)
     CLOSE(d[row * NODE_VEC4S * 4 + 12], 0.05, 1e-6);  // round radius
     Node f = r;
@@ -862,6 +874,135 @@ int main() {
         CHECK(diff < 1e-9, "%s reference code = native (%g)", d->id.c_str(), diff);
       }
     }
+  }
+  {  // texture definitions, slots, remap, mapping
+    for (auto& d : builtinTextureDefs()) {
+      std::string e = checkTextureDef(d);
+      CHECK(e.empty(), "built-in texture %s: %s", d.id.c_str(), e.c_str());
+    }
+    CHECK(textureKind(*defs().texture("checker")) == TEXK_MASK && textureKind(*defs().texture("palette")) == TEXK_RGB, "texture kinds");
+    // CPU values = the old fixed functions at their defaults
+    auto texAt = [&](const char* id, V4 p) {
+      auto d = defs().texture(id);
+      std::vector<double> vals;
+      double out[4];
+      runTexture(*d, packValues(vals, d->params), p.data(), out);
+      return out[0];
+    };
+    CLOSE(texAt("checker", {0.5, 0.5, 0.5, 0.5}), 0, 1e-12);
+    CLOSE(texAt("checker", {1.5, 0.5, 0.5, 0.5}), 1, 1e-12);
+    CLOSE(texAt("stripes", {0.7, 0, 0, 0}), 1, 1e-12);
+    CLOSE(texAt("stripes", {0.2, 0, 0, 0}), 0, 1e-12);
+    CLOSE(texAt("dots", {0.5, 0.5, 0.5, 0.5}), 1, 1e-12);
+    CLOSE(texAt("gradient", {0, 0.5, 0, 0}), 0.75, 1e-12);
+    {
+      V4 q{0.3, 1.7, -0.4, 0.9};
+      double n = std::sin(q[0] * 1.7 + std::sin(q[1] * 2.3 + q[3])) + std::sin(q[2] * 1.9 + std::sin(q[3] * 2.9 + q[0])) + 0.5 * std::sin(3.1 * q[1] + 2.0 * std::sin(1.3 * q[2]));
+      CLOSE(texAt("noise", q), std::clamp(0.5 + 0.2 * n, 0.0, 1.0), 1e-12);
+    }
+    double cells = texAt("cells", {0.37, 1.21, -2.4, 0.66});
+    CHECK(cells >= 0 && cells <= 1, "cells in 0..1 (%.3f)", cells);
+    // remap: default = identity; low / high; invert; contrast keeps 0, 0.5 and 1; a two-point curve
+    TexSlot t;
+    CLOSE(texRemap(t, 0.3), 0.3, 1e-12);
+    t.low = 0.2; t.high = 0.6;
+    CLOSE(texRemap(t, 0.4), 0.5, 1e-12);
+    CLOSE(texRemap(t, 0.9), 1, 1e-12);
+    t = TexSlot{}; t.invert = true;
+    CLOSE(texRemap(t, 0.3), 0.7, 1e-12);
+    t = TexSlot{}; t.contrast = 0.7;
+    CLOSE(texRemap(t, 0.5), 0.5, 1e-12);
+    CHECK(texRemap(t, 0.3) < 0.3 && texRemap(t, 0.7) > 0.7, "contrast steepens");
+    t = TexSlot{}; t.curve = {{1, 0}, {0, 1}};  // (unsorted on purpose)
+    CLOSE(texRemap(t, 0), 1, 1e-12);
+    CLOSE(texRemap(t, 0.5), 0.5, 1e-12);
+    CLOSE(texRemap(t, 1), 0, 1e-12);
+    // mapping: tex = scale * R^T (x - offset); thin objects sit mid-cell on their unused axes
+    Material m;
+    m.tex[CH_COLOR].def = "checker";
+    m.tex[CH_COLOR].map.scale = 2;
+    m.tex[CH_COLOR].map.offset = {1, 0, 0, 0};
+    M4 A; V4 b;
+    texMapMatrix(m, CH_COLOR, 3, A, b);
+    V4 tq = mul(A, V4{1.5, 0.25, 0, 0}) + b;
+    CLOSE(tq[0], 1, 1e-12); CLOSE(tq[1], 0.5, 1e-12); CLOSE(tq[3], 0.5, 1e-12);
+    m.tex[CH_COLOR].map.rot[0] = 90;  // XY: x -> y
+    texMapMatrix(m, CH_COLOR, 4, A, b);
+    tq = mul(A, V4{1, 1, 0, 0}) + b;  // (x - offset) = (0, 1): rotated back by -90 = (1, 0), times 2
+    CLOSE(tq[0], 2, 1e-9); CLOSE(tq[1], 0, 1e-9);
+    // shared mapping follows the other channel (no cycles)
+    m.tex[CH_BUMP].def = "noise";
+    m.tex[CH_BUMP].mapFrom = CH_COLOR;
+    CHECK(texMappingChannel(m, CH_BUMP) == CH_COLOR, "shared mapping");
+    m.tex[CH_COLOR].mapFrom = CH_BUMP;
+    CHECK(texMappingChannel(m, CH_BUMP) == CH_BUMP, "mapping cycle: own mapping");
+    // colour on the CPU: a checker mask blends to the second colour
+    Node leaf = makeShape("hypersphere", "s");
+    leaf.color = {1, 0, 0};
+    leaf.mat.tex[CH_COLOR] = legacyColorSlot(TEX_CHECKER, 1, 1, {0, 0, 1});
+    auto c0 = texturedColor(leaf, 4, {0.5, 0.5, 0.5, 0.5}, {}, {});
+    auto c1 = texturedColor(leaf, 4, {1.5, 0.5, 0.5, 0.5}, {}, {});
+    CHECK(c0 == (std::array<double, 3>{1, 0, 0}) && c1 == (std::array<double, 3>{0, 0, 1}), "textured colour on the CPU");
+    leaf.mat.tex[CH_COLOR].def = "colorgradient";
+    leaf.mat.tex[CH_COLOR].params.clear();
+    conformValues(leaf.mat.tex[CH_COLOR].params, defs().texture("colorgradient")->params);
+    auto cg = texturedColor(leaf, 4, {0, -1, 0, 0}, {}, {});
+    CLOSE(cg[0], 0.1, 1e-9); CLOSE(cg[2], 0.8, 1e-9);  // its "from" colour
+    leaf.mat.tex[CH_ROUGHNESS] = legacyColorSlot(TEX_CHECKER, 1, 1, {0, 0, 0});
+    leaf.mat.tex[CH_ROUGHNESS].value2 = 0.1;
+    CLOSE(texturedChannel(leaf, CH_ROUGHNESS, 4, {1.5, 0.5, 0.5, 0.5}, {}, {}), 0.1, 1e-12);
+    CLOSE(texturedChannel(leaf, CH_ROUGHNESS, 4, {0.5, 0.5, 0.5, 0.5}, {}, {}), leaf.mat.roughness, 1e-12);
+    // files: slots round-trip; old materials become a colour slot
+    leaf.mat.tex[CH_BUMP] = legacyColorSlot(TEX_STRIPES, 3, 0.5, {0, 0, 0});
+    leaf.mat.tex[CH_BUMP].value2 = 0.03;
+    leaf.mat.tex[CH_BUMP].curve = {{0, 0}, {0.5, 1}, {1, 0}};
+    leaf.mat.tex[CH_BUMP].map.space = TS_WORLD;
+    leaf.mat.tex[CH_BUMP].map.rot = {1, 2, 3, 4, 5, 6};
+    leaf.mat.tex[CH_BUMP].invert = true;
+    leaf.mat.tex[CH_ROUGHNESS].mapFrom = CH_BUMP;
+    setParamValue(leaf.mat.tex[CH_BUMP].params, defs().texture("stripes")->params, 1, 0.25);
+    Node back = nodeFromJson(nodeToJson(leaf));
+    for (int c = 0; c < CH_COUNT; c++) CHECK(back.mat.tex[c] == leaf.mat.tex[c], "texture slot %s round-trips", CHANNEL_IDS[c]);
+    Node old = nodeFromJson(R"({"id":"o","name":"o","kind":"leaf","prim":"point","color":[1,1,1],
+      "material":{"texture":"Bricks","texScale":2.5,"texStrength":0.4,"color2":[0.1,0.2,0.3]}})");
+    CHECK(old.mat.tex[CH_COLOR].def == "bricks" && old.mat.tex[CH_COLOR].map.scale == 2.5 && old.mat.tex[CH_COLOR].strength == 0.4 &&
+          old.mat.tex[CH_COLOR].color2 == (std::array<double, 3>{0.1, 0.2, 0.3}), "old texture fields -> colour slot");
+    // texture definitions: files, custom ones in the registry, checks
+    TextureDef td;
+    td.id = "test_rings2"; td.name = "Rings 2"; td.category = "Custom";
+    td.params = {ParamDef{"freq", "Frequency", "", P_FLOAT, 0, 10, 3}};
+    td.code = "vec4 tex(vec4 p) { float r = fract(length(p) * freq); return vec4(r, 1.0 - r, 0.5, step(0.5, r)); }\n";
+    CHECK(checkTextureDef(td).empty(), "custom texture compiles: %s", checkTextureDef(td).c_str());
+    TextureDef tb = textureDefFromJson(textureDefToJson(td));
+    CHECK(tb.code == td.code && tb.params == td.params && tb.name == td.name, "texture definition round-trips");
+    defs().setTexture(td);
+    Node cl = makeShape("hypersphere", "c");
+    cl.mat.tex[CH_COLOR].def = "test_rings2";
+    double rgba[4];
+    TexKind kk;
+    CHECK(sampleTexSlot(cl.mat, CH_COLOR, 4, {0.1, 0, 0, 0}, rgba, &kk) && kk == TEXK_RGBA, "rgba texture sample");
+    CLOSE(rgba[0], 0.3, 1e-9); CLOSE(rgba[3], 0, 1e-12);
+    TextureDef bad = td;
+    bad.code = "float notTex(vec4 p) { return 1.0; }\n";
+    CHECK(!checkTextureDef(bad).empty(), "a texture needs tex()");
+    bad.code = "float tex(vec4 p) { return q; }\n";
+    CHECK(checkTextureDef(bad).rfind("1:", 0) == 0, "errors on the user's line: %s", checkTextureDef(bad).c_str());
+    {
+      ModifierDef md;
+      md.id = "test_badline"; md.name = "b";
+      md.params = {ParamDef{"amount", "", "", P_FLOAT, 0, 1, 0.5}};
+      md.code = "float shape(float d, vec4 p) {\n  return d - amount * q;\n}\n";
+      CHECK(checkModifierDef(md).rfind("2:", 0) == 0, "modifier errors on the user's line: %s", checkModifierDef(md).c_str());
+    }
+    // animation paths of texture slots
+    double v = 0;
+    CHECK(setValue(leaf, "tex.bump.p.width", 0.6) && getValue(leaf, "tex.bump.p.width", v) && std::abs(v - 0.6) < 1e-12, "texture parameter path");
+    CHECK(setValue(leaf, "tex.bump.rot.ZW", 45) && leaf.mat.tex[CH_BUMP].map.rot[5] == 45, "texture rotation path");
+    CHECK(setValue(leaf, "tex.color.offset.w", 2) && leaf.mat.tex[CH_COLOR].map.offset[3] == 2, "texture offset path");
+    CHECK(!setValue(leaf, "tex.metallic.strength", 1), "no path for an empty slot");
+    bool listed = false;
+    for (auto& av : animatableValues(leaf)) if (av.path == "tex.bump.value2") listed = true;
+    CHECK(listed, "texture values are animatable");
   }
   {  // data-driven modifiers on the CPU (Inigo Quilez's operators, Onion layers)
     auto withMods = [&](Node n, std::vector<std::pair<std::string, std::vector<double>>> ms) {

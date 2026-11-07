@@ -1,6 +1,8 @@
 // Properties panel (single and multi-object editing, modifiers).
 #include "ui_common.hpp"
 #include "defs.hpp"
+#include <functional>
+#include "textures.hpp"
 
 namespace fd {
 
@@ -103,6 +105,260 @@ void UI::cameraProperties(Node& n, bool& live, bool& done) {
     for (int k = 0; k < 6; k++) d[k] = a[k];
     n.xf.rot = rotationFromAngles(d);
   }
+}
+
+// a definition's parameters (modifier or texture), drawn from their descriptions: float drag,
+// int drag, checkbox, drop-down list (enum / axis), colour picker; key(paths) adds the keyframe button
+static void paramWidgets(const std::vector<ParamDef>& ps, const std::function<double(int, int)>& get,
+                         const std::function<void(int, double, int)>& set, const std::string& keyPrefix,
+                         const std::function<void(const std::vector<std::string>&)>& key, bool& live, bool& done) {
+  for (int pi = 0; pi < (int)ps.size(); pi++) {
+    const ParamDef& pd = ps[pi];
+    std::string lab = pd.label.empty() ? pd.name : pd.label, k = keyPrefix + pd.name;
+    ImGui::PushID(pi);
+    ImGui::SetNextItemWidth(pd.type == P_COLOR ? 180.f : 120.f);
+    switch (pd.type) {
+      case P_FLOAT: {
+        float v = (float)get(pi, 0);
+        float speed = (float)std::max(1e-4, (pd.max - pd.min) / 300.0);
+        if (ImGui::DragFloat(lab.c_str(), &v, speed, (float)pd.min, (float)pd.max, "%.3f")) set(pi, v, 0);
+        break;
+      }
+      case P_INT: {
+        int v = (int)std::lround(get(pi, 0));
+        if (ImGui::DragInt(lab.c_str(), &v, 0.1f, (int)pd.min, (int)pd.max)) set(pi, v, 0);
+        break;
+      }
+      case P_BOOL: {
+        bool v = get(pi, 0) > 0.5;
+        if (ImGui::Checkbox(lab.c_str(), &v)) { set(pi, v ? 1 : 0, 0); done = true; }
+        break;
+      }
+      case P_ENUM: case P_AXIS: {
+        int v = (int)std::lround(get(pi, 0));
+        std::vector<const char*> opts;
+        if (pd.type == P_AXIS) opts = {"X", "Y", "Z", "W"};
+        else for (auto& o : pd.options) opts.push_back(o.c_str());
+        if (ImGui::Combo(lab.c_str(), &v, opts.data(), (int)opts.size())) { set(pi, v, 0); done = true; }
+        break;
+      }
+      case P_COLOR: {
+        float c[3] = {(float)get(pi, 0), (float)get(pi, 1), (float)get(pi, 2)};
+        if (ImGui::ColorEdit3(lab.c_str(), c)) for (int j = 0; j < 3; j++) set(pi, c[j], j);
+        break;
+      }
+      default: break;
+    }
+    if (ImGui::IsItemEdited()) live = true;
+    if (ImGui::IsItemDeactivatedAfterEdit()) done = true;
+    if (!pd.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pd.tip.c_str());
+    if (pd.type == P_COLOR) key({k + ".r", k + ".g", k + ".b"});
+    else key({k});
+    ImGui::PopID();
+  }
+}
+
+// the remap curve: points (in, out) in 0..1; drag a point, double-click to add, right-click to remove
+static bool curveEditor(std::vector<std::array<double, 2>>& pts, bool& done) {
+  ImVec2 size(std::min(220.f, ImGui::GetContentRegionAvail().x), 90.f);
+  ImVec2 p0 = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##curve", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p0, {p0.x + size.x, p0.y + size.y}, IM_COL32(25, 27, 32, 255));
+  dl->AddRect(p0, {p0.x + size.x, p0.y + size.y}, IM_COL32(80, 85, 95, 255));
+  auto toScr = [&](double x, double y) { return ImVec2(p0.x + (float)x * size.x, p0.y + (1 - (float)y) * size.y); };
+  auto fromScr = [&](ImVec2 m) { return std::array<double, 2>{std::clamp((m.x - p0.x) / size.x, 0.f, 1.f), std::clamp(1 - (m.y - p0.y) / size.y, 0.f, 1.f)}; };
+  std::sort(pts.begin(), pts.end(), [](auto& a, auto& b) { return a[0] < b[0]; });
+  // the mapping as the shader computes it
+  TexSlot probe;
+  probe.curve = pts;
+  ImVec2 prev = toScr(0, texRemap(probe, 0));
+  for (int k = 1; k <= 48; k++) {
+    double x = k / 48.0;
+    ImVec2 c = toScr(x, texRemap(probe, x));
+    dl->AddLine(prev, c, IM_COL32(120, 190, 255, 255), 2.f);
+    prev = c;
+  }
+  static int drag = -1;
+  bool changed = false;
+  ImVec2 mouse = ImGui::GetIO().MousePos;
+  int hover = -1;
+  for (int k = 0; k < (int)pts.size(); k++) {
+    ImVec2 c = toScr(pts[k][0], pts[k][1]);
+    if (std::abs(c.x - mouse.x) < 6 && std::abs(c.y - mouse.y) < 6) hover = k;
+    dl->AddCircleFilled(c, 4.f, k == hover ? IM_COL32(255, 220, 120, 255) : IM_COL32(230, 230, 230, 255));
+  }
+  if (ImGui::IsItemHovered()) {
+    if (ImGui::IsMouseClicked(0) && hover >= 0) drag = hover;
+    if (ImGui::IsMouseDoubleClicked(0) && hover < 0 && (int)pts.size() < TEX_CURVE_MAX) {
+      if (pts.empty()) { pts.push_back({0, 0}); pts.push_back({1, 1}); }
+      pts.push_back(fromScr(mouse));
+      changed = done = true;
+    }
+    if (ImGui::IsMouseClicked(1) && hover >= 0) { pts.erase(pts.begin() + hover); changed = done = true; }
+    ImGui::SetTooltip("Drag points; double-click to add, right-click to remove");
+  }
+  if (drag >= 0 && drag < (int)pts.size()) {
+    if (ImGui::IsMouseDown(0)) { pts[drag] = fromScr(mouse); changed = true; }
+    else { drag = -1; done = true; }
+  }
+  return changed;
+}
+
+void UI::textureSlot(Node& n, int ch, bool& live, bool& done) {
+  TexSlot& t = n.mat.tex[ch];
+  auto d = defs().texture(t.def);
+  ImGui::PushID(1000 + ch);
+  std::string label = t.used() ? (d ? d->name : "Unknown (" + t.def + ")") : std::string("None");
+  ImGui::SetNextItemWidth(150);
+  std::string comboLab = std::string(ch == CH_BUMP ? "Bump" : "Texture") + "##slot";
+  if (ImGui::BeginCombo(comboLab.c_str(), label.c_str())) {
+    if (ImGui::Selectable("None", !t.used())) { t.def.clear(); done = true; }
+    std::string cat;
+    for (auto& td : defs().textures()) {
+      std::string c = td->category.empty() ? "Custom" : td->category;
+      if (c != cat) { ImGui::SeparatorText(c.c_str()); cat = c; }
+      std::string nm = td->name + (textureKind(*td) != TEXK_MASK ? "  (colour)" : "");
+      if (ImGui::Selectable(nm.c_str(), t.def == td->id)) {
+        bool fresh = !t.used();
+        t.def = td->id;
+        t.params.clear();
+        conformValues(t.params, td->params);
+        if (fresh && ch == CH_BUMP) t.value2 = 0.02;  // a small relief
+        if (fresh && ch != CH_COLOR && ch != CH_BUMP) t.value2 = ch == CH_ROUGHNESS ? 0.15 : 1.0;
+        done = true;
+      }
+      if (!td->description.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", td->description.c_str());
+    }
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(ch == CH_COLOR ? "A procedural 4D texture: masks blend to the second colour, colour textures give the colour"
+                      : ch == CH_BUMP ? "Relief that changes the lighting only (the shape, clicks and collisions are unchanged)"
+                                      : "Blends this value to the second value where the texture's mask is 1");
+  d = defs().texture(t.def);
+  if (!t.used() || !d) { ImGui::PopID(); return; }
+  std::string nid = n.id, pre = std::string("tex.") + CHANNEL_IDS[ch] + ".";
+  auto key = [&](const std::vector<std::string>& paths) { keyable(nid, paths); };
+  auto track = [&] { if (ImGui::IsItemEdited()) live = true; if (ImGui::IsItemDeactivatedAfterEdit()) done = true; };
+  ImGui::Indent(12);
+  conformValues(t.params, d->params);
+  paramWidgets(d->params, [&](int i, int c) { return paramValue(t.params, d->params, i, c); },
+               [&](int i, double v, int c) { setParamValue(t.params, d->params, i, v, c); }, pre + "p.", key, live, done);
+  TexKind kind = textureKind(*d);
+  if (ch == CH_COLOR) {
+    if (kind == TEXK_MASK) {
+      float c2[3] = {(float)t.color2[0], (float)t.color2[1], (float)t.color2[2]};
+      ImGui::SetNextItemWidth(180);
+      if (ImGui::ColorEdit3("Second colour", c2)) for (int k = 0; k < 3; k++) t.color2[k] = c2[k];
+      track();
+      key({pre + "color2.r", pre + "color2.g", pre + "color2.b"});
+    }
+  } else {
+    float v2 = (float)t.value2;
+    ImGui::SetNextItemWidth(120);
+    if (ch == CH_BUMP) { if (ImGui::DragFloat("Height", &v2, 0.001f, -1.f, 1.f, "%.4f")) t.value2 = v2; }
+    else if (ImGui::SliderFloat("Second value", &v2, 0, ch == CH_SPECULAR ? 2.f : 1.f)) t.value2 = v2;
+    track();
+    key({pre + "value2"});
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(ch == CH_BUMP ? "Relief height where the mask is 1 (negative: dents)" : "The value where the mask is 1");
+  }
+  float st = (float)t.strength;
+  ImGui::SetNextItemWidth(120);
+  if (ImGui::SliderFloat("Strength", &st, 0, 1)) t.strength = st;
+  track();
+  key({pre + "strength"});
+  // remap (the mask: colour textures without coverage use their brightness)
+  if (ImGui::TreeNode("Remap")) {
+    float lo = (float)t.low, hi = (float)t.high, ct = (float)t.contrast;
+    ImGui::SetNextItemWidth(120);
+    if (ImGui::DragFloat("Low", &lo, 0.005f, -1.f, 2.f, "%.3f")) t.low = lo;
+    track(); key({pre + "low"});
+    ImGui::SetNextItemWidth(120);
+    if (ImGui::DragFloat("High", &hi, 0.005f, -1.f, 2.f, "%.3f")) t.high = hi;
+    track(); key({pre + "high"});
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Masks from Low to High map to 0..1 (clamped)");
+    ImGui::SetNextItemWidth(120);
+    if (ImGui::SliderFloat("Contrast", &ct, -1, 1)) t.contrast = ct;
+    track(); key({pre + "contrast"});
+    if (ImGui::Checkbox("Invert", &t.invert)) done = true;
+    if (curveEditor(t.curve, done)) live = true;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset curve")) { t.curve.clear(); done = true; }
+    // the mapped mask, 0 -> 1
+    ImVec2 p0 = ImGui::GetCursorScreenPos();
+    float w = std::min(220.f, ImGui::GetContentRegionAvail().x);
+    for (int k = 0; k < 64; k++) {
+      int g = (int)std::lround(255 * std::clamp(texRemap(t, (k + 0.5) / 64.0), 0.0, 1.0));
+      ImGui::GetWindowDrawList()->AddRectFilled({p0.x + w * k / 64, p0.y}, {p0.x + w * (k + 1) / 64 + 1, p0.y + 10}, IM_COL32(g, g, g, 255));
+    }
+    ImGui::Dummy({w, 12});
+    ImGui::TreePop();
+  }
+  // mapping: the texture coordinates
+  if (ImGui::TreeNode("Mapping")) {
+    std::vector<std::string> fromNames{"Own"};
+    std::vector<int> fromCh{-1};
+    for (int c = 0; c < CH_COUNT; c++)
+      if (c != ch && n.mat.tex[c].used() && n.mat.tex[c].mapFrom < 0) { fromNames.push_back(std::string("Same as ") + CHANNEL_NAMES[c]); fromCh.push_back(c); }
+    int cur = 0;
+    for (int k = 0; k < (int)fromCh.size(); k++) if (fromCh[k] == t.mapFrom) cur = k;
+    std::vector<const char*> fn;
+    for (auto& s2 : fromNames) fn.push_back(s2.c_str());
+    ImGui::SetNextItemWidth(150);
+    if (ImGui::Combo("Use mapping", &cur, fn.data(), (int)fn.size())) { t.mapFrom = fromCh[cur]; done = true; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Share another channel's mapping so their patterns stay aligned");
+    if (t.mapFrom < 0) {
+      TexMapping& m = t.map;
+      ImGui::SetNextItemWidth(120);
+      if (ImGui::Combo("Space", &m.space, TEX_SPACE_NAMES, TS_COUNT)) done = true;
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Object: moves and turns with the object. World: fixed in space. Parent: shared by a group's objects.\n"
+                          "Curved spaces use object space.");
+      float sc = (float)m.scale;
+      ImGui::SetNextItemWidth(120);
+      if (ImGui::DragFloat("Scale", &sc, 0.01f, 0.001f, 1000.f, "%.3f")) m.scale = std::max(0.001f, sc);
+      track(); key({pre + "scale"});
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pattern cells per unit");
+      float as[4], of[4];
+      for (int k = 0; k < 4; k++) { as[k] = (float)m.axisScale[k]; of[k] = (float)m.offset[k]; }
+      ImGui::SetNextItemWidth(220);
+      if (ImGui::DragFloat4("Axis scale", as, 0.01f, 0.001f, 1000.f, "%.2f")) for (int k = 0; k < 4; k++) m.axisScale[k] = std::max(0.001f, as[k]);
+      track(); key({pre + "axisScale.x", pre + "axisScale.y", pre + "axisScale.z", pre + "axisScale.w"});
+      ImGui::SetNextItemWidth(220);
+      if (ImGui::DragFloat4("Offset", of, 0.01f, -1000.f, 1000.f, "%.2f")) for (int k = 0; k < 4; k++) m.offset[k] = of[k];
+      track(); key({pre + "offset.x", pre + "offset.y", pre + "offset.z", pre + "offset.w"});
+      // rotation: the 3D planes first, then the planes through W
+      float r3[3] = {(float)m.rot[0], (float)m.rot[1], (float)m.rot[3]}, rw[3] = {(float)m.rot[2], (float)m.rot[4], (float)m.rot[5]};
+      ImGui::SetNextItemWidth(220);
+      if (ImGui::DragFloat3("Rotate XY XZ YZ", r3, 0.5f, -360.f, 360.f, "%.1f")) { m.rot[0] = r3[0]; m.rot[1] = r3[1]; m.rot[3] = r3[2]; }
+      track(); key({pre + "rot.XY", pre + "rot.XZ", pre + "rot.YZ"});
+      ImGui::SetNextItemWidth(220);
+      if (ImGui::DragFloat3("Rotate XW YW ZW", rw, 0.5f, -360.f, 360.f, "%.1f")) { m.rot[2] = rw[0]; m.rot[4] = rw[1]; m.rot[5] = rw[2]; }
+      track(); key({pre + "rot.XW", pre + "rot.YW", pre + "rot.ZW"});
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turns the pattern through the fourth dimension");
+      if (m.space == TS_OBJECT && ImGui::Button("Fit to object")) {
+        // one texture cell spans the object's bounds (local units)
+        Node c = n;
+        c.xf = Transform{};
+        c.anchor.reset();
+        Node g = makeGroup(BoolOp::Union, {c});
+        auto b = computeBounds(g, app.reg);
+        auto it = b.find(c.id);
+        if (it != b.end() && std::isfinite(it->second.r) && it->second.r > 1e-6) {
+          double r = it->second.r;
+          m.scale = 1 / (2 * r);
+          m.axisScale = {1, 1, 1, 1};
+          for (int k = 0; k < 4; k++) m.offset[k] = it->second.c[k] - r;
+          done = true;
+        }
+      }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale and offset so that one cell of the pattern covers the object");
+    }
+    ImGui::TreePop();
+  }
+  ImGui::Unindent(12);
+  ImGui::PopID();
 }
 
 void UI::propertiesPanel() {
@@ -232,6 +488,8 @@ void UI::propertiesPanel() {
     keyable(nid, {"color.r", "color.g", "color.b"});
     track();
     mixed([](const Node& x) { return x.color; });
+    textureSlot(*n, CH_COLOR, live, done);
+    mixed([](const Node& x) { return x.mat.tex[CH_COLOR]; });
     if (dim < 4) {
       float th = (float)n->thickness;
       if (ImGui::DragFloat("Thickness", &th, 0.005f, 0.001f, 10.f)) n->thickness = std::max(0.001f, th);
@@ -256,40 +514,24 @@ void UI::propertiesPanel() {
       mixed([](const Node& x) { return x.mat.emissionStrength; });
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Path-traced lighting: how much light it gives (colour x emissive x strength)");
     }
-    int tex = n->mat.texture;
-    if (ImGui::Combo("Texture", &tex, TEXTURE_NAMES, TEX_COUNT)) { n->mat.texture = tex; done = true; }
-    mixed([](const Node& x) { return x.mat.texture; });
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Procedural 4D solid texture in the object's local space (moves with it)");
-    if (n->mat.texture != TEX_NONE) {
-      float c2[3] = {(float)n->mat.color2[0], (float)n->mat.color2[1], (float)n->mat.color2[2]};
-      if (ImGui::ColorEdit3("Texture colour", c2)) for (int i = 0; i < 3; i++) n->mat.color2[i] = c2[i];
-      keyable(nid, {"mat.color2.r", "mat.color2.g", "mat.color2.b"});
-      track();
-    mixed([](const Node& x) { return x.mat.color2; });
-      float ts = (float)n->mat.texScale, tst = (float)n->mat.texStrength;
-      if (ImGui::DragFloat("Texture scale", &ts, 0.02f, 0.01f, 100.f)) n->mat.texScale = std::max(0.01f, ts);
-      keyable(nid, {"mat.texScale"});
-      track();
-    mixed([](const Node& x) { return x.mat.texScale; });
-      if (ImGui::SliderFloat("Texture strength", &tst, 0, 1)) n->mat.texStrength = tst;
-      keyable(nid, {"mat.texStrength"});
-      track();
-    mixed([](const Node& x) { return x.mat.texStrength; });
-    }
+    textureSlot(*n, CH_EMISSION, live, done);
     float ro = (float)n->mat.roughness, spc = (float)n->mat.specular, tr = (float)n->mat.transparency;
     if (ImGui::SliderFloat("Roughness", &ro, 0, 1)) n->mat.roughness = ro;
     keyable(nid, {"mat.roughness"});
     track();
     mixed([](const Node& x) { return x.mat.roughness; });
+    textureSlot(*n, CH_ROUGHNESS, live, done);
     if (ImGui::SliderFloat("Specular", &spc, 0, 2)) n->mat.specular = spc;
     keyable(nid, {"mat.specular"});
     track();
     mixed([](const Node& x) { return x.mat.specular; });
+    textureSlot(*n, CH_SPECULAR, live, done);
     if (ImGui::SliderFloat("Transparency", &tr, 0, 1)) n->mat.transparency = tr;
     keyable(nid, {"mat.transparency"});
     track();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("See-through surfaces (bounces per pixel: Settings > Rendering)");
     mixed([](const Node& x) { return x.mat.transparency; });
+    textureSlot(*n, CH_TRANSPARENCY, live, done);
     if (n->mat.transparency > 0) {
       float io = (float)n->mat.ior;
       if (ImGui::SliderFloat("Refraction index", &io, 1.0f, 2.5f, "%.2f")) n->mat.ior = io;
@@ -304,6 +546,9 @@ void UI::propertiesPanel() {
     track();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflects the scene, tinted by the colour (1 = mirror)");
     mixed([](const Node& x) { return x.mat.metallic; });
+    textureSlot(*n, CH_METALLIC, live, done);
+    textureSlot(*n, CH_BUMP, live, done);
+    mixed([](const Node& x) { return x.mat.tex[CH_BUMP]; });
     if (n->isCustom()) {
       ImGui::SeparatorText("Custom SDF (GLSL)");
       if (codeEditId_ != n->id) { codeEditId_ = n->id; codeBuf_ = n->code; }
@@ -411,51 +656,9 @@ void UI::propertiesPanel() {
       case MOD_DEF: {  // a data-driven modifier: its parameters, drawn from their descriptions
         if (!mdef) break;
         conformParams(m, *mdef);
-        for (int pi = 0; pi < (int)mdef->params.size(); pi++) {
-          const ParamDef& pd = mdef->params[pi];
-          std::string lab = pd.label.empty() ? pd.name : pd.label, key = "mods." + std::to_string(i) + ".p." + pd.name;
-          ImGui::PushID(pi);
-          ImGui::SetNextItemWidth(pd.type == P_COLOR ? 180.f : 120.f);
-          bool keyed = true;
-          switch (pd.type) {
-            case P_FLOAT: {
-              float v = (float)modParam(m, *mdef, pi);
-              float speed = (float)std::max(1e-4, (pd.max - pd.min) / 300.0);
-              if (ImGui::DragFloat(lab.c_str(), &v, speed, (float)pd.min, (float)pd.max, "%.3f")) setModParam(m, *mdef, pi, v);
-              break;
-            }
-            case P_INT: {
-              int v = (int)std::lround(modParam(m, *mdef, pi));
-              if (ImGui::DragInt(lab.c_str(), &v, 0.1f, (int)pd.min, (int)pd.max)) setModParam(m, *mdef, pi, v);
-              break;
-            }
-            case P_BOOL: {
-              bool v = modParam(m, *mdef, pi) > 0.5;
-              if (ImGui::Checkbox(lab.c_str(), &v)) { setModParam(m, *mdef, pi, v ? 1 : 0); done = true; }
-              break;
-            }
-            case P_ENUM: case P_AXIS: {
-              int v = (int)std::lround(modParam(m, *mdef, pi));
-              std::vector<const char*> opts;
-              if (pd.type == P_AXIS) opts = {"X", "Y", "Z", "W"};
-              else for (auto& o : pd.options) opts.push_back(o.c_str());
-              if (ImGui::Combo(lab.c_str(), &v, opts.data(), (int)opts.size())) { setModParam(m, *mdef, pi, v); done = true; }
-              break;
-            }
-            case P_COLOR: {
-              float c[3] = {(float)modParam(m, *mdef, pi, 0), (float)modParam(m, *mdef, pi, 1), (float)modParam(m, *mdef, pi, 2)};
-              if (ImGui::ColorEdit3(lab.c_str(), c)) for (int k = 0; k < 3; k++) setModParam(m, *mdef, pi, c[k], k);
-              keyed = false;
-              break;
-            }
-            default: break;
-          }
-          track();
-          if (!pd.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pd.tip.c_str());
-          if (keyed) keyable(nid, {key});
-          else keyable(nid, {key + ".r", key + ".g", key + ".b"});
-          ImGui::PopID();
-        }
+        paramWidgets(mdef->params, [&](int pi, int c) { return modParam(m, *mdef, pi, c); },
+                     [&](int pi, double v, int c) { setModParam(m, *mdef, pi, v, c); }, "mods." + std::to_string(i) + ".p.",
+                     [&](const std::vector<std::string>& paths) { keyable(nid, paths); }, live, done);
         break;
       }
       case MOD_MIRROR: {

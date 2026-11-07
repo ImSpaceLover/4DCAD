@@ -16,9 +16,7 @@ static Node anchored(const char* prim, const std::string& name, V4 c, double R, 
 SceneFile playgroundScene() {
   Node ground = makeShape("hyperplane", "Ground", {0, 0, 0, 0}, {0.5, 0.52, 0.56});
   ground.id = "ground";
-  ground.mat.texture = TEX_CHECKER;   // 4D checkerboard floor
-  ground.mat.texStrength = 0.25;
-  ground.mat.color2 = {0.3, 0.31, 0.35};
+  ground.mat.tex[CH_COLOR] = legacyColorSlot(TEX_CHECKER, 1, 0.25, {0.3, 0.31, 0.35});  // 4D checkerboard floor
   Node tess = makeShape("tesseract", "Tesseract", {0, 1.2, 0, 0}, {0.85, 0.35, 0.3});
   double ang[6] = {0, 0, 30, 0, 20, 0};
   tess.xf.rot = rotationFromAngles(ang);
@@ -27,9 +25,7 @@ SceneFile playgroundScene() {
   Node carved = makeGroup(BoolOp::Subtraction, {tess, glome}, "Carved tesseract");
   Node duo = makeShape("duocylinder", "Duocylinder", {-3.5, 1.1, 0, 0}, {0.3, 0.6, 0.9});
   Node tiger = makeShape("tiger", "Tiger", {3.5, 1.6, 0, 0}, {0.4, 0.85, 0.5});
-  tiger.mat.texture = TEX_STRIPES;
-  tiger.mat.texScale = 3;
-  tiger.mat.color2 = {0.1, 0.3, 0.15};
+  tiger.mat.tex[CH_COLOR] = legacyColorSlot(TEX_STRIPES, 3, 0.7, {0.1, 0.3, 0.15});
   Node wavy = makeCustom("Wavy glome (custom GLSL)");
   wavy.xf.pos = {4, 1.2, 4, 0};
   wavy.color = {0.95, 0.55, 0.25};

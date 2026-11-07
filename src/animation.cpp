@@ -48,6 +48,31 @@ static void modValues(const Node& n, std::vector<AnimValue>& out) {
   }
 }
 
+// texture slots: tex.<channel>.<field> (parameters: tex.<channel>.p.<name>)
+static void texValues(const Node& n, std::vector<AnimValue>& out) {
+  for (int c = 0; c < CH_COUNT; c++) {
+    const TexSlot& t = n.mat.tex[c];
+    if (!t.used()) continue;
+    std::string p = std::string("tex.") + CHANNEL_IDS[c] + ".", L = std::string(CHANNEL_NAMES[c]) + " texture: ";
+    out.push_back({p + "strength", L + "strength"});
+    if (c == CH_COLOR) for (int i = 0; i < 3; i++) out.push_back({p + "color2." + RGB[i], L + "colour 2 " + RGB[i]});
+    else out.push_back({p + "value2", L + (c == CH_BUMP ? "height" : "second value")});
+    out.push_back({p + "low", L + "low"});
+    out.push_back({p + "high", L + "high"});
+    out.push_back({p + "contrast", L + "contrast"});
+    out.push_back({p + "scale", L + "scale"});
+    for (int i = 0; i < 4; i++) out.push_back({p + "offset." + AX[i], L + "offset " + (char)std::toupper(AX[i])});
+    for (int i = 0; i < 6; i++) out.push_back({p + "rot." + PLANE_NAMES[i], L + "rotation " + PLANE_NAMES[i]});
+    for (int i = 0; i < 4; i++) out.push_back({p + "axisScale." + AX[i], L + "scale " + (char)std::toupper(AX[i])});
+    if (auto d = defs().texture(t.def))
+      for (auto& pd : d->params) {
+        std::string lab = L + (pd.label.empty() ? pd.name : pd.label);
+        if (pd.type == P_COLOR) for (int i = 0; i < 3; i++) out.push_back({p + "p." + pd.name + "." + RGB[i], lab + " " + RGB[i]});
+        else out.push_back({p + "p." + pd.name, lab, pd.type != P_FLOAT});
+      }
+  }
+}
+
 std::vector<AnimValue> animatableValues(const Node& n) {
   std::vector<AnimValue> v;
   for (int i = 0; i < 4; i++) v.push_back({std::string("pos.") + AX[i], std::string("Position ") + (char)std::toupper(AX[i])});
@@ -75,9 +100,8 @@ std::vector<AnimValue> animatableValues(const Node& n) {
     v.push_back({"mat.transparency", "Transparency"});
     v.push_back({"mat.ior", "Refraction index"});
     v.push_back({"mat.metallic", "Metallic"});
-    v.push_back({"mat.texScale", "Texture scale"});
-    v.push_back({"mat.texStrength", "Texture strength"});
-    for (int i = 0; i < 3; i++) v.push_back({std::string("mat.color2.") + RGB[i], std::string("Texture colour ") + RGB[i]});
+    for (int i = 0; i < 3; i++) v.push_back({std::string("mat.color2.") + RGB[i], std::string("Second colour ") + RGB[i]});
+    texValues(n, v);
     if (n.isCustom()) v.push_back({"codeBound", "Bound"});
   } else v.push_back({"k", "Smoothness"});
   modValues(n, v);
@@ -171,8 +195,43 @@ static bool access(Node& n, const std::string& p, double& v, bool put) {
   if (p == "mat.transparency") return D(n.mat.transparency);
   if (p == "mat.ior") return D(n.mat.ior);
   if (p == "mat.metallic") return D(n.mat.metallic);
-  if (p == "mat.texScale") return D(n.mat.texScale);
-  if (p == "mat.texStrength") return D(n.mat.texStrength);
+  if (p.rfind("tex.", 0) == 0) {  // texture slots
+    size_t dot = p.find('.', 4);
+    if (dot == std::string::npos) return false;
+    std::string chs = p.substr(4, dot - 4);
+    int ch = -1;
+    for (int c = 0; c < CH_COUNT; c++) if (chs == CHANNEL_IDS[c]) ch = c;
+    if (ch < 0 || !n.mat.tex[ch].used()) return false;
+    TexSlot& t = n.mat.tex[ch];
+    std::string f = p.substr(dot + 1);
+    if (f == "strength") return D(t.strength);
+    if (f == "value2") return D(t.value2);
+    if (f == "low") return D(t.low);
+    if (f == "high") return D(t.high);
+    if (f == "contrast") return D(t.contrast);
+    if (f == "scale") return D(t.map.scale);
+    if (f.rfind("color2.", 0) == 0) { int c = rgbOf(f, 7); return c >= 0 && D(t.color2[c]); }
+    if (f.rfind("offset.", 0) == 0) { int a = axisOf(f, 7); return a >= 0 && D(t.map.offset[a]); }
+    if (f.rfind("axisScale.", 0) == 0) { int a = axisOf(f, 10); return a >= 0 && D(t.map.axisScale[a]); }
+    if (f.rfind("rot.", 0) == 0) {
+      for (int i = 0; i < 6; i++) if (f.substr(4) == PLANE_NAMES[i]) return D(t.map.rot[i]);
+      return false;
+    }
+    if (f.rfind("p.", 0) == 0) {
+      auto d = defs().texture(t.def);
+      if (!d) return false;
+      std::string name = f.substr(2);
+      int comp = 0;
+      if (name.size() > 2 && name[name.size() - 2] == '.') { comp = rgbOf(name, (int)name.size() - 1); name = name.substr(0, name.size() - 2); }
+      for (int i = 0; i < (int)d->params.size(); i++)
+        if (d->params[i].name == name) {
+          if (put) setParamValue(t.params, d->params, i, v, std::max(0, comp));
+          else v = paramValue(t.params, d->params, i, std::max(0, comp));
+          return true;
+        }
+    }
+    return false;
+  }
   if (p.rfind("mat.color2.", 0) == 0) { int c = rgbOf(p, 11); return c >= 0 && D(n.mat.color2[c]); }
   return false;
 }

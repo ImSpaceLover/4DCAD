@@ -170,9 +170,7 @@ void propagateEdit(const Node& B, const Node& A, Node& T, bool stacksMatch, cons
       ch(B.color, A.color, T.color);
       ch(B.thickness, A.thickness, T.thickness);
       ch(B.mat.emissive, A.mat.emissive, T.mat.emissive);
-      ch(B.mat.texture, A.mat.texture, T.mat.texture);
-      ch(B.mat.texScale, A.mat.texScale, T.mat.texScale);
-      ch(B.mat.texStrength, A.mat.texStrength, T.mat.texStrength);
+      for (int c = 0; c < CH_COUNT; c++) ch(B.mat.tex[c], A.mat.tex[c], T.mat.tex[c]);
       ch(B.mat.color2, A.mat.color2, T.mat.color2);
       ch(B.mat.roughness, A.mat.roughness, T.mat.roughness);
       ch(B.mat.specular, A.mat.specular, T.mat.specular);
@@ -359,7 +357,75 @@ static PrimitiveDef jPrim(const json& j) {
   return p;
 }
 
-// custom (non-built-in) modifier definitions a tree uses / registering those a file carries
+// ---------------------------------------------------------------- texture slots
+int texMappingChannel(const Material& m, int ch) {
+  int c = ch;
+  for (int hops = 0; hops < CH_COUNT; hops++) {
+    int f = m.tex[c].mapFrom;
+    if (f < 0 || f >= CH_COUNT || f == c || !m.tex[f].used()) return c;
+    c = f;
+  }
+  return ch;  // a cycle: its own mapping
+}
+
+TexSlot legacyColorSlot(int type, double scale, double strength, const std::array<double, 3>& color2) {
+  TexSlot s;
+  s.def = legacyTextureId(type);
+  if (auto d = defs().texture(s.def)) conformValues(s.params, d->params);
+  s.map.scale = scale;
+  s.strength = strength;
+  s.color2 = color2;
+  return s;
+}
+
+static json texSlotJ(const TexSlot& t) {
+  json j = {{"def", t.def}, {"strength", t.strength}, {"color2", {t.color2[0], t.color2[1], t.color2[2]}}, {"value2", t.value2}};
+  if (auto d = defs().texture(t.def)) j["params"] = valuesToJson(t.params, d->params);
+  if (t.low != 0 || t.high != 1) { j["low"] = t.low; j["high"] = t.high; }
+  if (t.contrast != 0) j["contrast"] = t.contrast;
+  if (t.invert) j["invert"] = true;
+  if (!t.curve.empty()) {
+    json c = json::array();
+    for (auto& pt : t.curve) c.push_back({pt[0], pt[1]});
+    j["curve"] = c;
+  }
+  const TexMapping& m = t.map;
+  j["map"] = {{"space", TEX_SPACE_NAMES[std::clamp(m.space, 0, TS_COUNT - 1)]}, {"offset", m.offset}, {"rot", m.rot}, {"scale", m.scale}, {"axisScale", m.axisScale}};
+  if (t.mapFrom >= 0 && t.mapFrom < CH_COUNT) j["mapFrom"] = CHANNEL_IDS[t.mapFrom];
+  return j;
+}
+static TexSlot jTexSlot(const json& j) {
+  TexSlot t;
+  if (!j.is_object()) return t;
+  t.def = j.value("def", std::string());
+  t.strength = j.value("strength", 1.0);
+  if (j.contains("color2") && j["color2"].is_array() && j["color2"].size() == 3) for (int k = 0; k < 3; k++) t.color2[k] = j["color2"][k].get<double>();
+  t.value2 = j.value("value2", 1.0);
+  if (auto d = defs().texture(t.def)) valuesFromJson(t.params, d->params, j.value("params", json::object()));
+  t.low = j.value("low", 0.0);
+  t.high = j.value("high", 1.0);
+  t.contrast = std::clamp(j.value("contrast", 0.0), -1.0, 1.0);
+  t.invert = j.value("invert", false);
+  for (auto& pt : j.value("curve", json::array()))
+    if (pt.is_array() && pt.size() == 2 && (int)t.curve.size() < TEX_CURVE_MAX) t.curve.push_back({pt[0].get<double>(), pt[1].get<double>()});
+  if (j.contains("map") && j["map"].is_object()) {
+    auto& mj = j["map"];
+    std::string sp = mj.value("space", std::string("Object"));
+    for (int k = 0; k < TS_COUNT; k++) if (sp == TEX_SPACE_NAMES[k]) t.map.space = k;
+    auto arr = [&](const char* key, auto& out) {
+      if (mj.contains(key) && mj[key].is_array() && mj[key].size() == out.size()) for (size_t k = 0; k < out.size(); k++) out[k] = mj[key][k].get<double>();
+    };
+    arr("offset", t.map.offset);
+    arr("rot", t.map.rot);
+    arr("axisScale", t.map.axisScale);
+    t.map.scale = mj.value("scale", 1.0);
+  }
+  std::string mf = j.value("mapFrom", std::string());
+  for (int k = 0; k < CH_COUNT; k++) if (mf == CHANNEL_IDS[k]) t.mapFrom = k;
+  return t;
+}
+
+// custom (non-built-in) modifier / texture definitions a tree uses / registering those a file carries
 static json usedModifierDefs(const Node& root) {
   std::set<std::string> ids;
   walkc(root, [&](const Node& n, const Node*, int) { for (auto& m : n.mods) if (m.type == MOD_DEF) ids.insert(m.def); });
@@ -368,9 +434,20 @@ static json usedModifierDefs(const Node& root) {
     if (auto d = defs().modifier(id); d && !d->builtin) a.push_back(modifierDefToJson(*d));
   return a;
 }
+static json usedTextureDefs(const Node& root) {
+  std::set<std::string> ids;
+  walkc(root, [&](const Node& n, const Node*, int) { for (auto& t : n.mat.tex) if (t.used()) ids.insert(t.def); });
+  json a = json::array();
+  for (auto& id : ids)
+    if (auto d = defs().texture(id); d && !d->builtin) a.push_back(textureDefToJson(*d));
+  return a;
+}
 static void registerModifierDefs(const json& j) {
   for (auto& dj : j.value("modifierDefs", json::array())) {
     try { defs().setModifier(modifierDefFromJson(dj)); } catch (...) {}
+  }
+  for (auto& dj : j.value("textureDefs", json::array())) {
+    try { defs().setTexture(textureDefFromJson(dj)); } catch (...) {}
   }
 }
 
@@ -444,10 +521,14 @@ static json nodeJ(const Node& n) {
     j["color"] = {n.color[0], n.color[1], n.color[2]};
     j["thickness"] = n.thickness;
     const Material& m = n.mat;
-    j["material"] = {{"emissive", m.emissive}, {"texture", TEXTURE_NAMES[m.texture]}, {"texScale", m.texScale},
-                     {"texStrength", m.texStrength}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}},
+    j["material"] = {{"emissive", m.emissive}, {"color2", {m.color2[0], m.color2[1], m.color2[2]}},
                      {"roughness", m.roughness}, {"specular", m.specular}, {"transparency", m.transparency}, {"ior", m.ior},
                      {"metallic", m.metallic}, {"emissionStrength", m.emissionStrength}};
+    if (m.textured()) {
+      json tj = json::object();
+      for (int c = 0; c < CH_COUNT; c++) if (m.tex[c].used()) tj[CHANNEL_IDS[c]] = texSlotJ(m.tex[c]);
+      j["material"]["textures"] = tj;
+    }
     if (n.isCustom()) { j["code"] = n.code; j["codeBound"] = n.codeBound; }
     if (n.isPolytope()) {
       const PolyParams& p = n.poly;
@@ -526,11 +607,15 @@ static Node jNode(const json& j, const ReadCtx& ctx) {
     if (j.contains("material") && j["material"].is_object()) {
       auto& mj = j["material"];
       n.mat.emissive = std::clamp(mj.value("emissive", 0.0), 0.0, 1.0);
-      std::string t = mj.value("texture", std::string("None"));
-      for (int i = 0; i < TEX_COUNT; i++) if (t == TEXTURE_NAMES[i]) n.mat.texture = i;
-      n.mat.texScale = mj.value("texScale", 1.0);
-      n.mat.texStrength = mj.value("texStrength", 0.7);
       if (mj.contains("color2")) for (int i = 0; i < 3; i++) n.mat.color2[i] = mj["color2"][i].get<double>();
+      // old files: one colour texture (a type, scale, strength and the second colour)
+      static const char* oldNames[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings", "Dots", "Waves", "Marble", "Wood", "Cells", "Bricks", "Gradient"};
+      std::string t = mj.value("texture", std::string("None"));
+      for (int i = 1; i < TEX_COUNT; i++)
+        if (t == oldNames[i]) n.mat.tex[CH_COLOR] = legacyColorSlot(i, mj.value("texScale", 1.0), mj.value("texStrength", 0.7), n.mat.color2);
+      if (mj.contains("textures") && mj["textures"].is_object())
+        for (int c = 0; c < CH_COUNT; c++)
+          if (mj["textures"].contains(CHANNEL_IDS[c])) n.mat.tex[c] = jTexSlot(mj["textures"][CHANNEL_IDS[c]]);
       n.mat.roughness = std::clamp(mj.value("roughness", 0.75), 0.0, 1.0);
       n.mat.specular = std::clamp(mj.value("specular", 0.35), 0.0, 2.0);
       n.mat.transparency = std::clamp(mj.value("transparency", 0.0), 0.0, 1.0);
@@ -664,6 +749,7 @@ std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::s
                         const CurvedCamState* curvedCam) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   if (json md = usedModifierDefs(root); !md.empty()) j["modifierDefs"] = md;  // (custom definitions the scene uses)
+  if (json td = usedTextureDefs(root); !td.empty()) j["textureDefs"] = td;
   j["world"] = world.empty() ? json(nullptr) : json(world);
   if (cam) j["camera"] = camJ(*cam);
   if (bookmarks && !bookmarks->empty()) j["bookmarks"] = marksJ(*bookmarks);
@@ -819,6 +905,7 @@ LibraryObject makeLibraryObject(const Node& n, const PrimitiveRegistry&, const s
 static json objJ(const LibraryObject& o) {
   json j = {{"format", "4dcad-object"}, {"version", 3}, {"id", o.id}, {"name", o.name}, {"node", nodeJ(o.node)}};
   if (json md = usedModifierDefs(o.node); !md.empty()) j["modifierDefs"] = md;
+  if (json td = usedTextureDefs(o.node); !td.empty()) j["textureDefs"] = td;
   return j;
 }
 static LibraryObject jObj(const json& j, const ReadCtx& outer) {

@@ -159,6 +159,12 @@ void geoMove(inout vec4 p, inout vec4 d, float h) {
 }
 vec4 geoPoint(vec4 p, vec4 d, float h) { geoMove(p, d, h); return p; }
 
+// bump textures change the distance in the normal phase: its centre sample is taken again
+#ifdef SCENE_BUMP
+#define NORMAL_K0 0
+#else
+#define NORMAL_K0 1
+#endif
 bool g_noBody = false;     // primary ray still inside the player's own body
 bool g_noDbg = false;      // primary ray still next to the eye (the debug ray may pass through it)
 
@@ -444,9 +450,9 @@ void main() {
     if (phase == DONE) break;
     vec4 q = p;
 #ifdef VIEW_CURVED
-    if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); }
+    if (phase == NORMAL) { q = hp; if (k > 0) { q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); } }
 #else
-    if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3; }
+    if (phase == NORMAL) { q = hp; if (k > 0) q[k - 1] += 1e-3; }
 #endif
     else if (phase == AO) {
       vec4 ad = n;
@@ -470,6 +476,10 @@ void main() {
     g_noEmissive = g_exact;
     g_noBody = phase == MARCH && t < u_markerSkip;
     g_noDbg = phase == MARCH && t < 0.12;
+    // textures only near the surface: material ones for the hit, bump ones for the normal samples
+    g_texMat = phase == MARCH && !inside;
+    g_texBump = phase == NORMAL;
+    g_texNear = phase == MARCH || phase == NORMAL ? u_eps * (1.0 + t * 0.02) * 3.0 + 3e-3 : -1.0;
     float d = map(q, mm);   // the only scene evaluation site
 
     bool advance = false, startLights = false;
@@ -480,7 +490,7 @@ void main() {
       if (inside) {  // travelling through a transparent object until its far side
         if (d > -u_eps * 0.5) {
           // reached the far side: find its normal, then bend the ray out of the object
-          exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = 1;
+          exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = NORMAL_K0;
         } else {
           h = max(-d, u_eps * 2.0);
 #ifdef VIEW_GEO
@@ -498,7 +508,7 @@ void main() {
         if (!sorFail && d < u_eps * (1.0 + t * 0.02)) {
           hit = true; hm = mm; hp = p; nv[0] = d;
           if (firstT < 0.0) firstT = t;
-          phase = NORMAL; k = 1;
+          phase = NORMAL; k = NORMAL_K0;
         } else if (t > u_maxDist || steps >= u_maxSteps) {
           phase = DONE;
         } else {
@@ -956,9 +966,9 @@ void main() {
     if (phase == DONE) break;
     vec4 q = p;
 #ifdef VIEW_CURVED
-    if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); }
+    if (phase == NORMAL) { q = hp; if (k > 0) { q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); } }
 #else
-    if (phase == NORMAL) { q = hp; q[k - 1] += 1e-3; }
+    if (phase == NORMAL) { q = hp; if (k > 0) q[k - 1] += 1e-3; }
 #endif
     else if (phase == SHADOW) q = sp;
 
@@ -967,6 +977,10 @@ void main() {
     g_noEmissive = false;  // glowing objects are physical here: they block light and are found by shadow rays
     g_noBody = phase == MARCH && t < u_markerSkip;
     g_noDbg = phase == MARCH && t < 0.12;
+    // textures only near the surface: material ones for the hit, bump ones for the normal samples
+    g_texMat = phase == MARCH && !inside;
+    g_texBump = phase == NORMAL;
+    g_texNear = phase == MARCH || phase == NORMAL ? u_eps * (1.0 + t * 0.02) * 3.0 + 3e-3 : -1.0;
     float d = map(q, mm);   // the only scene evaluation site
 
     bool advance = false, bounce = false;
@@ -975,7 +989,7 @@ void main() {
 
     if (phase == MARCH) {
       if (inside) {  // through a transparent object until its far side
-        if (d > -u_eps * 0.5) { exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = 1; }
+        if (d > -u_eps * 0.5) { exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = NORMAL_K0; }
         else {
           h = max(-d, u_eps * 2.0);
 #ifdef VIEW_GEO
@@ -993,7 +1007,7 @@ void main() {
         if (!sorFail && d < u_eps * (1.0 + t * 0.02)) {
           hm = mm; hp = p; nv[0] = d;
           if (firstT < 0.0) firstT = t;
-          phase = NORMAL; k = 1;
+          phase = NORMAL; k = NORMAL_K0;
         } else if (t > u_maxDist || steps >= u_maxSteps) {
           phase = DONE;
         } else {

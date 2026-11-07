@@ -79,25 +79,67 @@ struct Anchor {
 };
 constexpr int NPATH = 32;  // follow-surface path: segments
 
-// Surface material of a leaf. Textures are procedural 4D solid textures evaluated in
-// the object's local coordinates, so they move and rotate with the object.
+// Surface material of a leaf. Every channel can take a texture (a definition: code + parameters,
+// see defs.hpp), evaluated at the point's texture coordinates (the slot's mapping).
 enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, TEX_RINGS,
-                   TEX_DOTS, TEX_WAVES, TEX_MARBLE, TEX_WOOD, TEX_CELLS, TEX_BRICKS, TEX_GRADIENT, TEX_COUNT };
-inline const char* TEXTURE_NAMES[TEX_COUNT] = {"None", "Checker", "Stripes", "Grid", "Noise", "Rings",
-                                               "Dots", "Waves", "Marble", "Wood", "Cells", "Bricks", "Gradient"};
+                   TEX_DOTS, TEX_WAVES, TEX_MARBLE, TEX_WOOD, TEX_CELLS, TEX_BRICKS, TEX_GRADIENT, TEX_COUNT };  // (old files)
+enum TexChannel { CH_COLOR = 0, CH_ROUGHNESS, CH_METALLIC, CH_SPECULAR, CH_EMISSION, CH_TRANSPARENCY, CH_BUMP, CH_COUNT };
+inline const char* CHANNEL_NAMES[CH_COUNT] = {"Colour", "Roughness", "Metallic", "Specular", "Emission", "Transparency", "Bump"};
+inline const char* CHANNEL_IDS[CH_COUNT] = {"color", "roughness", "metallic", "specular", "emission", "transparency", "bump"};
+enum TexSpace { TS_OBJECT = 0, TS_WORLD, TS_PARENT, TS_COUNT };
+inline const char* TEX_SPACE_NAMES[TS_COUNT] = {"Object", "World", "Parent"};
+
+// Where a texture is evaluated: tex coordinate = scale * axisScale * rotation^-1 * (x - offset), with x
+// the point in the chosen space (curved spaces: object space).
+struct TexMapping {
+  int space = TS_OBJECT;
+  std::array<double, 4> offset{0, 0, 0, 0};
+  std::array<double, 6> rot{0, 0, 0, 0, 0, 0};  // degrees in the planes XY XZ XW YZ YW ZW
+  double scale = 1;                              // cells per unit
+  std::array<double, 4> axisScale{1, 1, 1, 1};
+  bool operator==(const TexMapping& o) const {
+    return space == o.space && offset == o.offset && rot == o.rot && scale == o.scale && axisScale == o.axisScale;
+  }
+  bool operator!=(const TexMapping& o) const { return !(*this == o); }
+};
+
+constexpr int TEX_CURVE_MAX = 8;
+struct TexSlot {
+  std::string def;             // texture definition id ("" = no texture)
+  std::vector<double> params;  // its parameter values (see defs.hpp)
+  double strength = 1;         // how much the texture changes the channel
+  std::array<double, 3> color2{0.12, 0.12, 0.14};  // colour channel: the colour a mask blends to
+  double value2 = 1;           // other channels: the value where the mask is 1 (bump: relief height)
+  // remap of the mask: low..high -> 0..1, contrast (S-curve, -1..1), invert, then the curve
+  double low = 0, high = 1, contrast = 0;
+  bool invert = false;
+  std::vector<std::array<double, 2>> curve;  // points (in, out) sorted by in; < 2 points = straight
+  TexMapping map;
+  int mapFrom = -1;  // use the mapping of this channel instead of its own
+  bool used() const { return !def.empty(); }
+  bool operator==(const TexSlot& o) const {
+    return def == o.def && params == o.params && strength == o.strength && color2 == o.color2 && value2 == o.value2 && low == o.low &&
+           high == o.high && contrast == o.contrast && invert == o.invert && curve == o.curve && map == o.map && mapFrom == o.mapFrom;
+  }
+  bool operator!=(const TexSlot& o) const { return !(*this == o); }
+};
+
 struct Material {
   double emissive = 0;   // 0..1: always lit, casts no shadow, does not light others
-  int texture = TEX_NONE;
-  double texScale = 1;   // pattern cells per unit
-  double texStrength = 0.7;
-  std::array<double, 3> color2{0.12, 0.12, 0.14};  // second texture colour
+  std::array<double, 3> color2{0.12, 0.12, 0.14};  // honeycombs: the alternate colour
   double roughness = 0.75;   // 0 = sharp highlights, 1 = matte
   double specular = 0.35;    // highlight strength
   double transparency = 0;   // 0 = opaque, 1 = invisible (see-through surfaces)
   double ior = 1.45;         // index of refraction of transparent materials (1 = no bending)
   double metallic = 0;       // 0 = plain, 1 = mirror (reflections tinted by the colour)
   double emissionStrength = 4;  // path-traced lighting: emitted light = colour x emissive x this
+  std::array<TexSlot, CH_COUNT> tex;  // a texture per channel
+  bool textured() const { for (auto& t : tex) if (t.used()) return true; return false; }
 };
+/** The slot whose mapping channel ch uses (follows mapFrom, no cycles). */
+int texMappingChannel(const Material& m, int ch);
+/** A colour-channel slot made from an old texture type (texScale, strength, colour 2). */
+TexSlot legacyColorSlot(int type, double scale, double strength, const std::array<double, 3>& color2);
 
 /** Default code of a custom SDF leaf (GLSL). */
 inline const char* DEFAULT_CUSTOM_SDF =

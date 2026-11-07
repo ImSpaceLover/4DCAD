@@ -8,6 +8,7 @@
 #include "math4.hpp"
 #include "shaders.hpp"
 #include "defs.hpp"
+#include "textures.hpp"
 #include <set>
 #include <sstream>
 #include <unordered_map>
@@ -121,52 +122,31 @@ float opSS(float a, inout MAT ma, float b, MAT mb, float k) {
   if (b >= INF * 0.5 || a >= INF * 0.5) return a;
   float h = clamp(0.5 - 0.5 * (a + b) / k, 0.0, 1.0); ma = ma * (1.0 - h) + mb * h; return mix(a, -b, h) + k * h * (1.0 - h);
 }
-// procedural 4D solid textures (0..1), evaluated in object-local coordinates
-float texChecker(vec4 p) { vec4 f = floor(p); return mod(f.x + f.y + f.z + f.w, 2.0); }
-float texStripes(vec4 p) { return step(0.5, fract(p.x + 0.5 * p.w)); }
-float texGrid(vec4 p) { vec4 e = 0.5 - abs(fract(p) - 0.5); return 1.0 - step(0.05, min(min(e.x, e.y), min(e.z, e.w))); }
-float texNoise(vec4 p) {
-  float n = sin(p.x * 1.7 + sin(p.y * 2.3 + p.w)) + sin(p.z * 1.9 + sin(p.w * 2.9 + p.x)) + 0.5 * sin(3.1 * p.y + 2.0 * sin(1.3 * p.z));
-  return clamp(0.5 + 0.2 * n, 0.0, 1.0);
-}
-float texRings(vec4 p) { return step(0.5, fract(length(p))); }
-float texDots(vec4 p) { return step(length(fract(p) - 0.5), 0.32); }
-float texWaves(vec4 p) { return 0.5 + 0.5 * sin(6.2832 * (p.x + 0.35 * sin(2.5 * p.y + p.w) + 0.25 * p.z)); }
-float texMarble(vec4 p) { return 0.5 + 0.5 * sin(3.0 * p.x + 6.0 * fbm(p)); }
-float texWood(vec4 p) { return smoothstep(0.35, 0.65, fract(length(p.xz) * 3.0 + 1.5 * fbm(p * 0.8))); }
-float texCells(vec4 p) {  // edges of 4D Voronoi cells (feature points of the 16 nearest lattice cells)
-  vec4 base = floor(p) + step(0.5, fract(p)) - 1.0;
-  float d1 = 9.0, d2 = 9.0;
-  for (int k = 0; k < 16; k++) {
-    vec4 c = base + corner(k);
-    float d = length(p - c - vec4(h4(c), h4(c + 11.3), h4(c + 23.7), h4(c + 37.1)));
-    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+// textures (see textures.hpp): the point's texture coordinate (the slot's mapping) and the remap of a
+// mask (low..high, contrast, invert, curve); r = the slot's first data row
+float g_texNear = INF;   // textures only where a leaf is this near (the ray march sets it)
+bool g_texMat = true;    // colour / material textures (the hit)
+bool g_texBump = false;  // bump textures (the normal samples)
+vec4 texCoord(vec4 x, int r) { return mat4(ndatx(r, 0), ndatx(r, 1), ndatx(r, 2), ndatx(r, 3)) * x + ndatx(r, 4); }
+float texRemap(float m, int r) {
+  vec4 a = ndatx(r, 5), b = ndatx(r, 6);
+  m = clamp((m - a.y) * a.z, 0.0, 1.0);
+  if (a.w != 1.0) m = m < 0.5 ? 0.5 * pow(2.0 * m, a.w) : 1.0 - 0.5 * pow(2.0 - 2.0 * m, a.w);
+  if (b.x > 0.5) m = 1.0 - m;
+  int nc = int(b.y);
+  if (nc >= 2) {
+    vec2 prev = ndatx(r, 8).xy;
+    float res = prev.y;
+    for (int i = 1; i < 8; i++) {
+      if (i >= nc) break;
+      vec4 cc = ndatx(r, 8 + i / 2);
+      vec2 cur = (i - (i / 2) * 2) == 0 ? cc.xy : cc.zw;
+      if (m <= cur.x) { res = m <= prev.x ? prev.y : mix(prev.y, cur.y, smoothstep(prev.x, cur.x, m)); break; }
+      prev = cur; res = cur.y;
+    }
+    m = res;
   }
-  return 1.0 - smoothstep(0.03, 0.08, d2 - d1);
-}
-float texBricks(vec4 p) {
-  vec4 q = p * vec4(1.0, 2.0, 1.0, 1.0);
-  float shift = 0.5 * mod(floor(q.y), 2.0);  // every other row offset by half a brick
-  q.x += shift; q.z += shift;
-  vec4 e = 0.5 - abs(fract(q) - 0.5);
-  return 1.0 - step(0.06, min(min(e.x, e.y), e.z));  // mortar
-}
-float texGradient(vec4 p) { return clamp(0.5 + 0.5 * p.y, 0.0, 1.0); }
-// the texture type is data (node slot 12.y): switching it never recompiles
-float texAny(int t, vec4 p) {
-  if (t == 1) return texChecker(p);
-  if (t == 2) return texStripes(p);
-  if (t == 3) return texGrid(p);
-  if (t == 4) return texNoise(p);
-  if (t == 5) return texRings(p);
-  if (t == 6) return texDots(p);
-  if (t == 7) return texWaves(p);
-  if (t == 8) return texMarble(p);
-  if (t == 9) return texWood(p);
-  if (t == 10) return texCells(p);
-  if (t == 11) return texBricks(p);
-  if (t == 12) return texGradient(p);
-  return 0.0;
+  return m;
 }
 )";
 
@@ -279,6 +259,88 @@ static void emitModifierDefs(const Node& root, std::ostream& o, std::map<std::st
     o << "// modifier: " << d->name << "\n" << code << "\n";
     use[id] = u;
   }
+}
+
+// ---------------------------------------------------------------- textures
+// each texture definition a scene uses is emitted once (tex<suffix>); SCENE_BUMP adds the normal
+// phase's centre sample (bump changes the distance there)
+struct TexUse { std::string suffix; TexKind kind = TEXK_MASK; int vec4s = 1; };
+static void emitTextureDefs(const Node& root, std::ostream& o, std::map<std::string, TexUse>& use) {
+  std::set<std::string> ids;
+  bool bump = false;
+  walkc(root, [&](const Node& n, const Node*, int) {
+    if (!n.isLeaf()) return;
+    for (int c = 0; c < CH_COUNT; c++)
+      if (n.mat.tex[c].used() && defs().texture(n.mat.tex[c].def)) { ids.insert(n.mat.tex[c].def); if (c == CH_BUMP) bump = true; }
+  });
+  int k = 0;
+  for (auto& id : ids) {
+    auto d = defs().texture(id);
+    TexUse u;
+    u.suffix = "_td" + std::to_string(k++);
+    u.kind = textureKind(*d);
+    u.vec4s = paramsVec4s(d->params);
+    o << "// texture: " << d->name << "\n" << guardLoops(transformedTextureCode(*d, u.suffix)) << "\n";
+    use[id] = u;
+  }
+  if (bump) o << "#define SCENE_BUMP 1\n";
+}
+
+// a leaf's textures, applied to col / t_em / m11 (and d: bump), which it declares (t_em, m11) or
+// expects (col, d, q0, x12 = node slot 12: .y the first texture row). xWorld / xParent: the point in
+// those spaces ("" = object space); dWorld: the leaf's distance in world units; bumpScale: local -> d units
+static std::string texturesGLSL(const Node& n, int i, int dim, const std::string& xWorld, const std::string& xParent, const std::string& dWorld,
+                                const std::string& bumpScale, const std::map<std::string, TexUse>& use) {
+  auto D = [](int i, int k) { return "ndat(" + std::to_string(i) + ", " + std::to_string(k) + ")"; };
+  std::ostringstream L;
+  L << "  float t_em = " << D(i, 9) << ".x;\n  vec4 m11 = " << D(i, 11) << ";\n";
+  const Material& M = n.mat;
+  auto active = [&](int c) { return M.tex[c].used() && use.count(M.tex[c].def); };
+  bool any = false;
+  for (int c = 0; c < CH_COUNT; c++) any = any || active(c);
+  if (!any) return L.str();
+  L << "  if (u_textures == 1 && abs(" << dWorld << ") < g_texNear + " << D(i, 5) << ".w - 0.5) {\n    int trow = int(x12.y);\n";
+  for (int pass = 0; pass < 2; pass++) {
+    bool has = false;
+    for (int c = 0; c < CH_COUNT; c++) if (active(c) && (c == CH_BUMP) == (pass == 1)) has = true;
+    if (!has) continue;
+    L << (pass == 0 ? "    if (g_texMat) {\n" : "    if (g_texBump) {\n");
+    for (int c = 0; c < CH_COUNT; c++) {
+      if (!active(c) || (c == CH_BUMP) != (pass == 1)) continue;
+      const TexUse& u = use.at(M.tex[c].def);
+      int sp = M.tex[texMappingChannel(M, c)].map.space;
+      std::string x = sp == TS_WORLD && !xWorld.empty() ? xWorld : sp == TS_PARENT && !xParent.empty() ? xParent : "q0";
+      L << "      {  // " << CHANNEL_NAMES[c] << "\n        int r = trow + " << texOffset(M, c) << ";\n";
+      if (x == "q0" && dim < 4) {
+        L << "        vec4 tx = q0;";
+        for (int a = dim; a < 4; a++) L << " tx." << C[a] << " = 0.0;";
+        L << "\n";
+        x = "tx";
+      }
+      std::string call = "tex" + u.suffix + "(texCoord(" + x + ", r)";
+      for (int v = 0; v < u.vec4s; v++) call += ", ndatx(r, " + std::to_string(TEX_SLOT_HEADER + v) + ")";
+      call += ")";
+      const char* T = u.kind == TEXK_MASK ? "float" : u.kind == TEXK_RGB ? "vec3" : "vec4";
+      L << "        g_loopGuard = 0;\n        " << T << " tv = " << call << ";\n";
+      if (c == CH_COLOR) {
+        if (u.kind == TEXK_MASK) L << "        col = mix(col, ndatx(r, 7).rgb, texRemap(tv, r) * ndatx(r, 5).x);\n";
+        else if (u.kind == TEXK_RGB) L << "        col = mix(col, tv, ndatx(r, 5).x);\n";
+        else L << "        col = mix(col, tv.rgb, texRemap(tv.a, r) * ndatx(r, 5).x);\n";
+      } else {
+        const char* mask = u.kind == TEXK_MASK ? "tv" : u.kind == TEXK_RGB ? "dot(tv, vec3(0.299, 0.587, 0.114))" : "tv.a";
+        L << "        float tw = texRemap(" << mask << ", r) * ndatx(r, 5).x;\n";
+        if (c == CH_BUMP) L << "        d -= ndatx(r, 6).z * tw * " << bumpScale << ";\n";
+        else {
+          const char* var = c == CH_ROUGHNESS ? "m11.x" : c == CH_SPECULAR ? "m11.y" : c == CH_TRANSPARENCY ? "m11.z" : c == CH_METALLIC ? "m11.w" : "t_em";
+          L << "        " << var << " = mix(" << var << ", ndatx(r, 6).z, tw);\n";
+        }
+      }
+      L << "      }\n";
+    }
+    L << "    }\n";
+  }
+  L << "  }\n";
+  return L.str();
 }
 
 // the arguments after the point / distance: the parameter vec4s, then newAxis, srcAxis
@@ -520,6 +582,8 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
   o << SDF_HELPERS << SCENE_HELPERS << CURVED_HELPERS;
   std::map<std::string, DefUse> defUse;
   emitModifierDefs(root, o, defUse);
+  std::map<std::string, TexUse> texUse;
+  emitTextureDefs(root, o, texUse);
   struct DefScope { std::map<std::string, DefUse>* prev; ~DefScope() { g_defUse = prev; } } defScope{g_defUse};
   g_defUse = &defUse;
   std::map<std::string, std::string> primFn;
@@ -587,8 +651,8 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
         L << "    d /= s;\n" << extrudeGLSL(n, ax, "", "mrow") << "    d *= s;\n  }\n";
       }
       L << "  vec4 x12 = " << D(i, 12) << ";\n";
-      L << "  if (u_textures == 1 && x12.y > 0.5) col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), q0 * m9.y) * m9.z);\n";
-      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
+      L << texturesGLSL(n, i, 4, "", "", "d", "s", texUse);
+      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
       L << "  return d;\n}\n";
     } else if (n.isLeaf()) {
       // exact in curved space (as the CPU evaluator): infinite extrusions measured from the point's
@@ -611,13 +675,11 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       if (n.isCustom()) L << "  g_loopGuard = 0;\n  float d = sdf_c" << i << "(q);\n";
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
       L << extrudeGLSL(shape, ax, "", "mrow");
-      L << "  vec4 x12 = " << D(i, 12) << ";\n";  // (.y: texture type)
+      L << "  vec4 x12 = " << D(i, 12) << ";\n";  // (.y: first texture row)
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
-      L << "  if (u_textures == 1 && x12.y > 0.5) {\n    vec4 tq = q0 * m9.y;\n";
-      for (int a = nodeDim(n, reg); a < 4; a++) L << "    tq." << C[a] << " = 0.5;\n";
-      L << "    col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), tq) * m9.z);\n  }\n";
-      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
+      L << texturesGLSL(n, i, nodeDim(n, reg), "", "", "d * s", "1.0", texUse);
+      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
       L << "  return d * s * " << D(i, 8) << ".w;\n}\n";  // .w: spherical safety factor
     } else {
       if (!n.mods.empty()) L << "  int mrow = int(" << D(i, 12) << ".x);\n";
@@ -659,6 +721,8 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
   o << SDF_HELPERS << SCENE_HELPERS << FOLLOW_GLSL;
   std::map<std::string, DefUse> defUse;
   emitModifierDefs(root, o, defUse);
+  std::map<std::string, TexUse> texUse;
+  emitTextureDefs(root, o, texUse);
   struct DefScope { std::map<std::string, DefUse>* prev; ~DefScope() { g_defUse = prev; } } defScope{g_defUse};
   g_defUse = &defUse;
 
@@ -739,17 +803,14 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       else L << "  float d = " << primFn[n.prim] << "(q);\n";
       L << extrudeGLSL(n, ax, "", "mrow");
       // shell / rounding act on the shape itself, before its thickness along the unused axes (data: slot 12)
-      L << "  vec4 x12 = " << D(i, 12) << ";\n";  // (.y: texture type; rounding / shell are modifiers now)
+      L << "  vec4 x12 = " << D(i, 12) << ";\n";  // (.y: first texture row)
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
       if (n.isHoneycomb()) L << "  col = mix(col, " << D(i, 10) << ".rgb, hpar * " << D(i, 13) << ".w);\n";
-      // textures are 4D patterns: along the axes a thin (< 4D) object does not use it sits on a
-      // cell boundary (coordinate 0), which would make grids solid and checkers flicker, so those
-      // coordinates are put in the middle of a cell. The type is data (12.y); textures can be off (fast mode)
-      L << "  if (u_textures == 1 && x12.y > 0.5) {\n    vec4 tq = q0 * m9.y;\n";
-      for (int a = nodeDim(n, reg); a < 4; a++) L << "    tq." << C[a] << " = 0.5;\n";
-      L << "    col = mix(col, " << D(i, 10) << ".rgb, texAny(int(x12.y), tq) * m9.z);\n  }\n";
-      L << "  vec4 m11 = " << D(i, 11) << ";\n  m = MAT(vec4(col, c6.w), vec4(m9.x, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
+      // textures: only near the surface while marching (g_texNear), bump only in the normal phase;
+      // they can be off (fast mode)
+      L << texturesGLSL(n, i, nodeDim(n, reg), "g", "p", "d * s * sAcc", "1.0", texUse);
+      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
       // attached to a surface: the shape is extruded along the surface normal, so keep it to its
       // own sheet (two-sided, within its size): other sheets of the world (e.g. the other room of a
       // double wormhole) must not show it
@@ -832,8 +893,6 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       for (int k = 0; k < 3; k++) slot(6)[k] = (float)n.color[k];
       slot(6)[3] = highlight.count(n.id) ? 1.f : 0.f;
       slot(9)[0] = (float)n.mat.emissive;
-      slot(9)[1] = (float)n.mat.texScale;
-      slot(9)[2] = (float)n.mat.texStrength;
       for (int k = 0; k < 3; k++) slot(10)[k] = (float)n.mat.color2[k];
       slot(11)[0] = (float)n.mat.roughness;
       slot(11)[1] = (float)n.mat.specular;
@@ -842,8 +901,7 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       slot(8)[1] = (float)n.mat.ior;
       slot(9)[3] = (float)n.poly.size;   // polyhedron inradius / flat honeycomb cell size
       slot(10)[3] = (float)n.poly.width;  // honeycomb edge radius / gap
-      // slot 12 = (modifier rows, texture type, shell, round), 13 = (follow rows, emissive, honeycomb style, alternate)
-      slot(12)[1] = (float)n.mat.texture;
+      // slot 12 = (modifier rows, texture rows), 13 = (follow rows, emissive, honeycomb style, alternate)
       slot(13)[1] = n.mat.emissive > 0 ? 1.f : 0.f;
       slot(13)[2] = (float)n.poly.style;
       slot(13)[3] = n.poly.alternate ? 1.f : 0.f;
@@ -892,6 +950,22 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
       }
     }
     d[i * S + 12 * 4 + 0] = (float)base;  // slot 12.x: first modifier row
+  }
+  // texture slots: extra rows after the nodes (see textures.hpp)
+  for (size_t i = 0; i < N; i++) {
+    auto it = byId.find(cs.nodeIds[i]);
+    if (it == byId.end() || !it->second->isLeaf() || !it->second->mat.textured()) continue;
+    const Node& n = *it->second;
+    size_t base = d.size() / S;
+    size_t rows = ((size_t)texTotalVec4s(n.mat) + NODE_VEC4S - 1) / NODE_VEC4S;
+    d.resize(d.size() + rows * S, 0.f);
+    int dim = nodeDim(n, reg);
+    for (int c = 0; c < CH_COUNT; c++) {
+      if (!n.mat.tex[c].used()) continue;
+      auto v = packTexSlot(n.mat, c, dim);
+      std::copy(v.begin(), v.end(), d.begin() + (long)(base * S + (size_t)texOffset(n.mat, c) * 4));
+    }
+    d[i * S + 12 * 4 + 1] = (float)base;  // slot 12.y: first texture row
   }
   // follow-surface paths: extra rows after the nodes (header + 33 samples x 4 vec4 = 133 vec4)
   for (size_t i = 0; i < N; i++) {
@@ -988,6 +1062,12 @@ std::string structureKey(const Node& root, const PrimitiveRegistry& reg, const s
       }
     }
     if (n.isCustom()) o << "c" << std::hash<std::string>()(n.code) << ":" << n.codeBound;
+    if (n.isLeaf())  // textures: which definition per channel and the mapping's space (values are data)
+      for (int c = 0; c < CH_COUNT; c++)
+        if (n.mat.tex[c].used()) {
+          auto d = defs().texture(n.mat.tex[c].def);
+          o << "t" << c << n.mat.tex[c].def << ":" << (d ? d->hash() : 0) << ":" << n.mat.tex[texMappingChannel(n.mat, c)].map.space;
+        }
     if (n.isPolytope()) o << "p" << n.poly.type << ":" << n.poly.honey;
     o << ";";
   });

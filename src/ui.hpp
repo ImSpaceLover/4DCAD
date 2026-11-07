@@ -95,6 +95,7 @@ class UI {
   void pasteKeys();
   /** Per-value keying in Properties: a diamond next to the last widget, right-click menu. */
   void keyable(const std::string& target, const std::vector<std::string>& paths);
+  void textureSlot(Node& n, int ch, bool& live, bool& done);  // a material channel's texture (Properties)
   bool showTimeline_ = true, showGraph_ = false, graphFit_ = true, resetView_ = true;
   double tl0_ = 0, tl1_ = 0;           // visible frame range
   bool scrub_ = false, keyDrag_ = false, timelineHovered_ = false, graphHovered_ = false;

@@ -263,6 +263,8 @@ struct DefRegistry::Impl {
   mutable std::mutex mu;
   std::map<std::string, std::shared_ptr<const ModifierDef>> mods;
   std::vector<std::string> order;
+  std::map<std::string, std::shared_ptr<const TextureDef>> texs;
+  std::vector<std::string> texOrder;
 };
 
 DefRegistry::DefRegistry() : impl_(std::make_shared<Impl>()) {
@@ -270,6 +272,37 @@ DefRegistry::DefRegistry() : impl_(std::make_shared<Impl>()) {
     impl_->mods[d.id] = std::make_shared<const ModifierDef>(d);
     impl_->order.push_back(d.id);
   }
+  for (auto& d : builtinTextureDefs()) {
+    impl_->texs[d.id] = std::make_shared<const TextureDef>(d);
+    impl_->texOrder.push_back(d.id);
+  }
+}
+std::shared_ptr<const TextureDef> DefRegistry::texture(const std::string& id) const {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  auto it = impl_->texs.find(id);
+  return it == impl_->texs.end() ? nullptr : it->second;
+}
+std::vector<std::shared_ptr<const TextureDef>> DefRegistry::textures() const {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  std::vector<std::shared_ptr<const TextureDef>> r;
+  for (auto& id : impl_->texOrder) r.push_back(impl_->texs.at(id));
+  return r;
+}
+void DefRegistry::setTexture(const TextureDef& d) {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  auto it = impl_->texs.find(d.id);
+  if (it != impl_->texs.end() && it->second->builtin) return;
+  if (it == impl_->texs.end()) impl_->texOrder.push_back(d.id);
+  TextureDef c = d;
+  c.builtin = false;
+  impl_->texs[d.id] = std::make_shared<const TextureDef>(c);
+}
+void DefRegistry::eraseTexture(const std::string& id) {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  auto it = impl_->texs.find(id);
+  if (it == impl_->texs.end() || it->second->builtin) return;
+  impl_->texs.erase(it);
+  impl_->texOrder.erase(std::remove(impl_->texOrder.begin(), impl_->texOrder.end(), id), impl_->texOrder.end());
 }
 std::shared_ptr<const ModifierDef> DefRegistry::modifier(const std::string& id) const {
   std::lock_guard<std::mutex> lk(impl_->mu);
@@ -357,36 +390,58 @@ static void fieldSet(Modifier& m, const std::string& f, double v) {
 
 static double paramDefault(const ParamDef& p, int comp) { return p.type == P_COLOR ? p.defColor[std::clamp(comp, 0, 2)] : p.def; }
 
+double paramValue(const std::vector<double>& vals, const std::vector<ParamDef>& ps, int i, int comp) {
+  if (i < 0 || i >= (int)ps.size()) return 0;
+  int o = paramOffset(ps, i) + comp;
+  return o < (int)vals.size() ? vals[o] : paramDefault(ps[i], comp);
+}
+static double sanitize(const ParamDef& p, double v) {
+  if (p.type == P_INT || p.type == P_ENUM || p.type == P_AXIS || p.type == P_BOOL) v = std::round(v);
+  if (p.type == P_ENUM) v = std::clamp(v, 0.0, std::max(0.0, (double)p.options.size() - 1));
+  if (p.type == P_AXIS) v = std::clamp(v, 0.0, 3.0);
+  if (p.type == P_BOOL) v = v != 0 ? 1 : 0;
+  return v;
+}
+void setParamValue(std::vector<double>& vals, const std::vector<ParamDef>& ps, int i, double v, int comp) {
+  if (i < 0 || i >= (int)ps.size()) return;
+  conformValues(vals, ps);
+  int o = paramOffset(ps, i) + comp;
+  if (o < (int)vals.size()) vals[o] = sanitize(ps[i], v);
+}
+void conformValues(std::vector<double>& vals, const std::vector<ParamDef>& ps) {
+  int n = paramsScalars(ps);
+  if ((int)vals.size() == n) return;
+  std::vector<double> v(n);
+  int o = 0;
+  for (auto& p : ps)
+    for (int c = 0; c < paramScalars(p); c++, o++) v[o] = o < (int)vals.size() ? vals[o] : paramDefault(p, c);
+  vals = v;
+}
+std::vector<double> packValues(const std::vector<double>& vals, const std::vector<ParamDef>& ps) {
+  std::vector<double> v((size_t)paramsVec4s(ps) * 4, 0.0);
+  int o = 0;
+  for (int i = 0; i < (int)ps.size(); i++)
+    for (int c = 0; c < paramScalars(ps[i]); c++, o++) v[o] = paramValue(vals, ps, i, c);
+  return v;
+}
+
 double modParam(const Modifier& m, const ModifierDef& d, int i, int comp) {
   if (i < 0 || i >= (int)d.params.size()) return 0;
   const ParamDef& p = d.params[i];
   if (d.role && !p.field.empty()) return fieldGet(m, p.field);
-  int o = paramOffset(d.params, i) + comp;
-  return o < (int)m.params.size() ? m.params[o] : paramDefault(p, comp);
+  return paramValue(m.params, d.params, i, comp);
 }
 
 void setModParam(Modifier& m, const ModifierDef& d, int i, double v, int comp) {
   if (i < 0 || i >= (int)d.params.size()) return;
   const ParamDef& p = d.params[i];
-  if (p.type == P_INT || p.type == P_ENUM || p.type == P_AXIS || p.type == P_BOOL) v = std::round(v);
-  if (p.type == P_ENUM) v = std::clamp(v, 0.0, std::max(0.0, (double)p.options.size() - 1));
-  if (p.type == P_AXIS) v = std::clamp(v, 0.0, 3.0);
-  if (p.type == P_BOOL) v = v != 0 ? 1 : 0;
-  if (d.role && !p.field.empty()) { fieldSet(m, p.field, v); return; }
-  conformParams(m, d);
-  int o = paramOffset(d.params, i) + comp;
-  if (o < (int)m.params.size()) m.params[o] = v;
+  if (d.role && !p.field.empty()) { fieldSet(m, p.field, sanitize(p, v)); return; }
+  setParamValue(m.params, d.params, i, v, comp);
 }
 
 void conformParams(Modifier& m, const ModifierDef& d) {
   if (d.role) return;
-  int n = paramsScalars(d.params);
-  if ((int)m.params.size() == n) return;
-  std::vector<double> v(n);
-  int o = 0;
-  for (auto& p : d.params)
-    for (int c = 0; c < paramScalars(p); c++, o++) v[o] = o < (int)m.params.size() ? m.params[o] : paramDefault(p, c);
-  m.params = v;
+  conformValues(m.params, d.params);
 }
 
 Modifier makeModifier(const ModifierDef& d) {
@@ -412,18 +467,12 @@ std::vector<double> packedParams(const Modifier& m, const ModifierDef& d) {
 }
 
 // ================================================================ code
-std::string transformedModifierCode(const ModifierDef& d, const std::string& suffix, HookInfo* hooks) {
-  std::string code = renameCustomCode(d.code, suffix);
-  int nv = paramsVec4s(d.params);
-  std::string extra;
-  for (int k = 0; k < nv; k++) extra += ", vec4 P_" + std::to_string(k);
-  extra += ", int newAxis, int srcAxis";
-  // the parameter variables, read from the packed vec4s
+std::string paramDeclsGLSL(const std::vector<ParamDef>& ps) {
   std::string decls;
   const char* C = "xyzw";
   auto comp = [&](int o) { return "P_" + std::to_string(o / 4) + "." + C[o % 4]; };
   int o = 0;
-  for (auto& p : d.params) {
+  for (auto& p : ps) {
     switch (p.type) {
       case P_FLOAT: decls += "  float " + p.name + " = " + comp(o) + ";\n"; break;
       case P_BOOL: decls += "  bool " + p.name + " = " + comp(o) + " > 0.5;\n"; break;
@@ -432,13 +481,24 @@ std::string transformedModifierCode(const ModifierDef& d, const std::string& suf
     }
     o += paramScalars(p);
   }
+  return decls;
+}
+
+std::string transformedModifierCode(const ModifierDef& d, const std::string& suffix, HookInfo* hooks) {
+  std::string code = renameCustomCode(d.code, suffix);
+  int nv = paramsVec4s(d.params);
+  std::string extra;
+  for (int k = 0; k < nv; k++) extra += ", vec4 P_" + std::to_string(k);
+  extra += ", int newAxis, int srcAxis";
+  std::string decls = paramDeclsGLSL(d.params);  // the parameter variables, read from the packed vec4s
+  for (auto& c : decls) if (c == '\n') c = ' ';
   HookInfo info;
   for (const char* h : {"warp", "shape", "bound"}) {
     std::regex re(std::string(R"(\b(vec4|float)(\s+)()") + h + suffix + R"()\s*\(([^)]*)\)\s*\{)");
     std::smatch m;
     if (!std::regex_search(code, m, re)) continue;
     std::string args = m[4].str();
-    std::string rep = m[1].str() + " " + h + suffix + "(" + args + extra + ") {\n" + decls;
+    std::string rep = m[1].str() + " " + h + suffix + "(" + args + extra + ") {" + decls;  // (one line: errors keep the user's line numbers)
     code = code.substr(0, m.position(0)) + rep + code.substr(m.position(0) + m.length(0));
     if (std::string(h) == "warp") info.warp = true;
     if (std::string(h) == "shape") info.shape = true;
@@ -454,7 +514,7 @@ static bool validIdent(const std::string& s) {
   return true;
 }
 
-std::string checkModifierDef(const ModifierDef& d) {
+std::string checkParams(const std::vector<ParamDef>& ps) {
   static const std::set<std::string> reserved = {
       "float", "int", "bool", "vec2", "vec3", "vec4", "mat2", "mat3", "mat4", "void", "if", "else", "for", "while", "do", "return", "break",
       "continue", "true", "false", "const", "in", "out", "inout", "uniform", "p", "d", "r", "newAxis", "srcAxis", "length", "step", "mix",
@@ -468,24 +528,31 @@ std::string checkModifierDef(const ModifierDef& d) {
       "interface", "long", "short", "half", "fixed", "unsigned", "superp", "namespace", "using", "sizeof", "cast", "texture", "atan",
       "sinh", "cosh", "tanh", "trunc", "round", "transpose", "inversesqrt", "exp2", "log2", "asin", "acos"};
   std::set<std::string> seen;
-  for (auto& p : d.params) {
+  for (auto& p : ps) {
     if (!validIdent(p.name)) return "parameter name '" + p.name + "' is not a valid name (letters, digits, _)";
     if (reserved.count(p.name) || p.name.rfind("P_", 0) == 0) return "parameter name '" + p.name + "' is reserved";
     if (!seen.insert(p.name).second) return "parameter '" + p.name + "' is listed twice";
     if (p.type == P_ENUM && p.options.empty()) return "parameter '" + p.name + "' (enum) has no options";
   }
+  return "";
+}
+
+// compile errors: line numbers of the user's code (the prelude comes first)
+static std::string userLineError(std::string err) {
+  std::string pre = sdfHelpersGLSL();
+  int preludeLines = (int)std::count(pre.begin(), pre.end(), '\n') + 1;
+  int line = std::atoi(err.c_str());
+  if (line > preludeLines && err.find(':') != std::string::npos) err = std::to_string(line - preludeLines) + err.substr(err.find(':'));
+  return err;
+}
+
+std::string checkModifierDef(const ModifierDef& d) {
+  if (auto e = checkParams(d.params); !e.empty()) return e;
   HookInfo h;
   std::string code = transformedModifierCode(d, "_d", &h);
   std::string err;
   auto prog = sl::compile(std::string(sdfHelpersGLSL()) + "\n" + guardLoops(code), err);
-  if (!prog) {
-    // line numbers of the user's code: the prelude comes first
-    std::string pre = sdfHelpersGLSL();
-    int preludeLines = (int)std::count(pre.begin(), pre.end(), '\n') + 1;
-    int line = std::atoi(err.c_str());
-    if (line > preludeLines) err = std::to_string(line - preludeLines) + err.substr(err.find(':'));
-    return err;
-  }
+  if (!prog) return userLineError(err);
   if (!h.warp && !h.shape) return "define vec4 warp(vec4 p) and / or float shape(float d, vec4 p)";
   int nv = paramsVec4s(d.params);
   std::vector<sl::Type> ps(nv, sl::T_VEC4);
@@ -506,9 +573,9 @@ std::string checkModifierDef(const ModifierDef& d) {
 // ================================================================ files
 using nlohmann::json;
 
-json modifierDefToJson(const ModifierDef& d) {
+static json paramsToJson(const std::vector<ParamDef>& params) {
   json ps = json::array();
-  for (auto& p : d.params) {
+  for (auto& p : params) {
     json pj = {{"name", p.name}, {"type", PARAM_TYPE_NAMES[p.type]}};
     if (!p.label.empty()) pj["label"] = p.label;
     if (!p.tip.empty()) pj["tip"] = p.tip;
@@ -517,24 +584,11 @@ json modifierDefToJson(const ModifierDef& d) {
     if (p.type == P_ENUM) pj["options"] = p.options;
     ps.push_back(pj);
   }
-  json j = {{"format", "4dcad-modifier"}, {"version", 1}, {"id", d.id}, {"name", d.name}, {"code", d.code}, {"params", ps}};
-  if (!d.description.empty()) j["description"] = d.description;
-  if (!d.category.empty()) j["category"] = d.category;
-  if (d.raisesAxis) j["raisesAxis"] = true;
-  if (d.safety != 1) j["safety"] = d.safety;
-  return j;
+  return ps;
 }
-
-ModifierDef modifierDefFromJson(const json& j) {
-  ModifierDef d;
-  d.id = j.at("id").get<std::string>();
-  d.name = j.value("name", d.id);
-  d.description = j.value("description", std::string());
-  d.category = j.value("category", std::string("Custom"));
-  d.code = j.value("code", std::string());
-  d.raisesAxis = j.value("raisesAxis", false);
-  d.safety = std::clamp(j.value("safety", 1.0), 0.05, 1.0);
-  for (auto& pj : j.value("params", json::array())) {
+static std::vector<ParamDef> paramsFromJson(const json& arr) {
+  std::vector<ParamDef> out;
+  for (auto& pj : arr) {
     ParamDef p;
     p.name = pj.value("name", std::string("value"));
     p.label = pj.value("label", std::string());
@@ -551,9 +605,53 @@ ModifierDef modifierDefFromJson(const json& j) {
     }
     if (p.type == P_ENUM) p.options = pj.value("options", std::vector<std::string>{"A", "B"});
     if (p.type == P_AXIS) { p.min = 0; p.max = 3; }
-    d.params.push_back(p);
+    out.push_back(p);
   }
+  return out;
+}
+
+json modifierDefToJson(const ModifierDef& d) {
+  json j = {{"format", "4dcad-modifier"}, {"version", 1}, {"id", d.id}, {"name", d.name}, {"code", d.code}, {"params", paramsToJson(d.params)}};
+  if (!d.description.empty()) j["description"] = d.description;
+  if (!d.category.empty()) j["category"] = d.category;
+  if (d.raisesAxis) j["raisesAxis"] = true;
+  if (d.safety != 1) j["safety"] = d.safety;
+  return j;
+}
+
+ModifierDef modifierDefFromJson(const json& j) {
+  ModifierDef d;
+  d.id = j.at("id").get<std::string>();
+  d.name = j.value("name", d.id);
+  d.description = j.value("description", std::string());
+  d.category = j.value("category", std::string("Custom"));
+  d.code = j.value("code", std::string());
+  d.raisesAxis = j.value("raisesAxis", false);
+  d.safety = std::clamp(j.value("safety", 1.0), 0.05, 1.0);
+  d.params = paramsFromJson(j.value("params", json::array()));
   return d;
+}
+
+json valuesToJson(const std::vector<double>& vals, const std::vector<ParamDef>& ps) {
+  json j = json::object();
+  for (int i = 0; i < (int)ps.size(); i++) {
+    const ParamDef& p = ps[i];
+    if (p.type == P_COLOR) j[p.name] = {paramValue(vals, ps, i, 0), paramValue(vals, ps, i, 1), paramValue(vals, ps, i, 2)};
+    else j[p.name] = paramValue(vals, ps, i);
+  }
+  return j;
+}
+void valuesFromJson(std::vector<double>& vals, const std::vector<ParamDef>& ps, const json& j) {
+  conformValues(vals, ps);
+  if (!j.is_object()) return;
+  for (int i = 0; i < (int)ps.size(); i++) {
+    const ParamDef& p = ps[i];
+    if (!j.contains(p.name)) continue;
+    const json& v = j[p.name];
+    if (p.type == P_COLOR && v.is_array()) { for (int c = 0; c < 3 && c < (int)v.size(); c++) setParamValue(vals, ps, i, v[c].get<double>(), c); }
+    else if (v.is_number()) setParamValue(vals, ps, i, v.get<double>());
+    else if (v.is_boolean()) setParamValue(vals, ps, i, v.get<bool>() ? 1 : 0);
+  }
 }
 
 json modParamsToJson(const Modifier& m, const ModifierDef& d) {
@@ -614,6 +712,181 @@ std::shared_ptr<const ModRuntime> modRuntime(const ModifierDef& d) {
   if (cache.size() > 256) cache.clear();
   cache[h] = rt;
   return rt;
+}
+
+// ================================================================ textures
+uint64_t TextureDef::hash() const {
+  uint64_t h = 1099511628211ull ^ 0x7e57u;
+  auto add = [&](const std::string& s) { for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; } h ^= 0xff; h *= 1099511628211ull; };
+  add(code);
+  for (auto& p : params) { add(p.name); add(std::to_string((int)p.type)); }
+  return h;
+}
+
+TexKind textureKind(const TextureDef& d) {
+  static const std::regex re(R"(\b(float|vec3|vec4)\s+tex\s*\()");
+  std::smatch m;
+  if (!std::regex_search(d.code, m, re)) return TEXK_MASK;
+  return m[1] == "vec4" ? TEXK_RGBA : m[1] == "vec3" ? TEXK_RGB : TEXK_MASK;
+}
+
+const char* legacyTextureId(int type) {
+  static const char* ids[13] = {"", "checker", "stripes", "grid", "noise", "rings", "dots", "waves", "marble", "wood", "cells", "bricks", "gradient"};
+  return type > 0 && type < 13 ? ids[type] : "";
+}
+
+static ParamDef pcol(const char* name, const char* label, double r, double g, double b) {
+  ParamDef p = pf(name, label, 0, 0, 1);
+  p.type = P_COLOR;
+  p.defColor = {r, g, b};
+  return p;
+}
+
+const std::vector<TextureDef>& builtinTextureDefs() {
+  static const std::vector<TextureDef> defs = [] {
+    std::vector<TextureDef> v;
+    auto T = [&](const char* id, const char* name, const char* cat, const char* desc, std::vector<ParamDef> ps, const char* code) {
+      TextureDef d;
+      d.id = id; d.name = name; d.category = cat; d.description = desc; d.builtin = true; d.params = std::move(ps); d.code = code;
+      v.push_back(d);
+    };
+    // (the defaults reproduce the textures of older versions exactly)
+    T("checker", "Checker", "Patterns", "Alternating 4D cubes.", {},
+      "float tex(vec4 p) {\n  vec4 f = floor(p);\n  return mod(f.x + f.y + f.z + f.w, 2.0);\n}\n");
+    T("stripes", "Stripes", "Patterns", "Parallel stripes across an axis.",
+      {pa("axis", "Across", 0), pf("width", "Width", 0.5, 0, 1), pf("slant", "W slant", 0.5, -2, 2, "", "How much the stripes lean through W")},
+      "float tex(vec4 p) {\n  return step(1.0 - width, fract(axisGet(p, axis) + slant * p.w));\n}\n");
+    T("grid", "Grid", "Patterns", "Lines along every cell face.", {pf("width", "Line width", 0.05, 0, 0.5)},
+      "float tex(vec4 p) {\n  vec4 e = 0.5 - abs(fract(p) - 0.5);\n  return 1.0 - step(width, min(min(e.x, e.y), min(e.z, e.w)));\n}\n");
+    T("noise", "Noise", "Patterns", "Smooth wobbly noise.", {pf("amount", "Contrast", 0.2, 0, 1)},
+      "float tex(vec4 p) {\n"
+      "  float n = sin(p.x * 1.7 + sin(p.y * 2.3 + p.w)) + sin(p.z * 1.9 + sin(p.w * 2.9 + p.x)) + 0.5 * sin(3.1 * p.y + 2.0 * sin(1.3 * p.z));\n"
+      "  return clamp(0.5 + amount * n, 0.0, 1.0);\n}\n");
+    T("rings", "Rings", "Patterns", "Concentric hyperspherical shells.", {pf("width", "Width", 0.5, 0, 1)},
+      "float tex(vec4 p) {\n  return step(1.0 - width, fract(length(p)));\n}\n");
+    T("dots", "Dots", "Patterns", "A ball in every cell.", {pf("radius", "Radius", 0.32, 0, 1)},
+      "float tex(vec4 p) {\n  return step(length(fract(p) - 0.5), radius);\n}\n");
+    T("waves", "Waves", "Patterns", "Soft wavy bands.", {pf("wobble", "Wobble", 0.35, 0, 2)},
+      "float tex(vec4 p) {\n  return 0.5 + 0.5 * sin(6.2832 * (p.x + wobble * sin(2.5 * p.y + p.w) + 0.25 * p.z));\n}\n");
+    T("marble", "Marble", "Natural", "Veins bent by noise.", {pf("turbulence", "Turbulence", 6, 0, 20)},
+      "float tex(vec4 p) {\n  return 0.5 + 0.5 * sin(3.0 * p.x + turbulence * fbm(p));\n}\n");
+    T("wood", "Wood", "Natural", "Growth rings around the Y axis.", {pf("rings", "Rings", 3, 0.1, 20), pf("grain", "Grain", 1.5, 0, 5)},
+      "float tex(vec4 p) {\n  return smoothstep(0.35, 0.65, fract(length(p.xz) * rings + grain * fbm(p * 0.8)));\n}\n");
+    T("cells", "Cells", "Natural", "Edges of 4D Voronoi cells.", {pf("edge", "Edge", 0.03, 0, 0.5), pf("softness", "Softness", 0.05, 0.001, 0.5)},
+      "float tex(vec4 p) {  // feature points of the 16 nearest lattice cells\n"
+      "  vec4 base = floor(p) + step(0.5, fract(p)) - 1.0;\n"
+      "  float d1 = 9.0, d2 = 9.0;\n"
+      "  for (int k = 0; k < 16; k++) {\n"
+      "    vec4 c = base + corner(k);\n"
+      "    float d = length(p - c - vec4(h4(c), h4(c + 11.3), h4(c + 23.7), h4(c + 37.1)));\n"
+      "    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;\n"
+      "  }\n"
+      "  return 1.0 - smoothstep(edge, edge + softness, d2 - d1);\n}\n");
+    T("bricks", "Bricks", "Patterns", "Mortar lines of offset bricks.", {pf("mortar", "Mortar", 0.06, 0, 0.5)},
+      "float tex(vec4 p) {\n"
+      "  vec4 q = p * vec4(1.0, 2.0, 1.0, 1.0);\n"
+      "  float shift = 0.5 * mod(floor(q.y), 2.0);  // every other row offset by half a brick\n"
+      "  q.x += shift; q.z += shift;\n"
+      "  vec4 e = 0.5 - abs(fract(q) - 0.5);\n"
+      "  return 1.0 - step(mortar, min(min(e.x, e.y), e.z));\n}\n");
+    T("gradient", "Gradient", "Patterns", "A ramp along an axis (0 at -1, 1 at +1).", {pa("axis", "Along", 1)},
+      "float tex(vec4 p) {\n  return clamp(0.5 + 0.5 * axisGet(p, axis), 0.0, 1.0);\n}\n");
+    T("palette", "Cosine palette", "Colour", "Inigo Quilez's palette a + b cos(2 pi (c t + d)) along an axis.",
+      {pa("axis", "Along", 0), pcol("a", "Offset (a)", 0.5, 0.5, 0.5), pcol("b", "Amplitude (b)", 0.5, 0.5, 0.5), pcol("c", "Frequency (c)", 1, 1, 1),
+       pcol("ph", "Phase (d)", 0, 0.33, 0.67)},
+      "vec3 tex(vec4 p) {\n  float t = axisGet(p, axis);\n  return clamp(a + b * cos(6.28318 * (c * t + ph)), 0.0, 1.0);\n}\n");
+    T("colorgradient", "Colour gradient", "Colour", "Two colours along an axis.",
+      {pa("axis", "Along", 1), pcol("c0", "From", 0.1, 0.2, 0.8), pcol("c1", "To", 1.0, 0.6, 0.1)},
+      "vec3 tex(vec4 p) {\n  return mix(c0, c1, clamp(0.5 + 0.5 * axisGet(p, axis), 0.0, 1.0));\n}\n");
+    return v;
+  }();
+  return defs;
+}
+
+static std::string oneLine(std::string s) {
+  for (auto& c : s) if (c == '\n') c = ' ';
+  return s;
+}
+
+std::string transformedTextureCode(const TextureDef& d, const std::string& suffix) {
+  std::string code = renameCustomCode(d.code, suffix);
+  std::string extra;
+  for (int k = 0; k < paramsVec4s(d.params); k++) extra += ", vec4 P_" + std::to_string(k);
+  std::regex re(std::string(R"(\b(float|vec3|vec4)(\s+)tex)") + suffix + R"(\s*\(([^)]*)\)\s*\{)");
+  std::smatch m;
+  if (std::regex_search(code, m, re))
+    code = code.substr(0, m.position(0)) + m[1].str() + " tex" + suffix + "(" + m[3].str() + extra + ") {" + oneLine(paramDeclsGLSL(d.params)) +
+           code.substr(m.position(0) + m.length(0));
+  return code;
+}
+
+std::string checkTextureDef(const TextureDef& d) {
+  if (auto e = checkParams(d.params); !e.empty()) return e;
+  std::string err;
+  auto prog = sl::compile(std::string(sdfHelpersGLSL()) + "\n" + guardLoops(transformedTextureCode(d, "_d")), err);
+  if (!prog) return userLineError(err);
+  std::vector<sl::Type> sig{sl::T_VEC4};
+  for (int k = 0; k < paramsVec4s(d.params); k++) sig.push_back(sl::T_VEC4);
+  sl::Type rt;
+  if (!sl::hasFunction(*prog, "tex_d", sig, &rt) || !(rt == sl::T_FLOAT || rt == sl::T_VEC3 || rt == sl::T_VEC4))
+    return "define float tex(vec4 p) (a mask), vec3 tex(vec4 p) (a colour) or vec4 tex(vec4 p) (colour + coverage)";
+  return "";
+}
+
+std::shared_ptr<const TexRuntime> texRuntime(const TextureDef& d) {
+  static std::mutex mu;
+  static std::map<uint64_t, std::shared_ptr<const TexRuntime>> cache;
+  uint64_t h = d.hash();
+  {
+    std::lock_guard<std::mutex> lk(mu);
+    auto it = cache.find(h);
+    if (it != cache.end()) return it->second;
+  }
+  auto rt = std::make_shared<TexRuntime>();
+  std::string err;
+  rt->prog = sl::compile(std::string(sdfHelpersGLSL()) + "\n" + guardLoops(transformedTextureCode(d, "_d")), err);
+  rt->error = err;
+  rt->kind = textureKind(d);
+  rt->vec4s = paramsVec4s(d.params);
+  std::lock_guard<std::mutex> lk(mu);
+  if (cache.size() > 256) cache.clear();
+  cache[h] = rt;
+  return rt;
+}
+
+bool runTexture(const TextureDef& d, const std::vector<double>& packed, const double p[4], double out[4]) {
+  auto rt = texRuntime(d);
+  out[0] = out[1] = out[2] = 0; out[3] = 1;
+  if (!rt->prog) return false;
+  std::vector<sl::Value> args;
+  args.push_back(sl::Value::vec(4, p));
+  for (int k = 0; k < rt->vec4s; k++) {
+    double v[4] = {0, 0, 0, 0};
+    for (int c = 0; c < 4 && k * 4 + c < (int)packed.size(); c++) v[c] = packed[k * 4 + c];
+    args.push_back(sl::Value::vec(4, v));
+  }
+  sl::Value r;
+  if (!sl::call(*rt->prog, "tex_d", args, r)) return false;
+  if (r.t == sl::T_FLOAT) out[0] = r.v[0];
+  else for (int c = 0; c < (r.t == sl::T_VEC4 ? 4 : 3); c++) out[c] = r.v[c];
+  return true;
+}
+
+json textureDefToJson(const TextureDef& d) {
+  json j = {{"format", "4dcad-texture"}, {"version", 1}, {"id", d.id}, {"name", d.name}, {"code", d.code}, {"params", paramsToJson(d.params)}};
+  if (!d.description.empty()) j["description"] = d.description;
+  if (!d.category.empty()) j["category"] = d.category;
+  return j;
+}
+TextureDef textureDefFromJson(const json& j) {
+  TextureDef d;
+  d.id = j.at("id").get<std::string>();
+  d.name = j.value("name", d.id);
+  d.description = j.value("description", std::string());
+  d.category = j.value("category", std::string("Custom"));
+  d.code = j.value("code", std::string());
+  d.params = paramsFromJson(j.value("params", json::array()));
+  return d;
 }
 
 }  // namespace fd

@@ -156,6 +156,14 @@ void App::loadScene(SceneFile f) {
     if (k < 0) { n->mods.push_back(makeModifier(*defs().modifier(id))); k = (int)n->mods.size() - 1; }
     t.path = "mods." + std::to_string(k) + ".p." + (t.path == "round" ? "radius" : "thickness");
   }
+  // ... and the one colour texture's scale / strength / colour: the colour slot's now
+  for (auto& t : anim.tracks) {
+    Node* n = findNode(root, t.target);
+    if (!n || !n->isLeaf() || !n->mat.tex[CH_COLOR].used()) continue;
+    if (t.path == "mat.texScale") t.path = "tex.color.scale";
+    else if (t.path == "mat.texStrength") t.path = "tex.color.strength";
+    else if (t.path.rfind("mat.color2.", 0) == 0) t.path = "tex.color.color2." + t.path.substr(11);
+  }
   playing = false;
   recordLinks(root, linkDefs_);
   isolate.clear();
@@ -313,7 +321,7 @@ void App::newScene(SpaceKind kind, double radius) {
     // a curved 3D space: a ground plane, a few shapes and a row of pillars that shows the curvature
     f.space.kind = kind;
     f.space.radius = std::max(0.2, radius);
-    f.root.children[0].mat.texScale = 1;
+    f.root.children[0].mat.tex[CH_COLOR].map.scale = 1;
     Node cube = makeShape("cube", "Cube", {0, 0.8, 0, 0}, {0.85, 0.35, 0.3});
     double ang[6] = {0, 25, 0, 0, 0, 0};
     cube.xf.rot = rotationFromAngles(ang);

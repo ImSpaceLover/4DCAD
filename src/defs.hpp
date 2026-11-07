@@ -49,6 +49,8 @@ int paramsScalars(const std::vector<ParamDef>& ps);
 int paramsVec4s(const std::vector<ParamDef>& ps);        // at least 1
 int paramOffset(const std::vector<ParamDef>& ps, int i); // scalar index of parameter i
 
+struct TextureDef;
+
 struct ModifierDef {
   std::string id, name, description;
   std::string category;  // "Basic", "Deform", ... (menus)
@@ -69,6 +71,10 @@ class DefRegistry {
   std::vector<std::shared_ptr<const ModifierDef>> modifiers() const;
   void setModifier(const ModifierDef& d);  // adds / replaces (built-ins cannot be replaced)
   void eraseModifier(const std::string& id);
+  std::shared_ptr<const TextureDef> texture(const std::string& id) const;
+  std::vector<std::shared_ptr<const TextureDef>> textures() const;
+  void setTexture(const TextureDef& d);  // adds / replaces (built-ins cannot be replaced)
+  void eraseTexture(const std::string& id);
   DefRegistry();
  private:
   struct Impl;
@@ -80,6 +86,18 @@ DefRegistry& defs();
 const std::vector<ModifierDef>& builtinModifierDefs();
 /** The definition a modifier uses (engine modifiers: by type), nullptr if unknown. */
 std::shared_ptr<const ModifierDef> modifierDefOf(const Modifier& m);
+
+// ---- parameter values: a list of scalars matching a parameter list (colours take 3) ----
+double paramValue(const std::vector<double>& vals, const std::vector<ParamDef>& ps, int i, int comp = 0);
+void setParamValue(std::vector<double>& vals, const std::vector<ParamDef>& ps, int i, double v, int comp = 0);
+void conformValues(std::vector<double>& vals, const std::vector<ParamDef>& ps);
+std::vector<double> packValues(const std::vector<double>& vals, const std::vector<ParamDef>& ps);  // paramsVec4s * 4
+nlohmann::json valuesToJson(const std::vector<double>& vals, const std::vector<ParamDef>& ps);     // by name
+void valuesFromJson(std::vector<double>& vals, const std::vector<ParamDef>& ps, const nlohmann::json& j);
+/** Declarations of the parameter variables, read from the packed vec4s P_0 .. (GLSL). */
+std::string paramDeclsGLSL(const std::vector<ParamDef>& ps);
+/** Checks parameter names and options; "" if fine. */
+std::string checkParams(const std::vector<ParamDef>& ps);
 
 // ---- parameter values of a modifier ----
 /** A new modifier of this definition with default parameters. */
@@ -117,5 +135,44 @@ nlohmann::json modParamsToJson(const Modifier& m, const ModifierDef& d);
 void modParamsFromJson(Modifier& m, const ModifierDef& d, const nlohmann::json& j);
 /** The modifiers Onion (shell > 0) and Round (round != 0) that replace the old node fields. */
 void appendRoundShell(std::vector<Modifier>& mods, double round, double shell);
+
+// ================================================================ textures
+// A texture definition defines one of
+//   float tex(vec4 p)   a mask 0..1
+//   vec3  tex(vec4 p)   a colour
+//   vec4  tex(vec4 p)   a colour (rgb) + coverage (a)
+// p is the texture coordinate (the slot's mapping). Parameters are variables, as in modifiers.
+enum TexKind { TEXK_MASK = 0, TEXK_RGB, TEXK_RGBA };
+
+struct TextureDef {
+  std::string id, name, description;
+  std::string category;  // "Patterns", "Colour", ...
+  bool builtin = false;
+  std::vector<ParamDef> params;
+  std::string code;
+  uint64_t hash() const;
+};
+/** What tex returns (from its declaration; a mask if not found). */
+TexKind textureKind(const TextureDef& d);
+const std::vector<TextureDef>& builtinTextureDefs();
+/** The built-in texture that replaces an old texture type (1..12), "" for none. */
+const char* legacyTextureId(int type);
+/** The code with tex renamed to tex<suffix>(vec4 p, vec4 P_0 ..) declaring the parameters, and
+ *  other top-level functions renamed with the suffix. */
+std::string transformedTextureCode(const TextureDef& d, const std::string& suffix);
+std::string checkTextureDef(const TextureDef& d);
+
+struct TexRuntime {
+  std::shared_ptr<const sl::Program> prog;
+  TexKind kind = TEXK_MASK;
+  std::string error;
+  int vec4s = 1;
+};
+std::shared_ptr<const TexRuntime> texRuntime(const TextureDef& d);
+/** Runs the texture at p with packed parameters; out = (mask, 0, 0, 1) / (rgb, 1) / rgba. false on errors. */
+bool runTexture(const TextureDef& d, const std::vector<double>& packed, const double p[4], double out[4]);
+
+nlohmann::json textureDefToJson(const TextureDef& d);
+TextureDef textureDefFromJson(const nlohmann::json& j);  // throws on bad data
 
 }  // namespace fd

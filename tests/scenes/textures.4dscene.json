@@ -1,0 +1,2043 @@
+{
+ "format": "4dcad-scene",
+ "version": 3,
+ "root": {
+  "id": "root",
+  "name": "Scene",
+  "kind": "group",
+  "op": "union",
+  "k": 0.3,
+  "children": [
+   {
+    "id": "g",
+    "name": "Group",
+    "kind": "group",
+    "op": "smoothUnion",
+    "k": 0.3,
+    "children": [
+     {
+      "id": "t0",
+      "name": "checker",
+      "kind": "leaf",
+      "prim": "point",
+      "color": [
+       0.7,
+       0.6,
+       0.5
+      ],
+      "thickness": 0.1,
+      "xf": {
+       "pos": [
+        -4.8,
+        1.0,
+        -2.4,
+        0
+       ],
+       "rot": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+       ],
+       "scale": 0.7
+      },
+      "modifiers": [
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 1.4
+       },
+       {
+        "type": "revolve",
+        "radius": 0.0,
+        "axis": -1
+       },
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 1.0
+       }
+      ],
+      "material": {
+       "emissive": 0.0,
+       "roughness": 0.6,
+       "specular": 0.4,
+       "textures": {
+        "color": {
+         "def": "checker",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.5,
+         "map": {
+          "space": "Object",
+          "offset": [
+           0.0,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           0,
+           0,
+           0,
+           0,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         }
+        },
+        "bump": {
+         "def": "noise",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.03,
+         "map": {
+          "space": "Object",
+          "offset": [
+           0.0,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           0,
+           0,
+           0,
+           0,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         },
+         "mapFrom": "color"
+        }
+       }
+      }
+     },
+     {
+      "id": "t1",
+      "name": "stripes",
+      "kind": "leaf",
+      "prim": "point",
+      "color": [
+       0.7,
+       0.6,
+       0.5
+      ],
+      "thickness": 0.1,
+      "xf": {
+       "pos": [
+        -2.4,
+        1.0,
+        -2.4,
+        0
+       ],
+       "rot": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+       ],
+       "scale": 0.7
+      },
+      "modifiers": [
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 1.4
+       },
+       {
+        "type": "revolve",
+        "radius": 0.0,
+        "axis": -1
+       },
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 1.0
+       },
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 0.8
+       }
+      ],
+      "material": {
+       "emissive": 0.0,
+       "roughness": 0.6,
+       "specular": 0.4,
+       "textures": {
+        "roughness": {
+         "def": "stripes",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.5,
+         "map": {
+          "space": "World",
+          "offset": [
+           0.1,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           15,
+           0,
+           0,
+           10,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         },
+         "curve": [
+          [
+           0,
+           0
+          ],
+          [
+           0.5,
+           1
+          ],
+          [
+           1,
+           0.2
+          ]
+         ]
+        },
+        "color": {
+         "def": "rings",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.5,
+         "map": {
+          "space": "Parent",
+          "offset": [
+           0.2,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           30,
+           0,
+           0,
+           20,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         },
+         "invert": true,
+         "contrast": 0.4
+        }
+       }
+      }
+     },
+     {
+      "id": "t2",
+      "name": "grid",
+      "kind": "leaf",
+      "prim": "point",
+      "color": [
+       0.7,
+       0.6,
+       0.5
+      ],
+      "thickness": 0.1,
+      "xf": {
+       "pos": [
+        0.0,
+        1.0,
+        -2.4,
+        0
+       ],
+       "rot": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+       ],
+       "scale": 0.7
+      },
+      "modifiers": [
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 1.4
+       },
+       {
+        "type": "revolve",
+        "radius": 0.0,
+        "axis": -1
+       },
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 1.0
+       }
+      ],
+      "material": {
+       "emissive": 0.0,
+       "roughness": 0.6,
+       "specular": 0.4,
+       "textures": {
+        "metallic": {
+         "def": "grid",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.5,
+         "map": {
+          "space": "Parent",
+          "offset": [
+           0.2,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           30,
+           0,
+           0,
+           20,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         },
+         "invert": true,
+         "contrast": 0.4
+        },
+        "color": {
+         "def": "dots",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.5,
+         "map": {
+          "space": "Object",
+          "offset": [
+           0.30000000000000004,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           45,
+           0,
+           0,
+           0,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         }
+        },
+        "bump": {
+         "def": "noise",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.03,
+         "map": {
+          "space": "Parent",
+          "offset": [
+           0.2,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           30,
+           0,
+           0,
+           20,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         },
+         "invert": true,
+         "contrast": 0.4,
+         "mapFrom": "color"
+        }
+       }
+      }
+     },
+     {
+      "id": "t3",
+      "name": "noise",
+      "kind": "leaf",
+      "prim": "point",
+      "color": [
+       0.7,
+       0.6,
+       0.5
+      ],
+      "thickness": 0.1,
+      "xf": {
+       "pos": [
+        2.3999999999999995,
+        1.0,
+        -2.4,
+        0
+       ],
+       "rot": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+       ],
+       "scale": 0.7
+      },
+      "modifiers": [
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 1.4
+       },
+       {
+        "type": "revolve",
+        "radius": 0.0,
+        "axis": -1
+       },
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 1.0
+       },
+       {
+        "type": "extrude",
+        "mode": "finite",
+        "length": 0.8
+       }
+      ],
+      "material": {
+       "emissive": 0.0,
+       "roughness": 0.6,
+       "specular": 0.4,
+       "textures": {
+        "specular": {
+         "def": "noise",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.5,
+         "map": {
+          "space": "Object",
+          "offset": [
+           0.30000000000000004,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           45,
+           0,
+           0,
+           0,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         }
+        },
+        "color": {
+         "def": "waves",
+         "strength": 0.8,
+         "color2": [
+          0.1,
+          0.1,
+          0.15
+         ],
+         "value2": 0.5,
+         "map": {
+          "space": "World",
+          "offset": [
+           0.4,
+           0,
+           0,
+           0
+          ],
+          "rot": [
+           0,
+           0,
+           0,
+           0,
+           10,
+           0
+          ],
+          "scale": 1.5,
+          "axisScale": [
+           1,
+           1,
+           1,
+           1
+          ]
+         }
+        }
+       }
+      }
+     }
+    ],
+    "xf": {
+     "pos": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 1
+    },
+    "modifiers": []
+   },
+   {
+    "id": "t4",
+    "name": "rings",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      4.8,
+      1.0,
+      -2.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "emission": {
+       "def": "rings",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "World",
+        "offset": [
+         0.4,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         0,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      },
+      "color": {
+       "def": "marble",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Parent",
+        "offset": [
+         0.5,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         15,
+         0,
+         0,
+         20,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "curve": [
+        [
+         0,
+         0
+        ],
+        [
+         0.5,
+         1
+        ],
+        [
+         1,
+         0.2
+        ]
+       ]
+      },
+      "bump": {
+       "def": "noise",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.03,
+       "map": {
+        "space": "World",
+        "offset": [
+         0.4,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         0,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "mapFrom": "color"
+      }
+     }
+    }
+   },
+   {
+    "id": "t5",
+    "name": "dots",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      -4.8,
+      1.0,
+      0.0,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 0.8
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "transparency": {
+       "def": "dots",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Parent",
+        "offset": [
+         0.5,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         15,
+         0,
+         0,
+         20,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "curve": [
+        [
+         0,
+         0
+        ],
+        [
+         0.5,
+         1
+        ],
+        [
+         1,
+         0.2
+        ]
+       ]
+      },
+      "color": {
+       "def": "wood",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Object",
+        "offset": [
+         0.6000000000000001,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         30,
+         0,
+         0,
+         0,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      }
+     }
+    }
+   },
+   {
+    "id": "t6",
+    "name": "waves",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      -2.4,
+      1.0,
+      0.0,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "bump": {
+       "def": "waves",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.03,
+       "map": {
+        "space": "Object",
+        "offset": [
+         0.6000000000000001,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         30,
+         0,
+         0,
+         0,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      },
+      "color": {
+       "def": "cells",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "World",
+        "offset": [
+         0.7000000000000001,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         45,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "invert": true,
+       "contrast": 0.4
+      }
+     }
+    }
+   },
+   {
+    "id": "t7",
+    "name": "marble",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      0.0,
+      1.0,
+      0.0,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 0.8
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "color": {
+       "def": "marble",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "World",
+        "offset": [
+         0.7000000000000001,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         45,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "invert": true,
+       "contrast": 0.4
+      }
+     }
+    }
+   },
+   {
+    "id": "t8",
+    "name": "wood",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      2.3999999999999995,
+      1.0,
+      0.0,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "roughness": {
+       "def": "wood",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Parent",
+        "offset": [
+         0.8,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         0,
+         0,
+         0,
+         20,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      },
+      "color": {
+       "def": "gradient",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Object",
+        "offset": [
+         0.9,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         15,
+         0,
+         0,
+         0,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "curve": [
+        [
+         0,
+         0
+        ],
+        [
+         0.5,
+         1
+        ],
+        [
+         1,
+         0.2
+        ]
+       ]
+      },
+      "bump": {
+       "def": "noise",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.03,
+       "map": {
+        "space": "Parent",
+        "offset": [
+         0.8,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         0,
+         0,
+         0,
+         20,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "mapFrom": "color"
+      }
+     }
+    }
+   },
+   {
+    "id": "t9",
+    "name": "cells",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      4.8,
+      1.0,
+      0.0,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 0.8
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "metallic": {
+       "def": "cells",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Object",
+        "offset": [
+         0.9,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         15,
+         0,
+         0,
+         0,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "curve": [
+        [
+         0,
+         0
+        ],
+        [
+         0.5,
+         1
+        ],
+        [
+         1,
+         0.2
+        ]
+       ]
+      },
+      "color": {
+       "def": "palette",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "World",
+        "offset": [
+         1.0,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         30,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      }
+     }
+    }
+   },
+   {
+    "id": "t10",
+    "name": "bricks",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      -4.8,
+      1.0,
+      2.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "specular": {
+       "def": "bricks",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "World",
+        "offset": [
+         1.0,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         30,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      },
+      "color": {
+       "def": "colorgradient",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Parent",
+        "offset": [
+         1.1,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         45,
+         0,
+         0,
+         20,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      },
+      "bump": {
+       "def": "noise",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.03,
+       "map": {
+        "space": "World",
+        "offset": [
+         1.0,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         30,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "mapFrom": "color"
+      }
+     }
+    }
+   },
+   {
+    "id": "t11",
+    "name": "gradient",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      -2.4,
+      1.0,
+      2.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 0.8
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "emission": {
+       "def": "gradient",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Parent",
+        "offset": [
+         1.1,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         45,
+         0,
+         0,
+         20,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      },
+      "color": {
+       "def": "checker",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Object",
+        "offset": [
+         1.2000000000000002,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         0,
+         0,
+         0,
+         0,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "invert": true,
+       "contrast": 0.4
+      }
+     }
+    }
+   },
+   {
+    "id": "t12",
+    "name": "palette",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      0.0,
+      1.0,
+      2.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "transparency": {
+       "def": "palette",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Object",
+        "offset": [
+         1.2000000000000002,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         0,
+         0,
+         0,
+         0,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "invert": true,
+       "contrast": 0.4
+      },
+      "color": {
+       "def": "stripes",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "World",
+        "offset": [
+         1.3,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         15,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "curve": [
+        [
+         0,
+         0
+        ],
+        [
+         0.5,
+         1
+        ],
+        [
+         1,
+         0.2
+        ]
+       ]
+      },
+      "bump": {
+       "def": "noise",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.03,
+       "map": {
+        "space": "Object",
+        "offset": [
+         1.2000000000000002,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         0,
+         0,
+         0,
+         0,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "invert": true,
+       "contrast": 0.4,
+       "mapFrom": "color"
+      }
+     }
+    }
+   },
+   {
+    "id": "t13",
+    "name": "colorgradient",
+    "kind": "leaf",
+    "prim": "point",
+    "color": [
+     0.7,
+     0.6,
+     0.5
+    ],
+    "thickness": 0.1,
+    "xf": {
+     "pos": [
+      2.3999999999999995,
+      1.0,
+      2.4,
+      0
+     ],
+     "rot": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "scale": 0.7
+    },
+    "modifiers": [
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.4
+     },
+     {
+      "type": "revolve",
+      "radius": 0.0,
+      "axis": -1
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 1.0
+     },
+     {
+      "type": "extrude",
+      "mode": "finite",
+      "length": 0.8
+     }
+    ],
+    "material": {
+     "emissive": 0.0,
+     "roughness": 0.6,
+     "specular": 0.4,
+     "textures": {
+      "bump": {
+       "def": "colorgradient",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.03,
+       "map": {
+        "space": "World",
+        "offset": [
+         1.3,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         15,
+         0,
+         0,
+         10,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       },
+       "curve": [
+        [
+         0,
+         0
+        ],
+        [
+         0.5,
+         1
+        ],
+        [
+         1,
+         0.2
+        ]
+       ]
+      },
+      "color": {
+       "def": "grid",
+       "strength": 0.8,
+       "color2": [
+        0.1,
+        0.1,
+        0.15
+       ],
+       "value2": 0.5,
+       "map": {
+        "space": "Parent",
+        "offset": [
+         1.4000000000000001,
+         0,
+         0,
+         0
+        ],
+        "rot": [
+         0,
+         30,
+         0,
+         0,
+         20,
+         0
+        ],
+        "scale": 1.5,
+        "axisScale": [
+         1,
+         1,
+         1,
+         1
+        ]
+       }
+      }
+     }
+    }
+   }
+  ],
+  "xf": {
+   "pos": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "rot": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "scale": 1
+  },
+  "modifiers": []
+ }
+}
