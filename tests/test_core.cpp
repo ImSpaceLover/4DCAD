@@ -7,6 +7,7 @@
 #include "camera.hpp"
 #include "codegen.hpp"
 #include "polytope.hpp"
+#include "shaderlang.hpp"
 #include "shaders.hpp"
 #include "evaluator.hpp"
 #include "examples.hpp"
@@ -208,7 +209,7 @@ int main() {
     CHECK(nodeDim(back, reg) == 4, "custom SDFs are 4D");
     Node r = makeGroup(BoolOp::Union, {back});
     SceneEvaluator ev(r, reg, "");
-    CLOSE(ev.evalFull({3, 0, 0, 0}).d, 1, 1e-9);  // box of half size 2
+    CLOSE(ev.evalFull({3, 0, 0, 0}).d, 2, 1e-9);  // the default code (a unit hypersphere, wavy), run exactly on the CPU
     std::string ren = renameCustomCode("float helper(float x) { return x; }\nfloat sdf(vec4 p) { return helper(length(p)) - 1.0; }", "_c7");
     CHECK(ren.find("float sdf_c7(vec4 p)") != std::string::npos && ren.find("helper_c7(length") != std::string::npos, "rename: %s", ren.c_str());
     auto cs = compileScene(r, reg, "", false);
@@ -739,6 +740,75 @@ int main() {
     CHECK(g.find("while ((d > 0.0) && (g_loopGuard++ < LOOP_GUARD))") != std::string::npos, "while loop guarded");
     CHECK(g.find("for (; (true) && (g_loopGuard++ < LOOP_GUARD);)") != std::string::npos, "endless for guarded");
     CHECK(g.find("// for (x) in a comment") != std::string::npos && g.find("int format = 1;") != std::string::npos, "comments / names untouched");
+  }
+  {  // shader-language interpreter
+    using namespace fd::sl;
+    std::string err;
+    auto run = [&](const std::string& src, const std::string& fn, std::vector<Value> args) {
+      Value out;
+      auto p = compile(src, err);
+      if (!p) { std::printf("compile error: %s\n", err.c_str()); return Value::f(-12345); }
+      std::string e2;
+      if (!call(*p, fn, args, out, &e2)) { std::printf("run error: %s\n", e2.c_str()); return Value::f(-12345); }
+      return out;
+    };
+    // arithmetic, int -> float, swizzles, built-ins
+    CLOSE(run("float f(float x) { return 2 * x + 1; }", "f", {Value::f(3)}).v[0], 7, 1e-12);
+    CLOSE(run("int f(int a, int b) { return a / b + a % b; }", "f", {Value::i(7), Value::i(2)}).v[0], 4, 1e-12);
+    Value v = run("vec4 f(vec4 p) { vec4 q = p.wzyx; q.xy = q.yx * 2.0; return q; }", "f", {Value::vec4(1, 2, 3, 4)});
+    CHECK(v.t == T_VEC4 && v.v[0] == 6 && v.v[1] == 8 && v.v[2] == 2 && v.v[3] == 1, "swizzle read / write");
+    CLOSE(run("float f(vec3 p) { return length(p) - 1.0; }", "f", {Value::vec(3, std::array<double, 3>{3, 4, 0}.data())}).v[0], 4, 1e-12);
+    CLOSE(run("float f(float x) { return clamp(mix(0.0, 10.0, x), 1.0, 8.0) + smoothstep(0.0, 1.0, 0.5) + step(0.5, x); }", "f", {Value::f(0.9)}).v[0],
+          8 + 0.5 + 1, 1e-12);
+    CLOSE(run("float f(float x) { return mod(-1.5, 1.0) + fract(-0.25) + sign(-3.0) + abs(-2); }", "f", {Value::f(0)}).v[0], 0.5 + 0.75 - 1 + 2, 1e-12);
+    // control flow, loops, user functions, globals, #define
+    CLOSE(run("#define N 5\nint g = 2;\nfloat sq(float x) { return x * x; }\nfloat f(float x) {\n  float s = 0.0;\n"
+              "  for (int i = 0; i < N; i++) { if (i == 3) continue; s += sq(float(i)); }\n  int k = 0; while (true) { k++; if (k >= g) break; }\n"
+              "  return s + float(k) + (x > 0.0 ? 100.0 : -100.0); }", "f", {Value::f(1)}).v[0], 0 + 1 + 4 + 16 + 2 + 100, 1e-12);
+    // forward calls, matrices
+    CLOSE(run("float f(float x) { return later(x); }\nfloat later(float x) { return x + 1.0; }", "f", {Value::f(1)}).v[0], 2, 1e-12);
+    v = run("vec4 f(vec4 p) { mat4 m = mat4(0.0, 1.0, 0.0, 0.0,  -1.0, 0.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0); return m * p; }", "f",
+            {Value::vec4(1, 0, 0, 0)});
+    CHECK(v.v[0] == 0 && v.v[1] == 1, "mat4 * vec4 (column-major)");
+    v = run("vec2 f(vec2 p) { mat2 m = mat2(2.0); return (m * m) * p + p * mat2(1.0); }", "f", {Value::vec(2, std::array<double, 2>{1, 1}.data())});
+    CHECK(v.v[0] == 5 && v.v[1] == 5, "mat2 products");
+    // errors with positions
+    CHECK(!compile("float f(float x) {\n  return y;\n}", err) && err.rfind("2:10: unknown name 'y'", 0) == 0, "unknown name error: %s", err.c_str());
+    CHECK(!compile("float f(float x) { return vec3(1.0); }", err) && err.find("cannot convert vec3 to float") != std::string::npos, "type error: %s", err.c_str());
+    CHECK(!compile("float f(float x) { return cell(x); }", err) && err.find("unknown function 'cell'") != std::string::npos, "unknown function: %s", err.c_str());
+    // the loop guard of custom code works the same here (guarded endless loop ends)
+    std::string g = guardLoops("float f(float x) { float d = x; for (;;) { d += 1.0; } return d; }");
+    CLOSE(run("#define LOOP_GUARD 4096\nint g_loopGuard = 0;\n" + g, "f", {Value::f(0)}).v[0], 4096, 1e-9);
+    CHECK(hasFunction(*compile("vec4 warp(vec4 p) { return p; }", err), "warp", {T_VEC4}), "hasFunction");
+    // the shared prelude (the shader's SDF helpers) runs in the interpreter
+    std::string pre = sdfHelpersGLSL();
+    auto pp = compile(pre + "\nfloat f(vec4 p) { return vnoise(p); }\nfloat g(vec4 p) { return h4(p); }\n"
+                            "float e(float d, float w) { return opExtrude(d, w); }\nvec2 r(vec2 v) { return rot2(v, PI * 0.5); }\n"
+                            "float u(float a, float b) { return sU(a, b, 0.5); }\nfloat fb(vec4 p) { return fbm(p); }", err);
+    CHECK(pp != nullptr, "prelude compiles in the interpreter: %s", err.c_str());
+    if (pp) {
+      Value o;
+      call(*pp, "f", {Value::vec4(2, 3, -1, 5)}, o);
+      Value h;
+      call(*pp, "g", {Value::vec4(2, 3, -1, 5)}, h);
+      CLOSE(o.v[0], h.v[0], 1e-9);  // value noise at a lattice point = its hashed value
+      call(*pp, "e", {Value::f(0.3), Value::f(0.4)}, o);
+      CLOSE(o.v[0], 0.5, 1e-12);
+      call(*pp, "r", {Value::vec(2, std::array<double, 2>{1, 0}.data())}, o);
+      CHECK(std::abs(o.v[0]) < 1e-9 && std::abs(o.v[1] - 1) < 1e-9, "rot2");
+      call(*pp, "u", {Value::f(1), Value::f(1)}, o);
+      CLOSE(o.v[0], 0.875, 1e-12);
+      call(*pp, "fb", {Value::vec4(0.3, 1.7, 2.2, -0.4)}, o);
+      CHECK(o.v[0] > 0 && o.v[0] < 0.875, "fbm in range %f", o.v[0]);
+    }
+  }
+  {  // custom SDF code runs exactly on the CPU (the interpreter); broken code: its bound box
+    Node c = makeCustom("c", "float sdf(vec4 p) { return length(p) - 0.7; }");
+    CLOSE(customSdf(c, {1, 0, 0, 0}), 0.3, 1e-12);
+    CLOSE(customSdf(c, {0, 0, 0, 0}), -0.7, 1e-12);
+    c.code = "float sdf(vec4 p) { return nope; }";
+    c.codeBound = 1;
+    CLOSE(customSdf(c, {2, 0, 0, 0}), 1.0, 1e-12);
   }
   {  // the regular 4D polytopes
     const int counts[6] = {5, 8, 16, 24, 120, 600};

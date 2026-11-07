@@ -1,5 +1,8 @@
 #include "evaluator.hpp"
 
+#include "codegen.hpp"
+#include "shaderlang.hpp"
+
 namespace fd {
 
 Role nodeRole(const Node& n, EvalCtx ctx, const std::string& activeWorld, const std::function<bool(const std::string&)>& worldExists) {
@@ -29,6 +32,20 @@ double radialCopyAngle(const Modifier& m, double a) {
     if (dd < best) { best = dd; out = ang; }
   }
   return out;
+}
+
+double customSdf(const Node& n, const V4& q) {
+  // the custom GLSL code runs here too (the shader-language interpreter, with the same prelude and
+  // loop guard as the GPU); code it cannot run is a box of the code bound, as the shader draws it
+  std::string err;
+  auto prog = sl::compileCached(std::string(sdfHelpersGLSL()) + "\n" + guardLoops(n.code), &err);
+  if (prog) {
+    sl::Value out;
+    if (sl::call(*prog, "sdf", {sl::Value::vec4(q[0], q[1], q[2], q[3])}, out) && out.t == sl::T_FLOAT && std::isfinite(out.v[0])) return out.v[0];
+  }
+  double o = 0, in = -1e9;
+  for (int a = 0; a < 4; a++) { double e = std::abs(q[a]) - n.codeBound; o += std::max(e, 0.0) * std::max(e, 0.0); in = std::max(in, e); }
+  return std::sqrt(o) + std::min(in, 0.0);
 }
 
 void applyModifier(V4& q, const Modifier& m) {
@@ -316,11 +333,8 @@ double SceneEvaluator::leafShape(const Node& n, const Prep& pr, V4& q) const {
   if (n.mods.size() > 64 || !pr.prim) return INF;
   modifierCoords(n, pr.axes, q, t);
   double d;
-  if (n.isCustom()) {
-    double o = 0, in = -1e9;
-    for (int a = 0; a < 4; a++) { double e = std::abs(q[a]) - n.codeBound; o += std::max(e, 0.0) * std::max(e, 0.0); in = std::max(in, e); }
-    d = std::sqrt(o) + std::min(in, 0.0);
-  } else d = evalPrimitive(*pr.prim, q);
+  if (n.isCustom()) d = customSdf(n, q);
+  else d = evalPrimitive(*pr.prim, q);
   d = modifierDistance(n, pr.axes, d, t);
   double shell = n.shell.value_or(0.0);
   if (shell > 0) d = std::abs(d) - shell;
@@ -472,11 +486,8 @@ Sample SceneEvaluator::evalNode(const Node& n, const V4& p, const V4& g, double 
   } else if (n.isLeaf()) {
     if (!pr.prim) return {};
     double d;
-    if (n.isCustom()) {  // GLSL code cannot run on the CPU: use its bounding box
-      double e[4], o = 0, in = -1e9;
-      for (int a = 0; a < 4; a++) { e[a] = std::abs(q[a]) - n.codeBound; o += std::max(e[a], 0.0) * std::max(e[a], 0.0); in = std::max(in, e[a]); }
-      d = std::sqrt(o) + std::min(in, 0.0);
-    } else d = evalPrimitive(*pr.prim, q);
+    if (n.isCustom()) d = customSdf(n, q);  // (the GLSL code itself, interpreted)
+    else d = evalPrimitive(*pr.prim, q);
     d = modifierDistance(n, pr.axes, d, t);
     // shell / rounding act on the object's own shape, before it gets its thickness along
     // the unused axes (otherwise they would act on that thin 4D slab instead)

@@ -14,7 +14,8 @@ namespace fd {
 
 static const char* C = "xyzw";
 
-// SDF helpers available to generated code and to custom SDFs.
+// SDF helpers available to generated code, custom SDFs and modifier / texture definitions. This is
+// also the shared prelude of the CPU interpreter (shaderlang): it must stay inside its GLSL subset.
 static const char* SDF_HELPERS = R"(
 #define INF 1e9
 #define LOOP_GUARD 4096
@@ -43,6 +44,26 @@ vec2 opRadial(vec2 v, float r, float n, float s, float st) {
   return vec2(cs * v.x + sn * v.y - r, -sn * v.x + cs * v.y);
 }
 float sS(float a, float b, float k) { if (b >= INF * 0.5 || a >= INF * 0.5) return a; float h = clamp(0.5 - 0.5 * (a + b) / k, 0.0, 1.0); return mix(a, -b, h) + k * h * (1.0 - h); }
+#define PI 3.14159265359
+// rotation of a 2D vector by angle a (counter-clockwise)
+vec2 rot2(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
+// the component of v along axis a (0..3) / v with that component replaced
+float axisGet(vec4 v, int a) { return a == 0 ? v.x : a == 1 ? v.y : a == 2 ? v.z : v.w; }
+vec4 axisSet(vec4 v, int a, float x) { if (a == 0) v.x = x; else if (a == 1) v.y = x; else if (a == 2) v.z = x; else v.w = x; return v; }
+// 4D value noise: hashed lattice values, smoothly interpolated over the 16 corners of a cell
+float h4(vec4 c) { return fract(sin(dot(c, vec4(127.1, 311.7, 74.7, 269.5))) * 43758.5453); }
+vec4 corner(int k) { return vec4(float(k & 1), float((k >> 1) & 1), float((k >> 2) & 1), float((k >> 3) & 1)); }
+float vnoise(vec4 p) {
+  vec4 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float r = 0.0;
+  for (int k = 0; k < 16; k++) {
+    vec4 o = corner(k), w = mix(1.0 - f, f, o);
+    r += h4(i + o) * w.x * w.y * w.z * w.w;
+  }
+  return r;
+}
+float fbm(vec4 p) { return 0.5 * vnoise(p) + 0.25 * vnoise(p * 2.03 + 1.7) + 0.125 * vnoise(p * 4.01 + 3.1); }
 )";
 
 // Follow surface: the bent object's local coordinates from its path (extra node-data rows from
@@ -107,20 +128,6 @@ float texNoise(vec4 p) {
   return clamp(0.5 + 0.2 * n, 0.0, 1.0);
 }
 float texRings(vec4 p) { return step(0.5, fract(length(p))); }
-// 4D value noise: hashed lattice values, smoothly interpolated over the 16 corners of a cell
-float h4(vec4 c) { return fract(sin(dot(c, vec4(127.1, 311.7, 74.7, 269.5))) * 43758.5453); }
-vec4 corner(int k) { return vec4(float(k & 1), float((k >> 1) & 1), float((k >> 2) & 1), float((k >> 3) & 1)); }
-float vnoise(vec4 p) {
-  vec4 i = floor(p), f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  float r = 0.0;
-  for (int k = 0; k < 16; k++) {
-    vec4 o = corner(k), w = mix(1.0 - f, f, o);
-    r += h4(i + o) * w.x * w.y * w.z * w.w;
-  }
-  return r;
-}
-float fbm(vec4 p) { return 0.5 * vnoise(p) + 0.25 * vnoise(p * 2.03 + 1.7) + 0.125 * vnoise(p * 4.01 + 3.1); }
 float texDots(vec4 p) { return step(length(fract(p) - 0.5), 0.32); }
 float texWaves(vec4 p) { return 0.5 + 0.5 * sin(6.2832 * (p.x + 0.35 * sin(2.5 * p.y + p.w) + 0.25 * p.z)); }
 float texMarble(vec4 p) { return 0.5 + 0.5 * sin(3.0 * p.x + 6.0 * fbm(p)); }

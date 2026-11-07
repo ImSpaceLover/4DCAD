@@ -33,6 +33,8 @@ double modifierDistance(const Node& n, const std::vector<ModAxis>& ax, double d,
 /** Radial repeat: angle (radians) of the copy nearest to polar angle a. */
 double radialCopyAngle(const Modifier& m, double a);
 double opExtrudeD(double d, double wy);
+/** Custom SDF code evaluated on the CPU (interpreted; its code-bound box if it cannot run). */
+double customSdf(const Node& n, const V4& q);
 
 struct Sample {
   double d = INF;
