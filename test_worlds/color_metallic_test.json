@@ -1,0 +1,340 @@
+{
+  "appVersion": "1.0.1",
+  "camera": {
+    "distance": 4.885611032640683,
+    "pitch": -0.23999999999999977,
+    "rot4": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "slider": 3,
+    "target": [
+      -0.23300375435295964,
+      0.029012848965289217,
+      3.802386927838417,
+      0.0
+    ],
+    "yaw": 0.032000000000000015
+  },
+  "format": "4dcad-scene",
+  "primitives": [],
+  "root": {
+    "children": [
+      {
+        "color": [
+          0.8200000000000001,
+          0.7232000000000001,
+          0.37999999999999995
+        ],
+        "id": "n87dc140",
+        "kind": "leaf",
+        "material": {
+          "color2": [
+            0.12,
+            0.12,
+            0.14
+          ],
+          "emissionStrength": 4.0,
+          "emissive": 0.0,
+          "ior": 1.45,
+          "metallic": 0.0,
+          "roughness": 0.75,
+          "specular": 0.35,
+          "textures": {
+            "metallic": {
+              "color2": [
+                0.12,
+                0.12,
+                0.14
+              ],
+              "def": "checker",
+              "map": {
+                "axisScale": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "offset": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "rot": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "scale": 1.0,
+                "space": "Object"
+              },
+              "params": {},
+              "strength": 1.0,
+              "value2": 1.0
+            }
+          },
+          "transparency": 0.0
+        },
+        "modifiers": [
+          {
+            "length": 0.6,
+            "mode": "finite",
+            "type": "extrude"
+          },
+          {
+            "axis": -1,
+            "radius": 0.0,
+            "type": "revolve"
+          },
+          {
+            "axis": 0,
+            "radius": 1.2,
+            "type": "revolve"
+          },
+          {
+            "axis": 1,
+            "radius": 1.2,
+            "type": "revolve"
+          }
+        ],
+        "name": "Tiger",
+        "prim": "point",
+        "thickness": 0.1,
+        "xf": {
+          "pos": [
+            -0.1234898381295905,
+            2.374561178243542,
+            2.206927481779811,
+            0.0
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      },
+      {
+        "color": [
+          0.0,
+          0.19130444526672363,
+          1.0
+        ],
+        "id": "n8e51f5",
+        "kind": "leaf",
+        "material": {
+          "color2": [
+            0.12,
+            0.12,
+            0.14
+          ],
+          "emissionStrength": 4.0,
+          "emissive": 0.0,
+          "ior": 1.45,
+          "metallic": 0.0,
+          "roughness": 0.0,
+          "specular": 0.0,
+          "textures": {
+            "color": {
+              "color2": [
+                0.029287971556186676,
+                0.2405797243118286,
+                0.04031187668442726
+              ],
+              "def": "checker",
+              "high": 0.0,
+              "invert": true,
+              "low": 1.0,
+              "map": {
+                "axisScale": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "offset": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "rot": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "scale": 1.0,
+                "space": "Object"
+              },
+              "params": {},
+              "strength": 1.0,
+              "value2": 1.0
+            },
+            "metallic": {
+              "color2": [
+                0.12,
+                0.12,
+                0.14
+              ],
+              "contrast": 1.0,
+              "def": "checker",
+              "high": 1.7050000429153442,
+              "low": 0.5600000023841858,
+              "map": {
+                "axisScale": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "offset": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "rot": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "scale": 1.0,
+                "space": "Object"
+              },
+              "mapFrom": "color",
+              "params": {},
+              "strength": 1.0,
+              "value2": 1.0
+            }
+          },
+          "transparency": 0.0
+        },
+        "modifiers": [
+          {
+            "length": 0.0,
+            "mode": "infinite",
+            "type": "extrude"
+          },
+          {
+            "length": 0.0,
+            "mode": "half",
+            "type": "extrude"
+          },
+          {
+            "length": 0.0,
+            "mode": "infinite",
+            "type": "extrude"
+          },
+          {
+            "length": 0.0,
+            "mode": "infinite",
+            "type": "extrude"
+          }
+        ],
+        "name": "Hyperplane",
+        "prim": "point",
+        "thickness": 0.1,
+        "xf": {
+          "pos": [
+            -0.7510632872581482,
+            0.8349999785423279,
+            4.125211715698242,
+            0.0
+          ],
+          "rotm": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": 1.0
+        }
+      }
+    ],
+    "id": "root",
+    "k": 0.3,
+    "kind": "group",
+    "modifiers": [],
+    "name": "Scene",
+    "op": "union",
+    "xf": {
+      "pos": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotm": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": 1.0
+    }
+  },
+  "version": 3,
+  "world": null
+}
