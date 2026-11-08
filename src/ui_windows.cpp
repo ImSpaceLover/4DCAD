@@ -60,6 +60,34 @@ void UI::qualityWindow() {
       ImGui::Checkbox("Collisions##g", &x.geoCollide);
       ImGui::EndTabItem();
     }
+    if (ImGui::BeginTabItem("Scene")) {
+      // the scene's look: saved with the scene (and undoable), not an app setting
+      auto& q = app.quality;
+      ImGui::TextDisabled("Saved with the scene (%s)", app.currentFile.empty() ? "unsaved scene" : app.currentFile.c_str());
+      auto commit = [&] { if (ImGui::IsItemDeactivatedAfterEdit()) app.commit(); };
+      auto S = [&](const char* label, float& v, float lo, float hi, const char* fmt = "%.2f", const char* tip = nullptr) {
+        ImGui::SliderFloat(label, &v, lo, hi, fmt);
+        if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        commit();
+      };
+      ImGui::SeparatorText("Sun");
+      S("Intensity##sun", q.sunIntensity, 0, 3, "%.2f", "Brightness of the directional light (simple lighting and path tracing)");
+      S("Direction", q.lightYaw, -3.14f, 3.14f, "%.2f", "Turn around the vertical axis (radians)");
+      S("Height", q.lightPitch, -1.5f, 1.5f, "%.2f", "Angle above the horizon (radians)");
+      S("Along W", q.lightW, -1, 1, "%.2f", "Component of the light direction along the 4th axis");
+      S("Size", q.sunSize, 0, 0.3f, "%.3f rad", "Angular size of the sun: softer shadows (stochastic sampling, path tracing)");
+      ImGui::SeparatorText("Ambient light");
+      S("Ambient", q.ambient, 0, 1, "%.2f", "Light from everywhere (simple lighting; path tracing uses the sky's light instead)");
+      ImGui::SeparatorText("Sky and fog");
+      ImGui::ColorEdit3("Sky top (4D)", q.skyTop.data());
+      commit();
+      ImGui::ColorEdit3("Sky bottom (4D)", q.skyBottom.data());
+      commit();
+      S("Sky intensity", q.skyIntensity, 0, 3, "%.2f", "Brightness of the sky (Geodesic view: of the world surface seen far away).\n0 = black. Path traced: the sky's light on the scene");
+      S("Fog", q.fog, 0, 4, "%.2f", "How much far surfaces fade into the sky colour");
+      if (ImGui::Button("Default look")) { applyLook(q, SceneLook{}); app.commit(); }
+      ImGui::EndTabItem();
+    }
     if (ImGui::BeginTabItem("Rendering")) {
       auto& q = app.quality;
       ImGui::SeparatorText("Presets");
@@ -87,18 +115,13 @@ void UI::qualityWindow() {
                             "real lights of their own shape, no ambient light (sky off + nothing glowing = black).\n"
                             "Used where the image is refined (the still viewport, renders); moving views stay simple.");
       }
-      Ff("Sky intensity", q.skyIntensity, 0, 3, "%.2f", "Brightness of the sky (Geodesic view: of the world surface seen far away).\n0 = black. Path traced: the sky's light on the scene");
+      ImGui::TextDisabled("Sun, ambient light, sky and fog: the Scene tab (saved with the scene)");
       if (q.lighting == 1) {
         ImGui::Indent();
         Ff("Exposure", q.exposure, -6, 6, "%+.1f stops", "Path traced: brightness of the image (x 2^stops)");
         const char* tms[2] = {"Clip", "Filmic (ACES)"};
         ImGui::Combo("Tone mapping", &q.tonemap, tms, 2);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Filmic: very bright light rolls off smoothly instead of burning out to flat white");
-        ImGui::Checkbox("Denoise", &q.denoise);
-        if (ImGui::IsItemHovered())
-          ImGui::SetTooltip("Smooths the noise of path tracing, keeping edges (guided by the surfaces' colour and depth).\n"
-                            "It does less as samples add up");
-        if (q.denoise) { ImGui::SameLine(); ImGui::SetNextItemWidth(120); ImGui::SliderFloat("##dns", &q.denoiseStrength, 0.1f, 3.f, "strength %.1f"); }
         const char* l4[2] = {"Physical (distance^3)", "Like 3D (distance^2)"};
         ImGui::Combo("4D light falloff", &q.light4D, l4, 2);
         if (ImGui::IsItemHovered())
@@ -111,11 +134,6 @@ void UI::qualityWindow() {
       Ff("Shadow distance", q.shadowMax, 1, 50, "%.0f");
       ImGui::Checkbox("Ambient occlusion", &q.ao);
       Ff("AO strength", q.aoStrength, 0, 4);
-      Ff("Ambient light", q.ambient, 0, 1);
-      Ff("Light direction", q.lightYaw, -3.14f, 3.14f, "%.2f");
-      Ff("Light height", q.lightPitch, -1.5f, 1.5f, "%.2f");
-      Ff("Light W", q.lightW, -1, 1, "%.2f", "Component of the light direction along the 4th axis");
-      Ff("Sun intensity", q.sunIntensity, 0, 3);
       ImGui::Checkbox("Point light shadows", &q.pointShadows);
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Without shadows, lights shine through walls (emissive objects' lights always cast shadows)");
       ImGui::BeginDisabled(q.lighting == 1);
@@ -126,6 +144,16 @@ void UI::qualityWindow() {
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflections / refractions followed per pixel (0 = mirrors and glass off)");
       ImGui::Checkbox("Over-relaxed marching", &q.relaxedMarching);
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Longer steps with a safety check: usually faster (Full 4D)");
+      ImGui::SeparatorText("Denoise");
+      ImGui::SetNextItemWidth(200);
+      ImGui::Combo("Denoiser", &q.denoise, DENOISE_NAMES, 5);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Smooths the noise of refined images (path tracing, and simple lighting's soft shadows, AO and\n"
+                          "blurry reflections), guided by the surfaces' colour and depth so edges stay sharp. It does less as\n"
+                          "samples add up.\n"
+                          "Edge-aware: strong, smooth (wavelet). Bilateral: keeps finer detail. Median: removes single bright\n"
+                          "pixels (fireflies). Median + edge-aware: both");
+      if (q.denoise > 0) { ImGui::SameLine(); ImGui::SetNextItemWidth(120); ImGui::SliderFloat("##dns", &q.denoiseStrength, 0.1f, 3.f, "strength %.1f"); }
       ImGui::SeparatorText("Stochastic sampling");
       ImGui::Checkbox("Refine the view when still", &q.stochastic);
       if (ImGui::IsItemHovered())
@@ -134,7 +162,6 @@ void UI::qualityWindow() {
       ImGui::BeginDisabled(!q.stochastic);
       ImGui::SliderInt("Samples##vp", &q.viewportSamples, 2, 1024);
       ImGui::EndDisabled();
-      Ff("Sun size", q.sunSize, 0, 0.3f, "%.3f rad", "Angular size of the sun: softer shadows");
       Ff("Light radius", q.lightRadius, 0, 2, "%.2f", "Point lights are balls of this size: softer shadows");
       ImGui::SeparatorText("Fast mode (Explore)");
       {
@@ -172,10 +199,6 @@ void UI::qualityWindow() {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fewer = faster, shadows of far objects may be missed");
         ImGui::EndDisabled();
       }
-      ImGui::SeparatorText("Sky / fog");
-      ImGui::ColorEdit3("Sky top (4D)", q.skyTop.data());
-      ImGui::ColorEdit3("Sky bottom (4D)", q.skyBottom.data());
-      Ff("Fog", q.fog, 0, 4);
       ImGui::SeparatorText("Geodesic rays");
       Ff("Max step", q.geoMaxStep, 0.02f, 1.f, "%.2f", "Smaller = more accurate light paths on strongly curved worlds (slower)");
       ImGui::SliderInt("Projections", &q.geoProjectIters, 1, 4);
@@ -194,7 +217,13 @@ void UI::qualityWindow() {
     }
     ImGui::EndTabBar();
   }
-  if (ImGui::Button("Reset to defaults")) { app.quality = QualitySettings{}; app.editSet = EditSettings{}; app.exploreSet = ExploreSettings{}; }
+  if (ImGui::Button("Reset to defaults")) {  // (the scene's look stays: Scene > Default look)
+    SceneLook look = lookOf(app.quality);
+    app.quality = QualitySettings{};
+    applyLook(app.quality, look);
+    app.editSet = EditSettings{};
+    app.exploreSet = ExploreSettings{};
+  }
   ImGui::End();
   if (!showQuality_) app.saveSettings();
 }

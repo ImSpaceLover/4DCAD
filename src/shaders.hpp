@@ -1311,13 +1311,73 @@ inline std::string postShader(int op, ShaderTarget t) {
                          ? "#version 330 core\nuniform sampler2D u_a;\nuniform sampler2D u_b;\nuniform vec4 u_p0;\nuniform vec4 u_p1;\nout vec4 fragColor;\n"
                          : "#version 450\nlayout(set = 0, binding = 0) uniform sampler2D u_a;\nlayout(set = 0, binding = 1) uniform sampler2D u_b;\n"
                            "layout(push_constant) uniform Post { vec4 u_p0; vec4 u_p1; };\nlayout(location = 0) out vec4 fragColor;\n";
-  if (op == 0)  // resolve: exposure, tone mapping (filmic ACES fit / clip), gamma
+  if (op == 0)  // resolve: exposure, tone mapping (filmic ACES fit / clip), gamma (u_p0.z: already display colours)
     return head + R"(
 vec3 aces(vec3 x) { return clamp(x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 void main() {
+  if (u_p0.z > 0.5) { fragColor = vec4(clamp(texelFetch(u_a, ivec2(gl_FragCoord.xy), 0).rgb, 0.0, 1.0), 1.0); return; }
   vec3 c = max(texelFetch(u_a, ivec2(gl_FragCoord.xy), 0).rgb, vec3(0.0)) * u_p0.x;
   c = u_p0.y > 0.5 ? aces(c) : min(c, vec3(1.0));
   fragColor = vec4(pow(c, vec3(0.4545)), 1.0);
+}
+)";
+  if (op == 2)  // bilateral: radius u_p0.x pixels, stopped by colour (u_p0.y), surface colour and depth
+    return head + R"(
+vec3 soft(vec3 c) { return c / (1.0 + c); }
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy), sz = textureSize(u_a, 0);
+  vec3 c0 = texelFetch(u_a, c, 0).rgb;
+  if (any(isnan(c0)) || any(isinf(c0))) c0 = vec3(0.0);
+  vec3 s0 = soft(max(c0, vec3(0.0)));
+  vec4 g0 = texelFetch(u_b, c, 0);
+  float rad = u_p0.x, sc = max(u_p0.y, 1e-4), sa = u_p0.z, sd = u_p0.w;
+  int R = int(ceil(rad * 1.5));
+  vec4 sum = vec4(0.0);
+  for (int y = -R; y <= R; y++)
+    for (int x = -R; x <= R; x++) {
+      ivec2 q = clamp(c + ivec2(x, y), ivec2(0), sz - 1);
+      vec4 ci = vec4(texelFetch(u_a, q, 0).rgb, 1.0);
+      if (any(isnan(ci)) || any(isinf(ci))) continue;
+      vec4 gi = texelFetch(u_b, q, 0);
+      vec3 dc = soft(max(ci.rgb, vec3(0.0))) - s0, da = gi.rgb - g0.rgb;
+      float dd = abs(gi.a - g0.a) / max(min(gi.a, g0.a), 1e-3);
+      sum += ci * exp(-float(x * x + y * y) / (2.0 * rad * rad) - dot(dc, dc) / (sc * sc) - dot(da, da) / (sa * sa) - dd / sd);
+    }
+  fragColor = vec4(sum.rgb / max(sum.a, 1e-8), 1.0);
+}
+)";
+  if (op == 3)  // median of the 3x3 neighbourhood by brightness, among pixels of the same surface
+    return head + R"(
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy), sz = textureSize(u_a, 0);
+  vec4 g0 = texelFetch(u_b, c, 0);
+  vec3 col[9];
+  float lum[9];
+  bool ok[9];
+  int n = 0;
+  for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++) {
+      ivec2 q = clamp(c + ivec2(x, y), ivec2(0), sz - 1);
+      vec3 ci = texelFetch(u_a, q, 0).rgb;
+      if (any(isnan(ci)) || any(isinf(ci))) ci = vec3(0.0);
+      vec4 gi = texelFetch(u_b, q, 0);
+      float dd = abs(gi.a - g0.a) / max(min(gi.a, g0.a), 1e-3);
+      int k = (y + 1) * 3 + (x + 1);
+      col[k] = ci;
+      lum[k] = dot(ci, vec3(0.299, 0.587, 0.114));
+      ok[k] = dd < u_p0.w * 4.0 && length(gi.rgb - g0.rgb) < u_p0.z * 2.0;  // (the same surface)
+      if (ok[k]) n++;
+    }
+  // the median: the pixel with as many darker as brighter neighbours (ties by index)
+  vec3 res = col[4];
+  for (int i = 0; i < 9; i++) {
+    if (!ok[i]) continue;
+    int below = 0;
+    for (int j = 0; j < 9; j++)
+      if (ok[j] && (lum[j] < lum[i] || (lum[j] == lum[i] && j < i))) below++;
+    if (below == (n - 1) / 2) { res = col[i]; break; }
+  }
+  fragColor = vec4(res, 1.0);
 }
 )";
   // a-trous wavelet filter (5x5 B3 spline at step u_p0.x), stopped at edges: colour differences

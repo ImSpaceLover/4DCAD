@@ -100,20 +100,22 @@ void App::toast(const std::string& msg, bool error) {
 // ============================================================ scene lifecycle
 // undo snapshot: world id, active camera, lights, animation, scene tree (one line each)
 std::string App::snapshot() {
-  return std::to_string(space.radius) + "\n" + world + "\n" + activeCamera + "\n" + lightsToJson(lights) + "\n" + animationToJson(anim) + "\n" + nodeToJson(root);
+  return std::to_string(space.radius) + "\n" + world + "\n" + activeCamera + "\n" + lightsToJson(lights) + "\n" + animationToJson(anim) + "\n" +
+         lookToJson(lookOf(quality)) + "\n" + nodeToJson(root);
 }
 void App::restore(const std::string& snap) {
   auto nl0 = snap.find('\n');
   space.radius = std::max(0.05, std::atof(snap.substr(0, nl0).c_str()));
   std::string s = snap.substr(nl0 + 1);
-  auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1), nl3 = s.find('\n', nl2 + 1), nl4 = s.find('\n', nl3 + 1);
+  auto nl = s.find('\n'), nl2 = s.find('\n', nl + 1), nl3 = s.find('\n', nl2 + 1), nl4 = s.find('\n', nl3 + 1), nl5 = s.find('\n', nl4 + 1);
   world = s.substr(0, nl);
   activeCamera = s.substr(nl + 1, nl2 - nl - 1);
   lights = lightsFromJson(s.substr(nl2 + 1, nl3 - nl2 - 1));
   double frame = anim.frame;
   anim = animationFromJson(s.substr(nl3 + 1, nl4 - nl3 - 1));
   anim.frame = frame;  // undo does not move the time
-  root = nodeFromJson(s.substr(nl4 + 1));
+  applyLook(quality, lookFromJson(s.substr(nl4 + 1, nl5 - nl4 - 1)));  // (the scene's look)
+  root = nodeFromJson(s.substr(nl5 + 1));
   recordLinks(root, linkDefs_);
   if (!anim.empty()) applyAnim();
   evalRoot_ = root;
@@ -123,6 +125,7 @@ void App::restore(const std::string& snap) {
 
 void App::loadScene(SceneFile f) {
   root = std::move(f.root);
+  applyLook(quality, f.look ? *f.look : SceneLook{});  // the scene's sun, ambient light, fog and sky
   space = f.space;
   if (space.curved()) {
     f.world.clear();
@@ -362,7 +365,8 @@ std::string App::serialize() {
   CameraState cs = editCam.save();
   CurvedCamState cc = curvCam.save();
   std::string aj = anim.empty() ? std::string() : animationToJson(anim);
-  return sceneToJson(root, reg, world, &cs, nullptr, &lights, activeCamera, &aj, &space, &cc);
+  SceneLook look = lookOf(quality);
+  return sceneToJson(root, reg, world, &cs, nullptr, &lights, activeCamera, &aj, &space, &cc, &look);
 }
 
 bool App::saveSceneFile(const std::string& path, std::string& err) {

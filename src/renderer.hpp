@@ -86,17 +86,18 @@ struct FrameParams {
 };
 
 /** Full-screen post passes (path tracing). */
-enum PostOp { POST_RESOLVE = 0, POST_ATROUS = 1, POST_COUNT };
-/** How a path-traced image is shown. */
+enum PostOp { POST_RESOLVE = 0, POST_ATROUS = 1, POST_BILATERAL = 2, POST_MEDIAN = 3, POST_COUNT };
+/** How a refined image is shown. */
 struct PostSettings {
   float exposure = 0;  // stops
   int tonemap = 1;     // 0 = clip, 1 = filmic (ACES)
-  bool denoise = true;
+  int denoise = 1;     // DENOISE_NAMES (0 = off)
   float strength = 1;
   int samples = 1;     // samples averaged so far (the denoiser does less as they add up)
+  bool encoded = false;  // simple lighting: already display colours (no exposure / tone mapping / gamma)
 };
-inline PostSettings postSettings(const QualitySettings& q, int samples) {
-  return {q.exposure, q.tonemap, q.denoise, q.denoiseStrength, samples};
+inline PostSettings postSettings(const QualitySettings& q, int samples, bool encoded = false) {
+  return {q.exposure, q.tonemap, q.denoise, q.denoiseStrength, samples, encoded};
 }
 
 /** The frame uniform block (std140; mirrors FRAME_BLOCK in shaders.hpp). */

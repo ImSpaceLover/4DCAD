@@ -288,10 +288,17 @@ Settings > Rendering > **Lighting model** (saved, part of render presets):
     "Physical" keeps the true 4D falloff.
   * **Display:** samples are averaged as linear light, then **Exposure** (stops), **Tone mapping**
     (filmic ACES: bright light rolls off instead of burning out; or clip) and gamma are applied.
-  * **Denoise** (with a strength): an edge-aware à-trous filter (5 passes) guided by a cheap extra
-    pass with the first surface's colour and depth, so edges and textures stay sharp. It does less
-    as samples add up. Light that reaches a path after a diffuse bounce is capped (fireflies from
-    caustics), a common, slight bias.
+  * **Denoiser** (Settings > Rendering > Denoise, with a strength), for path tracing **and** simple
+    lighting's refined images (soft shadows, sampled AO, blurry reflections, anti-aliasing): all are
+    guided by a cheap extra pass with the first surface's colour and depth, so edges and textures stay
+    sharp, and do less as samples add up.
+    * **Edge-aware (wavelet)**: an à-trous filter (5 passes), strong and smooth.
+    * **Bilateral**: one wide pass that keeps finer detail.
+    * **Median (fireflies)**: the 3×3 median (by brightness, within a surface) removes single bright
+      or dark pixels.
+    * **Median + edge-aware**: both. **Off**: the raw average.
+    Light that reaches a path after a diffuse bounce is capped (fireflies from caustics), a common,
+    slight bias.
 * **Sky intensity** (both models): brightness of the sky. In the Geodesic view the "sky" is the
   colour of the world surface that far rays reach, so it also darkens the fog there. With simple
   lighting, the rim light on grazing surfaces now follows the ambient setting, so sun 0, ambient 0
@@ -328,14 +335,14 @@ Settings > Rendering > **Lighting model** (saved, part of render presets):
 
 * Nothing is written to your scene file unless you save (**Ctrl+S**; **Ctrl+Shift+S** = save as). The toolbar shows "unsaved" when there are changes. Quitting, New, Open and loading an example ask whether to save first.
 * On startup the last saved / opened file is reopened (falling back to the example scene).
-* **Settings** (toolbar or View menu) has four tabs, saved per user:
+* **Settings** (toolbar or View menu) has five tabs. **Scene** is saved with the scene; the others are saved per user:
   * **Edit mode**: field of view, local / global axes, snapping steps. Full 4D: orbit / pan / zoom / turn-into-W speeds, W slider, ground grid. Geodesic: fly speed, look speed, outside thumbnail and its size.
   * **Explore mode**: field of view, look speed, own body and its radius. Full 4D: move speed, turn-into-W speed, collisions. Geodesic: move speed, collisions.
+  * **Scene** (the scene's look, saved in the scene file and undoable): the **sun** (intensity, direction, height, component along W, size), **ambient light**, **sky** colours (top / bottom) and intensity, and **fog**. "Default look" resets them. Opening another scene brings its own look; older files get the defaults. Render presets never change it.
   * **Rendering**:
     * Performance: resolution, and resolution while moving.
     * Ray marching: max steps, **max ray distance** (Full 4D and Geodesic, after which the sky colour is shown), hit precision, step scale (below 1 for inexact custom SDFs).
-    * Lighting: soft shadows (sharpness, distance), ambient occlusion (strength), ambient light, light direction including its W component.
-    * Sky and fog: sky colours and fog amount.
+    * Lighting: lighting model, soft shadows (sharpness, distance), ambient occlusion (strength), point light shadows, bounces; the denoiser.
     * Geodesic rays: max step size and projections.
     * Presets: load / save / rename / delete / import / export render presets (see Rendering images and videos).
   * **Keys**: every shortcut and movement key can be rebound (two keys per action). Click a key and press the new one; right-click clears it. A red "!" marks keys that clash with another action in the same mode. "Reset all to defaults" restores the keys listed in this README.

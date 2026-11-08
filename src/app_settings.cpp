@@ -54,7 +54,10 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
   getKey(r, "frameLimit", q.frameLimit);
   getKey(r, "stochastic", q.stochastic); getKey(r, "viewportSamples", q.viewportSamples); getKey(r, "sunSize", q.sunSize); getKey(r, "lightRadius", q.lightRadius);
   getKey(r, "lighting", q.lighting); getKey(r, "skyIntensity", q.skyIntensity);
-  getKey(r, "exposure", q.exposure); getKey(r, "tonemap", q.tonemap); getKey(r, "denoise", q.denoise);
+  getKey(r, "exposure", q.exposure); getKey(r, "tonemap", q.tonemap); if (r.contains("denoise")) {  // (older settings: on / off)
+    if (r["denoise"].is_boolean()) q.denoise = r["denoise"].get<bool>() ? 1 : 0;
+    else if (r["denoise"].is_number()) q.denoise = std::clamp(r["denoise"].get<int>(), 0, 4);
+  }
   getKey(r, "denoiseStrength", q.denoiseStrength); getKey(r, "light4D", q.light4D);
   q.tonemap = std::clamp(q.tonemap, 0, 1);
   q.light4D = std::clamp(q.light4D, 0, 1);
@@ -170,7 +173,11 @@ bool App::applyPreset(const std::string& json, std::string& err) {
   try {
     auto j = nlohmann::json::parse(json);
     if (!j.is_object() || (!j.contains("quality") && !j.contains("output"))) { err = "Not a render preset"; return false; }
-    if (j.contains("quality")) qualityFromJson(j["quality"], quality);
+    if (j.contains("quality")) {
+      SceneLook look = lookOf(quality);  // (a preset never changes the scene's look; older presets had it)
+      qualityFromJson(j["quality"], quality);
+      applyLook(quality, look);
+    }
     if (j.contains("output")) outputFromJson(j["output"], renderSet);
   } catch (const std::exception& e) { err = std::string("Bad preset: ") + e.what(); return false; }
   saveSettings();
@@ -252,6 +259,8 @@ void App::saveSettings() {
   j["lastFile"] = lastFile;
   j["activePreset"] = activePreset;
   j["render"] = qualityToJson(quality);
+  // (the sun, ambient light, fog and sky belong to the scene: saved with it, not here)
+  for (const char* k : {"lightYaw", "lightPitch", "lightW", "skyTop", "skyBottom", "fog", "ambient", "sunIntensity", "sunSize", "skyIntensity"}) j["render"].erase(k);
   j["render"]["backend"] = BACKEND_NAMES[(int)backendPref];
   const auto& e = editSet;
   j["edit"] = {{"fov", e.fov}, {"orbitSpeed", e.orbitSpeed}, {"panSpeed", e.panSpeed}, {"zoomSpeed", e.zoomSpeed}, {"rot4Speed", e.rot4Speed},

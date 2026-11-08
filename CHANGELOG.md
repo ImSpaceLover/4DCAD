@@ -4,6 +4,17 @@ Versions follow `project(4DCAD VERSION ...)` in CMakeLists.txt; `4DCAD --version
 running one, and scene files record the version that saved them (`appVersion`). Pushing a tag
 `v<version>` builds the release (see README > Releases).
 
+## 1.1.0
+
+- **The look belongs to the scene:** the sun (intensity, direction, size), ambient light, sky colours
+  and intensity, and fog moved from the render settings to a new **Settings > Scene** tab. They are
+  saved in the scene file (`environment`), undoable, and opening another scene brings its own;
+  render presets no longer change them. Older scenes get the defaults.
+- **Denoiser types:** Edge-aware (wavelet, as before), Bilateral, Median (fireflies) and Median +
+  edge-aware, or off.
+- **Denoising in simple lighting:** the refined image of simple lighting (soft shadows, sampled AO,
+  blurry reflections) is denoised too, in the viewport and in image / video renders.
+
 ## 1.0.3
 
 - **Fix: textures on planes, rods and other infinite objects in hyperbolic / spherical scenes.**

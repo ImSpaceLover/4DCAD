@@ -747,7 +747,7 @@ std::vector<PointLight> lightsFromJson(const std::string& text) {
 std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::string& world, const CameraState* cam,
                         const std::vector<CameraBookmark>* bookmarks, const std::vector<PointLight>* lights,
                         const std::string& activeCamera, const std::string* animationJson, const Space* space,
-                        const CurvedCamState* curvedCam) {
+                        const CurvedCamState* curvedCam, const SceneLook* look) {
   json j = {{"format", "4dcad-scene"}, {"version", 3}, {"appVersion", FD_VERSION}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   if (json md = usedModifierDefs(root); !md.empty()) j["modifierDefs"] = md;  // (custom definitions the scene uses)
   if (json td = usedTextureDefs(root); !td.empty()) j["textureDefs"] = td;
@@ -761,7 +761,48 @@ std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::s
   if (lights && !lights->empty()) j["lights"] = lightsJ(*lights);
   if (space && space->curved()) j["space"] = {{"type", SPACE_IDS[(int)space->kind]}, {"radius", space->radius}};
   if (space && space->curved() && curvedCam) j["curvedCamera"] = {{"iso", std::vector<double>(curvedCam->iso.begin(), curvedCam->iso.end())}, {"distance", curvedCam->distance}};
+  if (look) j["environment"] = json::parse(lookToJson(*look));
   return j.dump(2);
+}
+
+// ============================================================ the scene's look
+SceneLook lookOf(const QualitySettings& q) {
+  SceneLook l;
+  l.lightYaw = q.lightYaw; l.lightPitch = q.lightPitch; l.lightW = q.lightW;
+  l.sunIntensity = q.sunIntensity; l.sunSize = q.sunSize;
+  l.ambient = q.ambient; l.fog = q.fog;
+  l.skyTop = q.skyTop; l.skyBottom = q.skyBottom; l.skyIntensity = q.skyIntensity;
+  return l;
+}
+void applyLook(QualitySettings& q, const SceneLook& l) {
+  q.lightYaw = l.lightYaw; q.lightPitch = l.lightPitch; q.lightW = l.lightW;
+  q.sunIntensity = l.sunIntensity; q.sunSize = l.sunSize;
+  q.ambient = l.ambient; q.fog = l.fog;
+  q.skyTop = l.skyTop; q.skyBottom = l.skyBottom; q.skyIntensity = l.skyIntensity;
+}
+std::string lookToJson(const SceneLook& l) {
+  json j = {{"sunDirection", {l.lightYaw, l.lightPitch, l.lightW}}, {"sunIntensity", l.sunIntensity}, {"sunSize", l.sunSize},
+            {"ambient", l.ambient}, {"fog", l.fog}, {"skyTop", l.skyTop}, {"skyBottom", l.skyBottom}, {"skyIntensity", l.skyIntensity}};
+  return j.dump();
+}
+SceneLook lookFromJson(const std::string& text) {
+  SceneLook l;
+  try {
+    json j = json::parse(text);
+    if (j.contains("sunDirection") && j["sunDirection"].is_array() && j["sunDirection"].size() == 3) {
+      l.lightYaw = j["sunDirection"][0].get<float>(); l.lightPitch = j["sunDirection"][1].get<float>(); l.lightW = j["sunDirection"][2].get<float>();
+    }
+    l.sunIntensity = std::clamp(j.value("sunIntensity", l.sunIntensity), 0.f, 100.f);
+    l.sunSize = std::clamp(j.value("sunSize", l.sunSize), 0.f, 1.f);
+    l.ambient = std::clamp(j.value("ambient", l.ambient), 0.f, 10.f);
+    l.fog = std::clamp(j.value("fog", l.fog), 0.f, 100.f);
+    for (int k = 0; k < 3; k++) {
+      if (j.contains("skyTop") && j["skyTop"].is_array() && j["skyTop"].size() == 3) l.skyTop[k] = j["skyTop"][k].get<float>();
+      if (j.contains("skyBottom") && j["skyBottom"].is_array() && j["skyBottom"].size() == 3) l.skyBottom[k] = j["skyBottom"][k].get<float>();
+    }
+    l.skyIntensity = std::clamp(j.value("skyIntensity", l.skyIntensity), 0.f, 100.f);
+  } catch (...) {}
+  return l;
 }
 
 // ============================================================ linked duplicates
@@ -872,6 +913,7 @@ SceneFile sceneFromJson(const std::string& text) {
   }
   if (j.contains("bookmarks")) f.bookmarks = jMarks(j["bookmarks"]);
   f.activeCamera = j.value("activeCamera", std::string());
+  if (j.contains("environment") && j["environment"].is_object()) f.look = lookFromJson(j["environment"].dump());
   if (j.contains("animation") && j["animation"].is_object()) f.animation = j["animation"].dump();
   if (j.contains("lights")) f.lights = jLights(j["lights"]);
   if (j.contains("space") && j["space"].is_object()) {

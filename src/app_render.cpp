@@ -341,13 +341,16 @@ void App::renderFrame() {
     if (viewThread) postView(*viewThread, (int)vpW, (int)vpH, highlightSet(), fp, refine ? q.viewportSamples : 1, refine);  // (refined there)
     else {
       Node& vr = isolate.empty() ? root : viewRoot_;
-      if (fp.pathTrace && q.denoise) {  // the denoiser's guide (first hit's colour and depth)
+      // refined images (path tracing, and simple lighting's samples) go through the denoiser
+      bool dn = q.denoise > 0 && (fp.pathTrace || refine), acc = fp.pathTrace || dn;
+      if (dn) {  // the denoiser's guide (first hit's colour and depth)
         FrameParams g = fp;
         g.ptGuide = true;
+        g.pathTrace = true;  // (the guide pass is part of the path tracer's program)
         renderer->render(mainGuideRT, (int)vpW, (int)vpH, vr, reg, world, highlightSet(), g);
       }
-      renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, vr, reg, world, highlightSet(), fp);
-      if (fp.pathTrace && !renderer->compiling()) renderer->present(mainAccRT, q.denoise ? &mainGuideRT : nullptr, mainTmpRT, mainRT, postSettings(q, 1));
+      renderer->render(acc ? mainAccRT : mainRT, (int)vpW, (int)vpH, vr, reg, world, highlightSet(), fp);
+      if (acc && !renderer->compiling()) renderer->present(mainAccRT, dn ? &mainGuideRT : nullptr, mainTmpRT, mainRT, postSettings(q, 1, !fp.pathTrace));
       accumSamples = refine ? 1 : 0;
       if (renderer->compiling()) { lastKey_.clear(); accumSamples = 0; viewportCompiling = true; }  // not drawn yet: again next frame
       else viewportCompiling = false;
@@ -357,8 +360,9 @@ void App::renderFrame() {
     fp.stochastic = true;
     fp.sample = accumSamples;
     fp.blend = 1.0f / (accumSamples + 1);
-    renderer->render(fp.pathTrace ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
-    if (fp.pathTrace) renderer->present(mainAccRT, q.denoise ? &mainGuideRT : nullptr, mainTmpRT, mainRT, postSettings(q, accumSamples + 1));
+    bool dn = q.denoise > 0, acc = fp.pathTrace || dn;
+    renderer->render(acc ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+    if (acc) renderer->present(mainAccRT, dn ? &mainGuideRT : nullptr, mainTmpRT, mainRT, postSettings(q, accumSamples + 1, !fp.pathTrace));
     accumSamples++;
   }
   if (viewThread) {

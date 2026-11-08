@@ -86,6 +86,8 @@ enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, 
 enum TexChannel { CH_COLOR = 0, CH_ROUGHNESS, CH_METALLIC, CH_SPECULAR, CH_EMISSION, CH_TRANSPARENCY, CH_BUMP, CH_COUNT };
 inline const char* CHANNEL_NAMES[CH_COUNT] = {"Colour", "Roughness", "Metallic", "Specular", "Emission", "Transparency", "Bump"};
 inline const char* CHANNEL_IDS[CH_COUNT] = {"color", "roughness", "metallic", "specular", "emission", "transparency", "bump"};
+// denoisers of refined images (path tracing and simple lighting), guided by the surfaces' colour / depth
+inline const char* DENOISE_NAMES[5] = {"Off", "Edge-aware (wavelet)", "Bilateral", "Median (fireflies)", "Median + edge-aware"};
 // debug views of the viewport: one material value at each point (shaders.hpp debugView)
 inline const char* VIEW_NAMES[10] = {"Lit", "Colour", "Roughness", "Metallic", "Specular", "Emission", "Transparency", "Bump relief", "Normals", "Colour texture mask"};
 enum TexSpace { TS_OBJECT = 0, TS_WORLD, TS_PARENT, TS_COUNT };
@@ -266,7 +268,7 @@ struct QualitySettings {
   // path traced images: display (applied after averaging the samples)
   float exposure = 0.0f;          // stops (x 2^exposure)
   int tonemap = 1;                // 0 = clip, 1 = filmic (ACES): bright light rolls off instead of burning out
-  bool denoise = true;            // edge-aware filter guided by the surfaces' colour and depth
+  int denoise = 1;                // DENOISE_NAMES: 0 off, 1 edge-aware, 2 bilateral, 3 median, 4 median + edge-aware
   float denoiseStrength = 1.0f;
   // Full 4D: light from a glowing object falls off with distance^3 (physical, 4D) or like in 3D
   // (distance^2: brightness behaves as you would expect from the real world)
@@ -378,6 +380,20 @@ struct CurvedCamState {
   double distance = 8;
 };
 
+// The scene's look: sun, ambient light, fog and sky. Saved with the scene (Settings > Scene) and
+// undoable; while editing, the values live in QualitySettings (what the renderer reads).
+struct SceneLook {
+  float lightYaw = 2.18f, lightPitch = 0.93f, lightW = 0.25f;  // sun direction
+  float sunIntensity = 1.0f, sunSize = 0.04f;
+  float ambient = 0.18f, fog = 1.0f;
+  std::array<float, 3> skyTop{0.32f, 0.38f, 0.5f}, skyBottom{0.16f, 0.17f, 0.2f};
+  float skyIntensity = 1.0f;
+};
+SceneLook lookOf(const QualitySettings& q);
+void applyLook(QualitySettings& q, const SceneLook& l);
+std::string lookToJson(const SceneLook& l);
+SceneLook lookFromJson(const std::string& text);  // (defaults for what is missing / bad data)
+
 struct SceneFile {
   Space space;                             // Flat 4D (default), Hyperbolic or Spherical 3D
   std::optional<CurvedCamState> curvedCam;
@@ -389,6 +405,7 @@ struct SceneFile {
   std::vector<PrimitiveDef> primitives;
   std::string world;  // empty = none
   std::optional<CameraState> camera;
+  std::optional<SceneLook> look;  // older files: none (the defaults)
 };
 
 struct LibraryObject {
@@ -409,7 +426,7 @@ std::vector<LibraryFolder> builtinFolders();
 std::string sceneToJson(const Node& root, const PrimitiveRegistry& reg, const std::string& world, const CameraState* cam,
                         const std::vector<CameraBookmark>* bookmarks = nullptr, const std::vector<PointLight>* lights = nullptr,
                         const std::string& activeCamera = "", const std::string* animationJson = nullptr,
-                        const Space* space = nullptr, const CurvedCamState* curvedCam = nullptr);
+                        const Space* space = nullptr, const CurvedCamState* curvedCam = nullptr, const SceneLook* look = nullptr);
 std::string lightsToJson(const std::vector<PointLight>& l);
 std::vector<PointLight> lightsFromJson(const std::string& text);
 std::string bookmarksToJson(const std::vector<CameraBookmark>& b);

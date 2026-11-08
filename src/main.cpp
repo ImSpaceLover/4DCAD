@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
   QualitySettings savedQuality = app.quality;
   bool qualityOverride = lightOverride >= 0 || skyOverride >= 0 || sunOverride >= 0 || ambientOverride >= 0 || fogOverride >= 0 || !ptOverrides.empty();
   for (auto& [k, v] : ptOverrides) {
-    if (k == "--denoise") app.quality.denoise = v != 0;
+    if (k == "--denoise") app.quality.denoise = std::clamp((int)v, 0, 4);
     if (k == "--exposure") app.quality.exposure = (float)v;
     if (k == "--tonemap") app.quality.tonemap = (int)v;
     if (k == "--light4d") app.quality.light4D = (int)v;

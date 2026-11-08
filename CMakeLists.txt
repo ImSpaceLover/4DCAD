@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
 endif()
-project(4DCAD VERSION 1.0.3 LANGUAGES C CXX)
+project(4DCAD VERSION 1.1.0 LANGUAGES C CXX)
 
 # version: shown in the title bar, Help and --version, saved in scene files (see CHANGELOG.md)
 set(FD_VERSION_SHORT "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")

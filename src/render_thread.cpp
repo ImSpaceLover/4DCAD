@@ -102,10 +102,12 @@ void RenderThread::loop() {
         cv_.wait_for(lk, used, [&] { return stop_ || next_.has_value(); });  // (a new request ends the pause)
       } else r->flush();  // each tile goes to the GPU on its own
     };
-    bool denoise = fp.pathTrace && cur.quality.denoise;
+    // refined images (path tracing and simple lighting's samples) go through the denoiser
+    bool denoise = (fp.pathTrace || fp.stochastic) && cur.quality.denoise > 0;
     if (denoise && sample == 0) {  // the denoiser's guide (first hit's colour and depth): one cheap pass
       FrameParams g = fp;
       g.ptGuide = true;
+      g.pathTrace = true;  // (the guide pass is part of the path tracer's program)
       g.blend = 1;
       r->render(guide, cur.w, cur.h, root, *cur.reg, cur.world, cur.highlight, g);
     }
@@ -135,8 +137,8 @@ void RenderThread::loop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (s < 0) break;
-    if (cur.fp.pathTrace)  // linear average -> (denoised,) tone mapped, gamma-encoded
-      r->present(acc, denoise ? &guide : nullptr, tmp, disp[s], postSettings(cur.quality, sample + 1));
+    if (cur.fp.pathTrace || denoise)  // linear average -> (denoised,) tone mapped, gamma-encoded (simple lighting: as it is)
+      r->present(acc, denoise ? &guide : nullptr, tmp, disp[s], postSettings(cur.quality, sample + 1, !cur.fp.pathTrace));
     else r->copyTarget(acc, disp[s]);
     r->flushAndWait();  // finished before the UI may sample it
     uint64_t tex = r->texture(disp[s]);

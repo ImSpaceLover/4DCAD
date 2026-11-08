@@ -236,20 +236,38 @@ Renderer::Program* Renderer::get(Node& root, const PrimitiveRegistry& reg, const
 
 void Renderer::present(const RenderTarget& acc, const RenderTarget* guide, RenderTarget* tmp, RenderTarget& dst, const PostSettings& s) {
   const RenderTarget* cur = &acc;
-  if (s.denoise && guide && guide->id >= 0 && s.strength > 0) {
-    // edge-aware a-trous wavelet filter: 5 passes with growing steps (1 .. 16 pixels); the colour
-    // tolerance shrinks as samples add up (less noise to remove) and from pass to pass
+  int i = 0;
+  if (s.denoise > 0 && guide && guide->id >= 0 && s.strength > 0) {
+    // the colour tolerance shrinks as samples add up (less noise to remove)
     float sc = 0.9f * s.strength / std::sqrt((float)std::max(1, s.samples));
-    int i = 0;
-    for (int step = 1; step <= 16; step *= 2) {
-      float p[8] = {(float)step, sc, 0.12f, 0.04f, 0, 0, 0, 0};
-      post(POST_ATROUS, *cur, guide, tmp[i], p);
+    if (s.denoise == 3 || s.denoise == 4) {
+      // median of each 3x3 neighbourhood (by brightness, within the same surface): removes single
+      // bright / dark pixels (fireflies) and keeps edges
+      float p[8] = {1, 0, 0.12f, 0.04f, 0, 0, 0, 0};
+      post(POST_MEDIAN, *cur, guide, tmp[i], p);
       cur = &tmp[i];
       i ^= 1;
-      sc *= 0.7f;
+    }
+    if (s.denoise == 1 || s.denoise == 4) {
+      // edge-aware a-trous wavelet filter: 5 passes with growing steps (1 .. 16 pixels)
+      for (int step = 1; step <= 16; step *= 2) {
+        float p[8] = {(float)step, sc, 0.12f, 0.04f, 0, 0, 0, 0};
+        post(POST_ATROUS, *cur, guide, tmp[i], p);
+        cur = &tmp[i];
+        i ^= 1;
+        sc *= 0.7f;
+      }
+    }
+    if (s.denoise == 2) {
+      // bilateral: one wide pass (radius 2.5 x strength pixels), stopped by colour, surface and depth
+      // differences: smooth noise inside surfaces, less blur than the wavelet filter at fine detail
+      float p[8] = {std::clamp(2.5f * s.strength, 1.f, 6.f), sc * 1.3f, 0.12f, 0.04f, 0, 0, 0, 0};
+      post(POST_BILATERAL, *cur, guide, tmp[i], p);
+      cur = &tmp[i];
+      i ^= 1;
     }
   }
-  float p[8] = {std::exp2(s.exposure), (float)s.tonemap, 0, 0, 0, 0, 0, 0};
+  float p[8] = {std::exp2(s.exposure), (float)s.tonemap, s.encoded ? 1.f : 0.f, 0, 0, 0, 0, 0};
   post(POST_RESOLVE, *cur, nullptr, dst, p);
 }
 

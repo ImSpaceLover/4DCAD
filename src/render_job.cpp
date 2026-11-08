@@ -226,16 +226,18 @@ void App::renderStep(double budget) {
     fp.tile[0] = (j.tile % tx) * TILE;
     fp.tile[1] = (j.tile / tx) * TILE;
     fp.tile[2] = fp.tile[3] = TILE;
-    bool denoise = fp.pathTrace && j.quality.denoise;
+    // refined images (path tracing, and simple lighting with several samples) go through the denoiser
+    bool denoise = (fp.pathTrace || j.samples > 1) && j.quality.denoise > 0, acc = fp.pathTrace || denoise;
     if (denoise && j.sample == 0 && j.tile == 0) {  // the denoiser's guide for this frame (one cheap pass)
       FrameParams g = fp;
       g.ptGuide = true;
+      g.pathTrace = true;  // (the guide pass is part of the path tracer's program)
       g.blend = 1;
       g.tile[2] = 0;
       renderer->render(j.guide, j.w, j.h, j.frameRoot, reg, j.world, {}, g);
       if (renderer->compiling()) break;
     }
-    bool ok = renderer->render(fp.pathTrace ? j.acc : j.rt, j.w, j.h, j.frameRoot, reg, j.world, {}, fp);
+    bool ok = renderer->render(acc ? j.acc : j.rt, j.w, j.h, j.frameRoot, reg, j.world, {}, fp);
     fp.tile[2] = 0;
     if (renderer->compiling()) break;  // this frame's program is still being compiled: try again next UI frame
     if (!ok) {
@@ -249,8 +251,8 @@ void App::renderStep(double budget) {
     renderer->finish();
     if (++j.tile >= tx * ty) {
       j.tile = 0;
-      if (fp.pathTrace)  // the average so far, (denoised,) tone mapped, gamma-encoded (preview / saving)
-        renderer->present(j.acc, denoise ? &j.guide : nullptr, j.tmp, j.rt, postSettings(j.quality, j.sample + 1));
+      if (acc)  // the average so far, (denoised,) tone mapped, gamma-encoded (preview / saving; simple lighting: as it is)
+        renderer->present(j.acc, denoise ? &j.guide : nullptr, j.tmp, j.rt, postSettings(j.quality, j.sample + 1, !fp.pathTrace));
       if (++j.sample >= j.samples) finishJobFrame();
     }
     if (wallClock() - t0 > budget) break;

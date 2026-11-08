@@ -1096,6 +1096,31 @@ int main() {
     saveUserDefs();
   }
 
+  {  // the scene's look (sun, ambient, fog, sky): saved with the scene, undoable, kept by presets
+    App t;
+    t.loadScene(playgroundScene());
+    CHECK(t.quality.ambient == SceneLook{}.ambient, "a scene without a look: the defaults");
+    t.quality.ambient = 0.6f; t.quality.fog = 0.25f; t.quality.sunIntensity = 2.5f; t.quality.skyTop = {0.9f, 0.1f, 0.2f};
+    t.commit();
+    CHECK(t.dirty(), "changing the look marks the scene unsaved");
+    std::string saved = t.serialize();
+    t.undo();
+    CHECK(t.quality.ambient == SceneLook{}.ambient && t.quality.fog == SceneLook{}.fog, "undo restores the look");
+    t.redo();
+    CHECK(t.quality.ambient == 0.6f, "redo too");
+    t.loadScene(playgroundScene());
+    CHECK(t.quality.fog == SceneLook{}.fog, "another scene: its own look");
+    t.loadScene(sceneFromJson(saved));
+    CHECK(t.quality.ambient == 0.6f && t.quality.fog == 0.25f && t.quality.sunIntensity == 2.5f && t.quality.skyTop[0] == 0.9f,
+          "the look is saved in the scene file");
+    std::string err;
+    CHECK(t.applyPreset("{\"name\":\"x\",\"quality\":{\"ambient\":0.05,\"fog\":3.0,\"maxSteps\":200}}", err) && t.quality.ambient == 0.6f &&
+          t.quality.fog == 0.25f && t.quality.maxSteps == 200, "a preset (even an old one with these keys) keeps the scene's look");
+    CHECK(t.applyPreset("{\"quality\":{\"denoise\":false}}", err) && t.quality.denoise == 0, "old on / off denoise setting: off");
+    CHECK(t.applyPreset("{\"quality\":{\"denoise\":true}}", err) && t.quality.denoise == 1, "... on = edge-aware");
+    CHECK(t.applyPreset("{\"quality\":{\"denoise\":3}}", err) && t.quality.denoise == 3, "denoiser type");
+  }
+
   std::printf("%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }
