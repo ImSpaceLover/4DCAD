@@ -20,6 +20,14 @@ void UI::keyable(const std::string& target, const std::vector<std::string>& path
     if (keyed) dl->AddConvexPolyFilled(q, 4, IM_COL32(255, 200, 60, 255));
     else dl->AddPolyline(q, 4, IM_COL32(120, 220, 120, 255), ImDrawFlags_Closed, 1.5f);
   }
+  if (app.texMode.active) {  // exposed values: a small "P" right of the value
+    std::string path = paths.size() == 3 && paths[0] == "color.r" ? std::string("color") : paths[0];
+    for (auto& e : app.texMode.settings.exposed)
+      if (e.node == target && e.path == path) {
+        ImGui::GetWindowDrawList()->AddText({mx.x + 2, mn.y}, IM_COL32(120, 200, 255, 255), "P");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Texture parameter \"%s\"", e.name.c_str());
+      }
+  }
   if (ImGui::BeginPopupContextItem(("##key" + paths[0]).c_str())) {
     if (ImGui::MenuItem(keyed ? "Replace keyframe" : "Insert keyframe", app.keys.text(Action::InsertKey).c_str())) {
       Animation& W = app.anim;
@@ -34,6 +42,25 @@ void UI::keyable(const std::string& target, const std::vector<std::string>& path
         }
       }
       app.commit();
+    }
+    // texture editing mode: values can become parameters of the texture
+    if (app.texMode.active && target != "scene" && target.rfind("light:", 0) != 0) {
+      std::string path = paths.size() == 3 && paths[0] == "color.r" ? std::string("color") : paths.size() == 1 ? paths[0] : std::string();
+      Node* n = findNode(app.root, target);
+      if (n && !path.empty() && exposablePath(*n, path)) {
+        auto& ex = app.texMode.settings.exposed;
+        auto it = std::find_if(ex.begin(), ex.end(), [&](const ExposedParam& e) { return e.node == target && e.path == path; });
+        ImGui::Separator();
+        if (it != ex.end()) { if (ImGui::MenuItem("Stop exposing")) ex.erase(it); }
+        else if (ImGui::MenuItem("Expose as texture parameter")) {
+          double v = 0;
+          getValue(*n, path == "color" ? "color.r" : path, v);
+          double span = std::max(1.0, std::abs(v)) * 2;
+          ExposedParam e{target, path, n->name + " " + (path == "color" ? std::string("colour") : path), v - span, v + span};
+          if (path == "scale" || path == "k") e.min = 0;
+          ex.push_back(e);
+        }
+      }
     }
     if (keyed && ImGui::MenuItem("Delete keyframe")) { for (auto& p : paths) deleteKey(app.anim, target, p, fr); app.commit(); }
     if (animated && ImGui::MenuItem("Clear animation")) {
@@ -211,11 +238,12 @@ void UI::textureSlot(Node& n, int ch, bool& live, bool& done) {
   ImGui::PushID(1000 + ch);
   std::string label = t.used() ? (d ? d->name : "Unknown (" + t.def + ")") : std::string("None");
   ImGui::SetNextItemWidth(150);
-  std::string comboLab = std::string(ch == CH_BUMP ? "Bump" : "Texture") + "##slot";
+  std::string comboLab = std::string(ch == CH_BUMP ? "Bump" : app.texMode.active ? "Fill" : "Texture") + "##slot";
   if (ImGui::BeginCombo(comboLab.c_str(), label.c_str())) {
     if (ImGui::Selectable("None", !t.used())) { t.def.clear(); done = true; }
     std::string cat;
     for (auto& td : defs().textures()) {
+      if (td->id.rfind("__", 0) == 0 || td->id == app.texMode.texId && app.texMode.active) continue;  // (internal / itself)
       std::string c = td->category.empty() ? "Custom" : td->category;
       if (c != cat) { ImGui::SeparatorText(c.c_str()); cat = c; }
       std::string nm = td->name + (textureKind(*td) != TEXK_MASK ? "  (colour)" : "");
@@ -370,6 +398,11 @@ void UI::propertiesPanel() {
     ImGui::End();
     return;
   }
+  if (app.texMode.active && app.texMode.view == 1) {
+    ImGui::TextWrapped("Preview of the texture: switch to Shapes (toolbar) to edit the composition.");
+    ImGui::End();
+    return;
+  }
   bool live = false, done = false;
   auto track = [&] { if (ImGui::IsItemEdited()) live = true; if (ImGui::IsItemDeactivatedAfterEdit()) done = true; };
   bool isRoot = n->id == app.root.id;
@@ -413,6 +446,11 @@ void UI::propertiesPanel() {
   ImGui::TextDisabled("%dD %s", dim, n->isCustom() ? "custom SDF" : n->isPoly() ? "polyhedron" : n->isHoneycomb() ? "honeycomb" : n->isLeaf() ? "shape (point + modifiers)" : "group");
   ImGui::SameLine();
   if (ImGui::SmallButton("View SDF code")) { showSdf_ = true; sdfNodeId_ = n->id; }
+  if (!app.texMode.active && !isRoot) {
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Save as texture")) { std::string id = n->id; ImGui::End(); app.saveAsTexture(id); return; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the texture editing mode with a copy of this object: its shapes and colours become a texture");
+  }
   if (!isRoot) {
     if (ImGui::Checkbox("Locked", &n->locked)) done = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Cannot be clicked or moved in the viewport (still editable here)");
@@ -498,6 +536,7 @@ void UI::propertiesPanel() {
     mixed([](const Node& x) { return x.thickness; });
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Extent along the unused axes%s", n->anchor ? " (here: across the world surface)" : "");
     }
+    if (!app.texMode.active) {  // (texture editing mode: objects have a colour and a fill only)
     ImGui::SeparatorText("Material");
     float em = (float)n->mat.emissive;
     if (ImGui::SliderFloat("Emissive", &em, 0, 1)) { bool was = n->mat.emissive > 0; n->mat.emissive = em; if (was != (em > 0)) done = true; }
@@ -549,6 +588,7 @@ void UI::propertiesPanel() {
     textureSlot(*n, CH_METALLIC, live, done);
     textureSlot(*n, CH_BUMP, live, done);
     mixed([](const Node& x) { return x.mat.tex[CH_BUMP]; });
+    }
     if (n->isCustom()) {
       ImGui::SeparatorText("Custom SDF (GLSL)");
       if (codeEditId_ != n->id) { codeEditId_ = n->id; codeBuf_ = n->code; }

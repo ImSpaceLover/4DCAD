@@ -333,6 +333,7 @@ M4 App::nodeWorldFrame(const std::string& id) {
 // ============================================================ modes & views
 void App::setMode(Mode m) {
   if (m == mode) return;
+  if (texMode.active && m == Mode::Explore) return;  // (texture editing mode: Edit only)
   cancelModal();
   drag_ = Drag::None;
   // one shared camera: switching modes keeps the exact position and orientation
@@ -350,6 +351,7 @@ void App::setMode(Mode m) {
 
 void App::setGeo(bool g) {
   if (g == geo) return;
+  if (g && texMode.active) return;  // (texture editing mode: Full 4D only)
   if (g && space.curved()) { toast("Curved scenes are already a 3D space (no world surface view)", true); return; }
   if (g && world.empty()) { toast("Choose a world object first (World menu or Properties > Use as world)", true); return; }
   cancelModal();

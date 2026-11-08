@@ -241,7 +241,7 @@ void App::postView(RenderThread& t, int w, int h, const std::unordered_set<std::
   r.world = world;
   r.highlight = hl;
   r.fp = fp;
-  r.quality = quality;
+  r.quality = viewQuality();
   r.w = w;
   r.h = h;
   r.samples = std::max(1, samples);
@@ -255,7 +255,7 @@ void App::renderFrame() {
   View v = currentView();
   bool interacting = drag_ != Drag::None && drag_ != Drag::Click;
   bool moving = (now - lastChange_) < 0.25 || interacting || modal != Modal::None || mode == Mode::Explore;
-  const QualitySettings& q = quality;
+  const QualitySettings& q = viewQuality();
   // the fast profile in Explore (and, if chosen, while moving in Edit mode); else the main settings
   bool fast = mode == Mode::Explore || (moving && q.fastWhileMovingInEdit);
   RenderProfile prof;
@@ -283,7 +283,7 @@ void App::renderFrame() {
   if (inCameraView()) { bool cg = false; cameraView(activeCamera, &cg); fp.geo = cg; }
   fp.grid = mode == Mode::Edit && q.grid;
   fp.fovDeg = fov();
-  fp.quality = &quality;
+  fp.quality = &q;
   fp.light = light();
   fp.skyCol = worldColor();
   // path tracing where the image is refined (the idle viewport); moving / fast views stay simple

@@ -30,6 +30,10 @@ The first numbered release. Everything below is new compared with the unversione
   contrast, invert, curve) and mapping (object / world / parent space, offset, rotation in all six
   4D planes, per-axis scale, shared mappings, fit to object). 14 built-in textures, including a
   cosine palette and a colour gradient.
+- **Texture editing mode:** "Save as texture" turns an object or group into a texture made of shapes
+  (object colours or a mask; inside / outline / distance bands / falloff coverage; tiling; fills;
+  exposed values as texture parameters), edited in a limited Full 4D editor with Shapes / Preview
+  views.
 - Vulkan and OpenGL renderers, render threads, a shader disk cache; values are shader data, so edits
   never recompile.
 - Simple lighting and path-traced PBR (GGX, emissive area lights, tone mapping, denoiser).

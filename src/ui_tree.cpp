@@ -154,6 +154,7 @@ void UI::treeNode(Node& n, int depth) {
     if (ImGui::MenuItem("Save to library", nullptr, false, !isRoot)) deferred = [this, id] {
       if (Node* m = findNode(app.root, id)) { app.lib.saveObject(makeLibraryObject(*m, app.reg, m->name)); app.toast("Saved \"" + m->name + "\" to Custom"); }
     };
+    if (!app.texMode.active && !n.isCamera() && ImGui::MenuItem("Save as texture", nullptr, false, !isRoot)) deferred = [this, id] { app.saveAsTexture(id); };
     if (n.isGroup() && ImGui::MenuItem("Ungroup", nullptr, false, !isRoot)) deferred = [this, id] { app.ungroup(id); };
     if (n.isCamera()) {
       if (ImGui::MenuItem("Look through")) deferred = [this, id] { app.lookThrough(id); };

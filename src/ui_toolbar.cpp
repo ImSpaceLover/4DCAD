@@ -7,7 +7,8 @@ namespace fd {
 void UI::menuBar() {
   if (!ImGui::BeginMainMenuBar()) return;
   auto K = [this](Action a) { return app.keys.text(a); };  // current binding, shown in the menus
-  if (ImGui::BeginMenu("File")) {
+  bool tm = app.texMode.active;  // texture editing mode: a limited editor
+  if (ImGui::BeginMenu("File", !tm)) {
     if (ImGui::MenuItem("New...", K(Action::New).c_str())) guarded([this] { openNewScene_ = true; });
     if (ImGui::MenuItem("Open...", K(Action::Open).c_str())) guarded([this] { fileAction(1); });
     if (ImGui::MenuItem("Save", K(Action::Save).c_str())) saveScene();
@@ -101,7 +102,7 @@ void UI::menuBar() {
     ImGui::TextDisabled("Drag a panel's title to move or dock it");
     ImGui::EndMenu();
   }
-  if (ImGui::BeginMenu("Render")) {
+  if (ImGui::BeginMenu("Render", !tm)) {
     std::string k1 = app.keys.text(Action::RenderImage), k2 = app.keys.text(Action::RenderAnimation);
     if (ImGui::MenuItem("Render image", k1.c_str(), false, !app.job.active)) startRender(false);
     if (ImGui::MenuItem("Render animation", k2.c_str(), false, !app.job.active)) startRender(true);
@@ -119,10 +120,42 @@ void UI::toolbar() {
   ImGui::SetNextWindowSize({ImGui::GetIO().DisplaySize.x, TOOLBAR_H});
   ImGui::Begin("##toolbar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                          ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking);
+  if (app.texMode.active) {
+    // texture editing mode: name, Shapes / Preview, Done / Cancel
+    auto& T = app.texMode;
+    ImGui::TextColored({0.55f, 0.85f, 1, 1}, "TEXTURE");
+    ImGui::SameLine();
+    char nb[128];
+    std::snprintf(nb, sizeof nb, "%s", T.name.c_str());
+    ImGui::SetNextItemWidth(160);
+    if (ImGui::InputText("##texname", nb, sizeof nb)) T.name = nb;
+    ImGui::SameLine(0, 12);
+    if (toggleButton("Shapes", T.view == 0, "The composition: each part in its flat colour on black")) app.textureModeView(0);
+    ImGui::SameLine(0, 2);
+    if (toggleButton("Preview", T.view == 1, "The texture on a preview object")) app.textureModeView(1);
+    if (T.view == 1) {
+      ImGui::SameLine(0, 8);
+      const char* shapes[3] = {"Hypersphere", "Tesseract", "Slab"};
+      ImGui::SetNextItemWidth(110);
+      if (ImGui::Combo("##pshape", &T.previewShape, shapes, 3)) { app.textureModeView(0); app.textureModeView(1); }
+      ImGui::SameLine(0, 4);
+      ImGui::SetNextItemWidth(110);
+      if (ImGui::Combo("##pch", &T.previewChannel, CHANNEL_NAMES, CH_COUNT)) { app.textureModeView(0); app.textureModeView(1); }
+    }
+    ImGui::SameLine(0, 12);
+    if (ImGui::Button("Done")) app.exitTextureMode(true);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save the texture (Library > Textures) and go back to the scene");
+    ImGui::SameLine(0, 2);
+    if (ImGui::Button("Cancel")) app.exitTextureMode(false);
+    if (!T.error.empty()) { ImGui::SameLine(); ImGui::TextColored({1, 0.55f, 0.4f, 1}, "%s", T.error.c_str()); }
+    if (T.view == 1) { ImGui::End(); return; }
+  }
+  if (!app.texMode.active) {
   if (toggleButton("Edit", app.mode == Mode::Edit, "Edit mode (Tab)")) app.setMode(Mode::Edit);
   ImGui::SameLine(0, 2);
   if (toggleButton("Explore", app.mode == Mode::Explore, "Explore mode (Tab)")) app.setMode(Mode::Explore);
   ImGui::SameLine(0, 16);
+  }
   if (app.curved()) {
     // curved 3D space: its kind and curvature radius (the space bends around unchanged coordinates)
     ImGui::TextUnformatted(SPACE_NAMES[(int)app.space.kind]);
@@ -136,7 +169,7 @@ void UI::toolbar() {
       ImGui::SetTooltip("Right-click: keyframes (the curvature can be animated).\nCurvature radius: curvature = %s1 / R^2 (%s).\nSmaller = more strongly curved; objects keep their coordinates.",
                         app.space.kind == SpaceKind::Spherical ? "+" : "-", app.space.kind == SpaceKind::Spherical ? "spherical" : "hyperbolic");
   }
-  if (!app.curved()) {
+  if (!app.curved() && !app.texMode.active) {
   if (toggleButton("Full 4D", !app.geo, "Full 4D view (V)")) app.setGeo(false);
   ImGui::SameLine(0, 2);
   if (toggleButton("Geodesic 3D", app.geo, "Geodesic 3D view (V): live on the world's surface")) app.setGeo(true);

@@ -40,6 +40,7 @@ static std::string recoveryPath() { return (std::filesystem::path(dataDir()) / "
 static std::string recoveryInfoPath() { return (std::filesystem::path(dataDir()) / "recovery.json").string(); }
 
 void App::autosaveTick(bool force) {
+  if (texMode.active) return;  // (the texture editing mode's scene is not the user's scene)
   if (!dirty()) {  // nothing unsaved (saved, undone back, or another scene loaded): no recovery copy
     if (!autosaved_.empty()) clearRecovery();
     return;
@@ -687,6 +688,8 @@ void App::placeItem(const std::string& id, std::optional<std::pair<double, doubl
     auto c = hsl(std::fmod(0.13 + 0.618 * hueCounter++, 1.0), 0.55, 0.6);
     walk(node, [&](Node& m, Node*, int) { m.color = c; });
   }
+  if (texMode.active)  // texture editing mode: objects have one colour and start pure white (masks 0..1)
+    walk(node, [&](Node& m, Node*, int) { m.color = {1, 1, 1}; for (int ch = 1; ch < CH_COUNT; ch++) m.mat.tex[ch] = TexSlot{}; });
   View v = currentView();
   V4 dir = col(v.frame, 2);
   std::optional<RayHit> hit;

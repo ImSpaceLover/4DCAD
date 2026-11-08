@@ -18,6 +18,7 @@
 #include "render_thread.hpp"
 #include "renderer.hpp"
 #include "surface.hpp"
+#include "textures.hpp"
 
 namespace fd {
 
@@ -394,6 +395,35 @@ class App {
   void setSliceW(double w) { editCam.setSliceW(w); }
   std::array<float, 3> worldColor();
   void toast(const std::string& msg, bool error = false);
+
+  // --- texture editing mode: a texture made of shapes is edited as a small flat 4D scene (the main
+  // scene is kept aside meanwhile; Done compiles it into a texture definition, Cancel drops it) ---
+  struct TexMode {
+    bool active = false;
+    std::string texId;       // the texture being edited ("" = a new one)
+    std::string name = "My texture";
+    ShapeTexture settings;   // all but the composition (the scene root while editing)
+    int view = 0;            // 0 = Shapes (flat colours on black), 1 = Preview
+    int previewShape = 0;    // 0 hypersphere, 1 tesseract, 2 slab
+    int previewChannel = CH_COLOR;
+    Node composition;        // kept while the preview is shown
+    std::string error;       // why Done failed
+    bool sourceExists = false;  // the captured object is in the kept scene (Update from source)
+  } texMode;
+  /** Opens the mode on a composition (texId "" = a new texture). */
+  void enterTextureMode(const ShapeTexture& st, const std::string& texId, const std::string& name);
+  /** Done (apply = compile and keep the texture) or Cancel; returns false if Done failed (texMode.error). */
+  bool exitTextureMode(bool apply);
+  /** Shapes / Preview. */
+  void textureModeView(int view);
+  /** Save as texture: the mode with a copy of the object or group (its colours kept). */
+  void saveAsTexture(const std::string& nodeId);
+  /** Re-captures the texture's source object (while it exists in the kept scene). */
+  bool updateTextureFromSource();
+  bool sourceAvailable() const;
+  ShapeTexture currentShapeTexture() const;
+  /** The settings the viewport renders with (the Shapes view: flat colours on black). */
+  const QualitySettings& viewQuality();
   std::string toastMsg;
   bool toastError = false;
   double toastUntil = 0;
@@ -411,6 +441,12 @@ class App {
   std::deque<UndoStep> history_;
   std::vector<UndoStep> future_;
   size_t undoBytes_ = 0;
+  // the main scene while the texture editing mode is open
+  std::string texParked_, texParkedFile_, texParkedCommitted_, texParkedSaved_;
+  std::deque<UndoStep> texParkedHistory_;
+  std::vector<UndoStep> texParkedFuture_;
+  size_t texParkedUndoBytes_ = 0;
+  QualitySettings shapesQuality_;
   void clearFuture();
   std::string committed_, saved_, autosaved_;
   std::map<std::string, std::string> linkDefs_;  // last known definition of each linked group

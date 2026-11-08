@@ -1017,6 +1017,92 @@ int main() {
     for (auto& av : animatableValues(leaf)) if (av.path == "tex.bump.value2") listed = true;
     CHECK(listed, "texture values are animatable");
   }
+  {  // textures made of shapes: a two-colour flag, exposed parameters, fills, cycles
+    Node red = makeShape("tesseract", "Red", {-1, 0, 0, 0}, {1, 0, 0});
+    Node blue = makeShape("tesseract", "Blue", {1, 0, 0, 0}, {0, 0, 1});
+    Node blue2 = makeShape("hypersphere", "Blue dot", {0, 3, 0, 0}, {0, 0, 1});
+    blue2.xf.scale = 0.5;
+    ShapeTexture st;
+    st.root = makeGroup(BoolOp::Union, {red, blue, blue2}, "Flag");
+    st.root.id = "root";
+    st.exposed.push_back({blue.id, "pos.x", "Blue X", -5, 5});
+    TextureDef td = compileShapeTexture(st, reg, "test_flag", "Flag");
+    std::string err = checkTextureDef(td);
+    CHECK(err.empty(), "flag texture compiles: %s", err.c_str());
+    CHECK(textureKind(td) == TEXK_RGBA, "object colours: colour + coverage");
+    int nColour = 0;
+    for (auto& p : td.params) if (p.type == P_COLOR) nColour++;
+    CHECK(nColour == 2, "equal colours merged (%d colour parameters)", nColour);
+    std::vector<double> vals;
+    conformValues(vals, td.params);
+    double out[4];
+    auto at = [&](V4 p) { runTexture(td, packValues(vals, td.params), p.data(), out); };
+    at({-1, 0, 0, 0});
+    CHECK(out[0] > 0.99 && out[2] < 0.01 && out[3] > 0.99, "red half (%.2f %.2f %.2f %.2f)", out[0], out[1], out[2], out[3]);
+    at({1, 0, 0, 0});
+    CHECK(out[2] > 0.99 && out[0] < 0.01 && out[3] > 0.99, "blue half");
+    at({0, 3, 0, 0});
+    CHECK(out[2] > 0.99 && out[3] > 0.99, "blue dot");
+    at({6, 0, 0, 0});
+    CHECK(out[3] < 0.01, "outside: no coverage");
+    // the exposed position moves the blue part (data: no new code)
+    for (int i = 0; i < (int)td.params.size(); i++)
+      if (td.params[i].label == "Blue X") setParamValue(vals, td.params, i, 4);
+    at({1, 0, 0, 0});
+    CHECK(out[3] < 0.01, "exposed position moved the part away");
+    at({4, 0, 0, 0});
+    CHECK(out[2] > 0.99 && out[3] > 0.99, "... to x = 4");
+    // a colour parameter recolours
+    for (int i = 0; i < (int)td.params.size(); i++)
+      if (td.params[i].type == P_COLOR && td.params[i].defColor[0] == 1) setParamValue(vals, td.params, i, 0.5, 1);
+    at({-1, 0, 0, 0});
+    CLOSE(out[1], 0.5, 1e-9);
+    // falloff coverage and tiling are parameters too
+    conformValues(vals = {}, td.params);
+    setParamValue(vals, td.params, 0, COV_FALLOFF);
+    setParamValue(vals, td.params, 4, 2);  // range
+    at({3, 0, 0, 0});  // 1 outside the blue tesseract (half size 1)
+    CLOSE(out[3], 0.5, 1e-6);
+    // single colour: a mask (white parts = 1)
+    ShapeTexture sm = st;
+    sm.objectColors = false;
+    walk(sm.root, [](Node& n, Node*, int) { n.color = {1, 1, 1}; });
+    TextureDef tm = compileShapeTexture(sm, reg, "test_mask", "Mask");
+    CHECK(checkTextureDef(tm).empty() && textureKind(tm) == TEXK_MASK, "single colour: a mask texture");
+    std::vector<double> mv;
+    conformValues(mv, tm.params);
+    runTexture(tm, packValues(mv, tm.params), V4{-1, 0, 0, 0}.data(), out);
+    CLOSE(out[0], 1, 1e-6);
+    // round trip of the composition, and fills: a checker inside the red part
+    ShapeTexture back = shapeTextureFromJson(td.shapes);
+    CHECK(back.exposed == st.exposed && back.root.children.size() == 3 && back.coverage == st.coverage, "shape texture round-trips");
+    ShapeTexture fl = st;
+    fl.root.children[0].mat.tex[CH_COLOR] = legacyColorSlot(TEX_CHECKER, 1, 1, {0, 1, 0});
+    TextureDef tf = compileShapeTexture(fl, reg, "test_fill", "Fill");
+    CHECK(checkTextureDef(tf).empty(), "fill compiles: %s", checkTextureDef(tf).c_str());
+    std::vector<double> fv;
+    conformValues(fv, tf.params);
+    runTexture(tf, packValues(fv, tf.params), V4{-0.5, 0.5, 0.5, 0.5}.data(), out);  // local (0.5, ...): checker 0
+    CHECK(out[0] > 0.99 && out[1] < 0.01, "fill: checker cell 0 keeps red");
+    runTexture(tf, packValues(fv, tf.params), V4{-1.5, 0.5, 0.5, 0.5}.data(), out);  // local (-0.5, ...): checker 1
+    CHECK(out[1] > 0.99 && out[0] < 0.01, "fill: checker cell 1 is the fill colour");
+    // cycles: a composition whose fill is itself (directly or through another shape texture)
+    defs().setTexture(td);
+    ShapeTexture cyc = st;
+    cyc.root.children[0].mat.tex[CH_COLOR].def = "test_flag";
+    CHECK(textureCycle("test_flag", cyc), "direct cycle refused");
+    TextureDef outer = compileShapeTexture(cyc, reg, "test_outer", "Outer");
+    defs().setTexture(outer);
+    ShapeTexture cyc2 = st;
+    cyc2.root.children[1].mat.tex[CH_COLOR].def = "test_outer";
+    CHECK(textureCycle("test_flag", cyc2), "cycle through another shape texture refused");
+    CHECK(!textureCycle("test_flag", st), "no cycle");
+    defs().eraseTexture("test_outer");
+    defs().eraseTexture("test_flag");
+    // exposable values
+    CHECK(exposablePath(red, "pos.x") && exposablePath(red, "color") && !exposablePath(red, "k") && !exposablePath(red, "mods.0.length"),
+          "exposable values");
+  }
   {  // data-driven modifiers on the CPU (Inigo Quilez's operators, Onion layers)
     auto withMods = [&](Node n, std::vector<std::pair<std::string, std::vector<double>>> ms) {
       for (auto& [id, vals] : ms) {

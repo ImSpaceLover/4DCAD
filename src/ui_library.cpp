@@ -19,6 +19,8 @@ void UI::libraryPanel() {
   std::function<void()> deferred;
   for (auto& f : app.lib.folders) {
     std::string fid = f.id;
+    // texture editing mode: shapes only (user folders too: they hold the user's own shapes)
+    if (app.texMode.active && fid == "builtin-poly") continue;
     bool renamingFolder = renameId_ == "f:" + fid;
     ImGui::PushID(fid.c_str());
     bool open;

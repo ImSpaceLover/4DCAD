@@ -5,6 +5,7 @@
 // colours, smoothness and bounds come from uniform arrays, so moving or
 // recolouring never recompiles. Only one view context is compiled per program.
 #pragma once
+#include <map>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -30,6 +31,22 @@ std::string renameCustomCode(const std::string& code, const std::string& suffix)
 std::string guardLoops(const std::string& code);
 /** Self-contained GLSL `float sdf(vec4 p)` of a node in its local space (for viewing / copying). */
 std::string standaloneGLSL(const Node& n, const PrimitiveRegistry& reg);
+/** The parts of standalone code, for embedding it in other code (textures made of shapes). */
+struct StandaloneOptions {
+  bool color = false;  // also track each point's colour (the renderer's rules: deepest part, smooth blends, cut faces)
+  std::map<std::string, std::string> colorExpr;  // leaf id -> its colour expression (default: its colour constant)
+  // leaf id -> statements run with the leaf's colour (%C, a vec3 variable) and its local point before
+  // its modifiers (%Q): fills
+  std::map<std::string, std::string> fill;
+  // exposed values as expressions: (node id, path) with paths pos.x .. pos.w, scale, k, mods.<i>.p.<name>
+  std::map<std::pair<std::string, std::string>, std::string> expr;
+};
+struct StandaloneCode {
+  std::string pre;   // top-level functions (shapes, modifiers, custom SDFs)
+  std::string body;  // statements computing the distance (and colour) at vec4 p
+  std::string d, c;  // variables holding them at the end
+};
+StandaloneCode standaloneParts(const Node& n, const PrimitiveRegistry& reg, const StandaloneOptions& opt);
 
 /** Node data buffer: 12 vec4 per node in CompiledScene::nodeIds order (read in shaders with ndat(node, slot)). */
 std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const CompiledScene& cs, const std::unordered_set<std::string>& highlight,

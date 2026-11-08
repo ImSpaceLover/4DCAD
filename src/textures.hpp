@@ -36,4 +36,38 @@ std::array<double, 3> texturedColor(const Node& leaf, int dim, const V4& local, 
  *  (base values blended by their textures); bump: the relief height. */
 double texturedChannel(const Node& leaf, int ch, int dim, const V4& local, const V4& world, const V4& parent);
 
+// ---- textures made of shapes (Save as texture / the texture editing mode) ----
+enum Coverage { COV_INSIDE = 0, COV_OUTLINE, COV_BANDS, COV_FALLOFF, COV_COUNT };
+inline const char* COVERAGE_NAMES[COV_COUNT] = {"Inside", "Outline", "Distance bands", "Falloff"};
+
+/** A value of an object of the composition made a parameter of the texture. */
+struct ExposedParam {
+  std::string node, path;  // the object and its value (animation path: pos.x, scale, k, color, mods.<i>.p.<name>, tex.color.p.<name>)
+  std::string name;        // the parameter's label in material slots
+  double min = 0, max = 1;
+  bool operator==(const ExposedParam& o) const { return node == o.node && path == o.path && name == o.name && min == o.min && max == o.max; }
+};
+
+/** The composition of a texture made of shapes and its settings. Objects keep one colour each
+ *  (their colour slot is their fill: a code texture inside the shape). */
+struct ShapeTexture {
+  Node root;                 // a group, flat 4D
+  bool objectColors = true;  // each part's colour (a colour texture) or one mask (the colours' brightness)
+  bool mergeColors = true;   // parts of the same colour share one colour parameter
+  int coverage = COV_INSIDE;
+  double softness = 0.02, width = 0.05, spacing = 0.25, range = 1;
+  bool tile = false;
+  std::array<double, 4> cell{2, 2, 2, 2};
+  std::vector<ExposedParam> exposed;
+  std::string sourceId;  // the scene object it was captured from (Update from source)
+};
+std::string shapeTextureToJson(const ShapeTexture& st);
+ShapeTexture shapeTextureFromJson(const std::string& text);  // throws on bad data
+/** Whether a value can be exposed (and the parameter type it becomes). */
+bool exposablePath(const Node& n, const std::string& path);
+/** The texture definition the composition compiles to (code + parameters); its source / shapes are set. */
+TextureDef compileShapeTexture(const ShapeTexture& st, const PrimitiveRegistry& reg, const std::string& id, const std::string& name);
+/** True if the composition's fills use the texture `id` (directly or through other shape textures). */
+bool textureCycle(const std::string& id, const ShapeTexture& st);
+
 }  // namespace fd

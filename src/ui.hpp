@@ -20,7 +20,7 @@ class UI {
   void onScroll(double y) { wheel_ += y; }
   bool exitNow = false;  // set once quitting is confirmed
   void requestQuit();    // asks to save unsaved changes first
-  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "new") openNewScene_ = true; if (what == "defs") openDefEditor(false, "twist", true); if (what == "texdefs") openDefEditor(true, "", false); if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
+  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "new") openNewScene_ = true; if (what == "defs") openDefEditor(false, "twist", true); if (what == "texdefs") openDefEditor(true, "", false); if ((what == "texmode" || what == "texpreview") && app.selected()) { app.saveAsTexture(app.selected()->id); if (what == "texpreview") app.textureModeView(1); } if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
 
  private:
   App& app;
@@ -100,6 +100,7 @@ class UI {
   // modifier / texture definitions: Library sections and the editor window (ui_defs.cpp)
   void defsLibrary();
   void defEditorWindow();
+  void textureSettingsWindow();  // texture editing mode (ui_defs.cpp)
   void openDefEditor(bool texture, const std::string& id, bool duplicate);  // id "" = a new one
   bool showDefEditor_ = false, defIsTex_ = false, defReadOnly_ = false;
   ModifierDef defMod_;

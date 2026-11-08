@@ -18,7 +18,7 @@ void UI::frame(double dt) {
   treePanel();
   propertiesPanel();
   viewport(dt);
-  timelinePanel();
+  if (!app.texMode.active) timelinePanel();  // (texture editing mode: no animation)
   // I: insert keyframes for the selected objects
   if (app.keyMenuRequest) { ImGui::OpenPopup("Insert keyframe##menu"); app.keyMenuRequest = false; }
   if (ImGui::BeginPopup("Insert keyframe##menu")) {
@@ -30,9 +30,10 @@ void UI::frame(double dt) {
   if (showQuality_) qualityWindow();
   if (showHelp_) helpWindow();
   if (showSdf_) sdfWindow();
-  if (app.showLights) lightsWindow();
-  if (showRender_) renderWindow();
+  if (app.showLights && !app.texMode.active) lightsWindow();
+  if (showRender_ && !app.texMode.active) renderWindow();
   if (showDefEditor_) defEditorWindow();
+  if (app.texMode.active) textureSettingsWindow();
   pathPrompt();
   newSceneDialog();
   unsavedPrompt();
@@ -80,6 +81,8 @@ void UI::onKey(int key, int action, int mods) {
     if (key == GLFW_KEY_HOME) { graphFit_ = true; resetView_ = true; return; }
   }
   if (action == GLFW_REPEAT && !(P(Action::Undo) || P(Action::Redo))) return;
+  if (app.texMode.active && (P(Action::Save) || P(Action::SaveAs) || P(Action::Open) || P(Action::New) || P(Action::RenderImage) ||
+                             P(Action::RenderAnimation))) return;  // (texture editing mode: Done / Cancel first)
   if (P(Action::Save)) { saveScene(); return; }
   if (P(Action::SaveAs)) { fileAction(2); return; }
   if (P(Action::Open)) { guarded([this] { fileAction(1); }); return; }

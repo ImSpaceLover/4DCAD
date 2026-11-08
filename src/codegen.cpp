@@ -229,6 +229,9 @@ struct DefUse {
   double safety = 1;
 };
 static thread_local std::map<std::string, DefUse>* g_defUse = nullptr;
+// exposed modifier parameters while emitting standalone code: (modifier, scalar index) -> expression
+static thread_local const std::map<std::pair<const Modifier*, int>, std::string>* g_paramExpr = nullptr;
+
 
 // first parameter vec4 of modifier k (each takes as many vec4 as its parameters need; engine ones 1)
 static int modVec4s(const Modifier& m) {
@@ -352,8 +355,11 @@ static std::string defArgs(const Node& n, int k, const ModAxis& ax, const char* 
     for (int v = 0; v < (*g_defUse)[m.def].vec4s; v++) a += ", " + modP(mb, off + v);
   } else if (auto d = defs().modifier(m.def)) {
     auto P = packedParams(m, *d);
-    for (size_t v = 0; v + 3 < P.size(); v += 4)
-      a += ", vec4(" + glslFloat(P[v]) + ", " + glslFloat(P[v + 1]) + ", " + glslFloat(P[v + 2]) + ", " + glslFloat(P[v + 3]) + ")";
+    auto val = [&](size_t i) {  // (an exposed parameter of a texture made of shapes: its variable)
+      if (g_paramExpr) { auto it = g_paramExpr->find({&m, (int)i}); if (it != g_paramExpr->end()) return "float(" + it->second + ")"; }
+      return glslFloat(P[i]);
+    };
+    for (size_t v = 0; v + 3 < P.size(); v += 4) a += ", vec4(" + val(v) + ", " + val(v + 1) + ", " + val(v + 2) + ", " + val(v + 3) + ")";
   }
   return a + ", " + std::to_string(ax.newAxis) + ", " + std::to_string(ax.srcAxis);
 }
@@ -1087,25 +1093,62 @@ static std::string vec4Const(const V4& v) {
   return "vec4(" + glslFloat(v[0]) + ", " + glslFloat(v[1]) + ", " + glslFloat(v[2]) + ", " + glslFloat(v[3]) + ")";
 }
 
-std::string standaloneGLSL(const Node& top, const PrimitiveRegistry& reg) {
+
+StandaloneCode standaloneParts(const Node& top, const PrimitiveRegistry& reg, const StandaloneOptions& opt) {
   std::ostringstream pre, body;
   std::map<std::string, DefUse> defUse;
   emitModifierDefs(top, pre, defUse);
-  struct DefScope { std::map<std::string, DefUse>* prev; ~DefScope() { g_defUse = prev; } } defScope{g_defUse};
+  struct DefScope {
+    std::map<std::string, DefUse>* prev;
+    const std::map<std::pair<const Modifier*, int>, std::string>* prevP;
+    ~DefScope() { g_defUse = prev; g_paramExpr = prevP; }
+  } defScope{g_defUse, g_paramExpr};
   g_defUse = &defUse;
+  // exposed modifier parameters
+  std::map<std::pair<const Modifier*, int>, std::string> pexpr;
+  walkc(top, [&](const Node& n, const Node*, int) {
+    for (size_t k = 0; k < n.mods.size(); k++) {
+      const Modifier& m = n.mods[k];
+      auto d = m.type == MOD_DEF ? defs().modifier(m.def) : nullptr;
+      if (!d) continue;
+      for (int i = 0; i < (int)d->params.size(); i++)
+        for (int c = 0; c < paramScalars(d->params[i]); c++) {
+          std::string path = "mods." + std::to_string(k) + ".p." + d->params[i].name;
+          if (d->params[i].type == P_COLOR) path += std::string(".") + "rgb"[c];
+          auto it = opt.expr.find({n.id, path});
+          if (it != opt.expr.end()) pexpr[{&m, paramOffset(d->params, i) + c}] = it->second;
+        }
+    }
+  });
+  g_paramExpr = &pexpr;
+  auto ex = [&](const Node& n, const std::string& path, double v) {
+    auto it = opt.expr.find({n.id, path});
+    return it != opt.expr.end() ? "(" + it->second + ")" : glslFloat(v);
+  };
   int counter = 0;
-  std::function<std::string(const Node&, const std::string&, bool)> emit = [&](const Node& n, const std::string& pin, bool isTop) -> std::string {
+  // returns (distance variable, colour variable)
+  std::function<std::pair<std::string, std::string>(const Node&, const std::string&, bool)> emit =
+      [&](const Node& n, const std::string& pin, bool isTop) -> std::pair<std::string, std::string> {
     int k = counter++;
-    std::string q = "q" + std::to_string(k), d = "d" + std::to_string(k);
-    if (n.hidden && !isTop) { body << "  float " << d << " = INF;  // hidden: " << n.name << "\n"; return d; }
+    std::string q = "q" + std::to_string(k), d = "d" + std::to_string(k), cv = "c" + std::to_string(k);
+    if (n.hidden && !isTop) {
+      body << "  float " << d << " = INF;  // hidden: " << n.name << "\n";
+      if (opt.color) body << "  vec3 " << cv << " = vec3(0.0);\n";
+      return {d, cv};
+    }
     body << "  // " << n.name << "\n";
+    std::string scale = ex(n, "scale", n.xf.scale);
     if (isTop) body << "  vec4 " << q << " = " << pin << ";\n";
-    else body << "  vec4 " << q << " = (" << mat4Const(transpose(nodeRotation(n))) << " * (" << pin << " - " << vec4Const(n.xf.pos) << ")) / "
-              << glslFloat(n.xf.scale) << ";\n";
+    else {
+      std::string pos = "vec4(" + ex(n, "pos.x", n.xf.pos[0]) + ", " + ex(n, "pos.y", n.xf.pos[1]) + ", " + ex(n, "pos.z", n.xf.pos[2]) + ", " +
+                        ex(n, "pos.w", n.xf.pos[3]) + ")";
+      body << "  vec4 " << q << " = (" << mat4Const(transpose(nodeRotation(n))) << " * (" << pin << " - " << pos << ")) / " << scale << ";\n";
+    }
+    bool hasFill = n.isLeaf() && opt.color && opt.fill.count(n.id);
+    if (hasFill) body << "  vec4 " << q << "_0 = " << q << ";\n";
     auto ax = modifierAxes(n, reg);
     std::string tag = std::to_string(k) + "_";
-    std::string coords = modifierCoordsGLSL(n, ax, q.c_str(), tag);
-    body << coords;
+    body << modifierCoordsGLSL(n, ax, q.c_str(), tag);
     if (n.isLeaf()) {
       if (n.isCustom()) {
         std::string suffix = "_n" + std::to_string(k);
@@ -1117,33 +1160,68 @@ std::string standaloneGLSL(const Node& top, const PrimitiveRegistry& reg) {
         if (def && !def->steps.empty()) { pre << primitiveGLSL(*def, fn); body << "  float " << d << " = " << fn << "(" << q << ");\n"; }
         else body << "  float " << d << " = -1e9;  // point\n";
       }
+      if (opt.color) {
+        auto it = opt.colorExpr.find(n.id);
+        body << "  vec3 " << cv << " = " << (it != opt.colorExpr.end() ? it->second : "vec3(" + glslFloat(n.color[0]) + ", " + glslFloat(n.color[1]) + ", " + glslFloat(n.color[2]) + ")") << ";\n";
+        if (hasFill) {
+          std::string f = std::regex_replace(opt.fill.at(n.id), std::regex("%Q"), q + "_0");
+          body << "  {\n" << std::regex_replace(f, std::regex("%C"), cv) << "  }\n";
+        }
+      }
     } else {
       static const char* opf[6] = {"min(%a, %b)", "max(%a, %b)", "max(%a, -%b)", "sU(%a, %b, %k)", "sI(%a, %b, %k)", "sS(%a, %b, %k)"};
-      std::vector<std::string> kids;
+      std::vector<std::pair<std::string, std::string>> kids;
       for (auto& c : n.children) kids.push_back(emit(c, q, false));
-      body << "  float " << d << " = " << (kids.empty() ? std::string("INF") : kids[0]) << ";\n";
+      std::string kk = ex(n, "k", std::max(n.k, 1e-4));
+      if (!n.isLeaf() && opt.expr.count({n.id, "k"})) kk = "max(" + kk + ", 1e-4)";
+      body << "  float " << d << " = " << (kids.empty() ? std::string("INF") : kids[0].first) << ";\n";
+      if (opt.color) body << "  vec3 " << cv << " = " << (kids.empty() ? std::string("vec3(0.0)") : kids[0].second) << ";\n";
       for (size_t c = 1; c < kids.size(); c++) {
+        const std::string &b = kids[c].first, &cb = kids[c].second;
+        if (opt.color) {
+          // the colour by the renderer's rules (as opU .. opSS / the CPU combine)
+          switch (n.op) {
+            case BoolOp::Union: body << "  if (" << b << " < " << d << ") " << cv << " = " << cb << ";\n"; break;
+            case BoolOp::Intersection: body << "  if (" << b << " > " << d << ") " << cv << " = " << cb << ";\n"; break;
+            case BoolOp::Subtraction: body << "  if (-" << b << " > " << d << ") " << cv << " = " << cb << ";\n"; break;
+            case BoolOp::SmoothUnion:
+              body << "  if (" << d << " >= INF * 0.5) " << cv << " = " << cb << "; else if (" << b << " < INF * 0.5) " << cv << " = mix(" << cb << ", " << cv
+                   << ", clamp(0.5 + 0.5 * (" << b << " - " << d << ") / " << kk << ", 0.0, 1.0));\n";
+              break;
+            case BoolOp::SmoothIntersection:
+              body << "  if (" << b << " < INF * 0.5 && " << d << " < INF * 0.5) " << cv << " = mix(" << cb << ", " << cv << ", clamp(0.5 - 0.5 * (" << b << " - " << d
+                   << ") / " << kk << ", 0.0, 1.0));\n";
+              break;
+            case BoolOp::SmoothSubtraction:
+              body << "  if (" << b << " < INF * 0.5 && " << d << " < INF * 0.5) " << cv << " = mix(" << cv << ", " << cb << ", clamp(0.5 - 0.5 * (" << d << " + " << b
+                   << ") / " << kk << ", 0.0, 1.0));\n";
+              break;
+          }
+        }
         std::string e = opf[(int)n.op];
         e = std::regex_replace(e, std::regex("%a"), d);
-        e = std::regex_replace(e, std::regex("%b"), kids[c]);
-        e = std::regex_replace(e, std::regex("%k"), glslFloat(std::max(n.k, 1e-4)));
+        e = std::regex_replace(e, std::regex("%b"), b);
+        e = std::regex_replace(e, std::regex("%k"), kk);
         body << "  " << d << " = " << e << ";  // " << BOOL_OP_LABELS[(int)n.op] << "\n";
       }
     }
-    std::string ex = extrudeGLSL(n, ax, tag);
-    if (!ex.empty()) body << std::regex_replace(ex, std::regex("\\bd\\b"), d);
-    if (n.isLeaf()) {
-      if (!n.isCustom())
-        for (int a = nodeDim(n, reg); a < 4; a++)
-          body << "  " << d << " = opExtrude(" << d << ", abs(" << q << "." << C[a] << ") - " << glslFloat(n.thickness / 2) << ");  // thin along " << AXIS[a] << "\n";
-    }
-    if (!isTop && n.xf.scale != 1) body << "  " << d << " *= " << glslFloat(n.xf.scale) << ";\n";
-    return d;
+    std::string exd = extrudeGLSL(n, ax, tag);
+    if (!exd.empty()) body << std::regex_replace(exd, std::regex("\\bd\\b"), d);
+    if (n.isLeaf() && !n.isCustom())
+      for (int a = nodeDim(n, reg); a < 4; a++)
+        body << "  " << d << " = opExtrude(" << d << ", abs(" << q << "." << C[a] << ") - " << glslFloat(n.thickness / 2) << ");  // thin along " << AXIS[a] << "\n";
+    if (!isTop && (n.xf.scale != 1 || opt.expr.count({n.id, "scale"}))) body << "  " << d << " *= " << scale << ";\n";
+    return {d, cv};
   };
-  std::string res = emit(top, "p", true);
+  auto res = emit(top, "p", true);
+  return {pre.str(), body.str(), res.first, res.second};
+}
+
+std::string standaloneGLSL(const Node& top, const PrimitiveRegistry& reg) {
+  StandaloneCode c = standaloneParts(top, reg, StandaloneOptions{});
   std::ostringstream o;
   o << "// SDF of \"" << top.name << "\" in its own local space (generated, self-contained).\n"
-    << "// Helpers available: opExtrude, opRadial, sU, sI, sS, INF.\n" << pre.str() << "float sdf(vec4 p) {\n" << body.str() << "  return " << res << ";\n}\n";
+    << "// Helpers available: opExtrude, opRadial, sU, sI, sS, INF.\n" << c.pre << "float sdf(vec4 p) {\n" << c.body << "  return " << c.d << ";\n}\n";
   return o.str();
 }
 

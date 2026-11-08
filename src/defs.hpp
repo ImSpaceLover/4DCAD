@@ -150,6 +150,8 @@ struct TextureDef {
   bool builtin = false;
   std::vector<ParamDef> params;
   std::string code;
+  std::string source = "code";  // "shapes": made in the texture editing mode (code generated from `shapes`)
+  std::string shapes;           // shapes: the composition and its settings (JSON, see ShapeTexture in textures.hpp)
   uint64_t hash() const;
 };
 /** What tex returns (from its declaration; a mask if not found). */

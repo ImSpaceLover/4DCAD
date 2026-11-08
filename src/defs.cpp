@@ -876,6 +876,10 @@ json textureDefToJson(const TextureDef& d) {
   json j = {{"format", "4dcad-texture"}, {"version", 1}, {"id", d.id}, {"name", d.name}, {"code", d.code}, {"params", paramsToJson(d.params)}};
   if (!d.description.empty()) j["description"] = d.description;
   if (!d.category.empty()) j["category"] = d.category;
+  if (d.source == "shapes") {
+    j["source"] = "shapes";
+    try { j["shapes"] = json::parse(d.shapes); } catch (...) {}
+  }
   return j;
 }
 TextureDef textureDefFromJson(const json& j) {
@@ -886,6 +890,10 @@ TextureDef textureDefFromJson(const json& j) {
   d.category = j.value("category", std::string("Custom"));
   d.code = j.value("code", std::string());
   d.params = paramsFromJson(j.value("params", json::array()));
+  if (j.value("source", std::string("code")) == "shapes" && j.contains("shapes")) {
+    d.source = "shapes";
+    d.shapes = j["shapes"].dump();
+  }
   return d;
 }
 

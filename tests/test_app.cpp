@@ -1047,6 +1047,55 @@ int main() {
     CHECK(std::abs(findNode(u.root, id)->xf.pos[1] - (2 + 49 * 0.01)) < 1e-9, "undo after redo");
   }
 
+  {  // texture editing mode: Save as texture, exposing, Done / Cancel keep the main scene intact
+    App t;
+    t.vpX = 0; t.vpY = 0; t.vpW = 800; t.vpH = 600;
+    t.loadScene(playgroundScene());
+    std::string tiger;
+    walk(t.root, [&](Node& n, Node*, int) { if (n.name == "Tiger") tiger = n.id; });
+    t.root.children[0].xf.pos[1] += 0.5;  // an unsaved edit with an undo step
+    t.commit();
+    std::string mainSnap = t.snapshotForTest();
+    size_t undo = t.undoSteps();
+    t.saveAsTexture(tiger);
+    CHECK(t.texMode.active && t.root.children.size() == 1 && t.root.children[0].name == "Tiger", "the mode opens on a copy of the object");
+    CHECK(t.root.children[0].xf.pos == (V4{0, 0, 0, 0}), "the copy sits at the origin");
+    CHECK(t.undoSteps() == 0, "the mode has its own undo history");
+    t.setGeo(true);
+    t.setMode(Mode::Explore);
+    CHECK(!t.geo && t.mode == Mode::Edit, "Full 4D Edit only");
+    t.placeItem("builtin-cube", std::nullopt);
+    Node* cube = t.selected();
+    CHECK(cube && cube->color == (std::array<double, 3>{1, 1, 1}), "new shapes start white");
+    std::string cubeId = cube ? cube->id : "";
+    t.texMode.settings.exposed.push_back({cubeId, "scale", "Cube size", 0, 3});
+    // cancel: nothing saved, the main scene is back as it was
+    t.exitTextureMode(false);
+    CHECK(!t.texMode.active && t.snapshotForTest() == mainSnap && t.undoSteps() == undo, "Cancel restores the scene and its undo history");
+    CHECK(t.dirty(), "the scene keeps its unsaved state");
+    // done: a texture in the library, the scene unchanged
+    t.saveAsTexture(tiger);
+    t.texMode.name = "Tiger texture";
+    t.textureModeView(1);
+    CHECK(t.texMode.view == 1 && t.root.children.size() == 1 && t.root.children[0].mat.tex[CH_COLOR].used(), "preview: the texture on a preview object");
+    t.textureModeView(0);
+    CHECK(t.root.children[0].name == "Tiger", "back to the composition");
+    CHECK(t.exitTextureMode(true), "Done: %s", t.texMode.error.c_str());
+    auto d = defs().texture("user_tiger_texture");
+    CHECK(d && d->source == "shapes" && checkTextureDef(*d).empty(), "the texture is registered");
+    CHECK(t.snapshotForTest() == mainSnap, "Done restores the scene");
+    CHECK(defs().texture("__texmode_preview") == nullptr, "no preview texture left behind");
+    // editing it again: a fill using the texture itself is refused
+    if (d) {
+      t.enterTextureMode(shapeTextureFromJson(d->shapes), d->id, d->name);
+      t.root.children[0].mat.tex[CH_COLOR].def = d->id;
+      CHECK(!t.exitTextureMode(true) && !t.texMode.error.empty() && t.texMode.active, "self-referencing fill refused");
+      t.exitTextureMode(false);
+    }
+    defs().eraseTexture("user_tiger_texture");
+    saveUserDefs();
+  }
+
   std::printf("%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

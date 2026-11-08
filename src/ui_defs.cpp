@@ -79,14 +79,25 @@ void UI::defsLibrary() {
   std::function<void()> deferred;
   for (int pass = 0; pass < 2; pass++) {
     bool tex = pass == 1;
+    if (tex && app.texMode.active) continue;  // (texture editing mode: fills are chosen in Properties)
     ImGui::PushID(tex ? "texdefs" : "moddefs");
     if (!ImGui::CollapsingHeader(tex ? "Textures###texdefs" : "Modifiers###moddefs")) { ImGui::PopID(); continue; }
-    if (ImGui::SmallButton(tex ? "+ New texture" : "+ New modifier")) openDefEditor(tex, "", false);
+    if (ImGui::SmallButton(tex ? "+ New texture (code)" : "+ New modifier")) openDefEditor(tex, "", false);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Write your own: parameters + code (GLSL subset), checked on Apply");
+    if (tex) {
+      ImGui::SameLine();
+      if (ImGui::SmallButton("+ New texture (shapes)")) {
+        ShapeTexture st;
+        st.root = makeGroup(BoolOp::Union, {}, "Texture");
+        st.root.id = "root";
+        deferred = [this, st] { app.enterTextureMode(st, "", "My texture"); };
+      }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Build a texture out of shapes in the texture editing mode");
+    }
     // (id, name, category, description, builtin)
     struct Item { std::string id, name, cat, desc; bool builtin; };
     std::vector<Item> items;
-    if (tex) for (auto& d : defs().textures()) items.push_back({d->id, d->name, d->category, d->description, d->builtin});
+    if (tex) for (auto& d : defs().textures()) if (d->id.rfind("__", 0) != 0) items.push_back({d->id, d->name, d->category, d->description, d->builtin});
     else for (auto& d : defs().modifiers()) items.push_back({d->id, d->name, d->category, d->description, d->builtin});
     std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.builtin > b.builtin; });
     std::string cat;
@@ -139,7 +150,13 @@ void UI::defsLibrary() {
               };
           ImGui::EndMenu();
         }
-        if (ImGui::MenuItem(it.builtin ? "View code" : "Edit")) deferred = [this, id, tex] { openDefEditor(tex, id, false); };
+        auto td = tex ? defs().texture(id) : nullptr;
+        if (td && td->source == "shapes" && ImGui::MenuItem("Edit in texture mode"))
+          deferred = [this, id] {
+            auto d = defs().texture(id);
+            try { app.enterTextureMode(shapeTextureFromJson(d->shapes), id, d->name); } catch (...) { app.toast("Cannot read the texture's shapes", true); }
+          };
+        if (ImGui::MenuItem(it.builtin ? "View code" : td && td->source == "shapes" ? "Edit code" : "Edit")) deferred = [this, id, tex] { openDefEditor(tex, id, false); };
         if (ImGui::MenuItem("Duplicate to edit")) deferred = [this, id, tex] { openDefEditor(tex, id, true); };
         if (ImGui::MenuItem("Export...")) deferred = [this, id, tex] { exportDefId_ = id; exportDefTex_ = tex; fileAction(9); };
         if (!it.builtin) {
@@ -304,7 +321,11 @@ void UI::defEditorWindow() {
       // a working copy with the code; checked in the interpreter (the same subset is valid GLSL)
       std::string err;
       if (name.empty()) err = "give it a name";
-      if (tex) { defTex_.code = defCode_; if (err.empty()) err = checkTextureDef(defTex_); }
+      if (tex) {
+        if (defTex_.source == "shapes" && defCode_ != defTex_.code) { defTex_.source = "code"; defTex_.shapes.clear(); }  // (hand-edited)
+        defTex_.code = defCode_;
+        if (err.empty()) err = checkTextureDef(defTex_);
+      }
       else { defMod_.code = defCode_; if (err.empty()) err = checkModifierDef(defMod_); }
       defErr_ = err;
       defOk_.clear();
@@ -329,8 +350,77 @@ void UI::defEditorWindow() {
     ImGui::TextDisabled(tex ? "Return float (mask), vec3 (colour) or vec4 (colour + coverage) from tex(vec4 p)"
                             : "Define warp and / or shape (see the comments in the template)");
   }
+  if (tex && defTex_.source == "shapes")
+    ImGui::TextColored({1, 0.8f, 0.4f, 1}, "Made of shapes: edit it in the texture mode (Library right-click). Applying code here makes it a code texture.");
   if (!defErr_.empty()) ImGui::TextColored({1, 0.55f, 0.4f, 1}, "Error: %s", defErr_.c_str());
   else if (!defOk_.empty()) ImGui::TextColored({0.5f, 0.9f, 0.5f, 1}, "%s", defOk_.c_str());
+  ImGui::End();
+}
+
+// texture editing mode: the texture's settings (colours, coverage, tiling, exposed parameters)
+void UI::textureSettingsWindow() {
+  auto& T = app.texMode;
+  ImGui::SetNextWindowSize({330, 430}, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x - 700, 120}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Texture settings")) { ImGui::End(); return; }
+  ShapeTexture& st = T.settings;
+  ImGui::TextWrapped("Build the texture out of shapes (Full 4D). New shapes start white, so masks run 0..1. "
+                     "Right-click a value in Properties: Expose as texture parameter.");
+  ImGui::SeparatorText("Colours");
+  int oc = st.objectColors ? 0 : 1;
+  if (ImGui::RadioButton("Object colours", &oc, 0)) st.objectColors = true;
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("A colour texture: each part's colour (smooth unions blend), plus coverage");
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Single colour (mask)", &oc, 1)) st.objectColors = false;
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("A mask: coverage x the colours' brightness; the material slot gives the colours");
+  if (st.objectColors) ImGui::Checkbox("Merge equal colours", &st.mergeColors);
+  if (st.objectColors && ImGui::IsItemHovered()) ImGui::SetTooltip("Parts of the same colour share one colour parameter");
+  ImGui::SeparatorText("Coverage");
+  ImGui::SetNextItemWidth(150);
+  ImGui::Combo("Mode", &st.coverage, COVERAGE_NAMES, COV_COUNT);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Inside: the shapes. Outline: their surfaces. Distance bands: rings around them. Falloff: a glow fading with distance");
+  auto F = [](const char* l, double& v, float lo, float hi) { float f = (float)v; ImGui::SetNextItemWidth(150); if (ImGui::DragFloat(l, &f, (hi - lo) / 400, lo, hi, "%.3f")) v = f; };
+  if (st.coverage == COV_INSIDE || st.coverage == COV_BANDS) F("Softness", st.softness, 0.0005f, 1);
+  if (st.coverage == COV_OUTLINE) F("Width", st.width, 0.0005f, 2);
+  if (st.coverage == COV_BANDS) F("Spacing", st.spacing, 0.01f, 5);
+  if (st.coverage == COV_FALLOFF) F("Range", st.range, 0.01f, 20);
+  ImGui::SeparatorText("Tiling");
+  ImGui::Checkbox("Repeat in cells", &st.tile);
+  if (st.tile) {
+    float c[4] = {(float)st.cell[0], (float)st.cell[1], (float)st.cell[2], (float)st.cell[3]};
+    ImGui::SetNextItemWidth(220);
+    if (ImGui::DragFloat4("Cell size", c, 0.02f, 0.01f, 100.f, "%.2f")) for (int k = 0; k < 4; k++) st.cell[k] = std::max(0.01f, c[k]);
+  }
+  ImGui::TextDisabled("(these become the texture's parameters: changeable in material slots)");
+  ImGui::SeparatorText("Exposed parameters");
+  if (st.exposed.empty()) ImGui::TextDisabled("none (right-click a value in Properties)");
+  int remove = -1;
+  for (int i = 0; i < (int)st.exposed.size(); i++) {
+    auto& e = st.exposed[i];
+    ImGui::PushID(i);
+    char nb[96];
+    std::snprintf(nb, sizeof nb, "%s", e.name.c_str());
+    ImGui::SetNextItemWidth(120);
+    if (ImGui::InputText("##n", nb, sizeof nb)) e.name = nb;
+    ImGui::SameLine();
+    if (e.path != "color") {
+      float r[2] = {(float)e.min, (float)e.max};
+      ImGui::SetNextItemWidth(110);
+      if (ImGui::DragFloat2("##r", r, 0.01f)) { e.min = r[0]; e.max = std::max(r[0], r[1]); }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Slider range");
+      ImGui::SameLine();
+    }
+    if (ImGui::SmallButton("x")) remove = i;
+    Node* n = findNode(app.root, e.node);
+    ImGui::TextDisabled("   %s: %s", n ? n->name.c_str() : "(deleted)", e.path.c_str());
+    ImGui::PopID();
+  }
+  if (remove >= 0) st.exposed.erase(st.exposed.begin() + remove);
+  if (app.sourceAvailable()) {
+    ImGui::Separator();
+    if (ImGui::Button("Update from source")) app.updateTextureFromSource();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy the object again from the scene (replaces the composition)");
+  }
   ImGui::End();
 }
 
