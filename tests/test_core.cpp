@@ -1018,6 +1018,25 @@ int main() {
     for (auto& av : animatableValues(leaf)) if (av.path == "tex.bump.value2") listed = true;
     CHECK(listed, "texture values are animatable");
   }
+  {  // two textured channels on one object: the second slot's data is read where packNodes put it
+    // (regression: the code added the slot's vec4 offset to the row number, so every slot but the
+    // first read wrong data, e.g. metallic next to a colour texture)
+    Node l = makeShape("tesseract", "Two slots");
+    l.mat.tex[CH_COLOR] = legacyColorSlot(TEX_CHECKER, 1, 1, {0, 1, 0});
+    l.mat.tex[CH_METALLIC] = legacyColorSlot(TEX_CHECKER, 1, 1, {0, 0, 0});
+    l.mat.tex[CH_METALLIC].value2 = 0.625;
+    Node r2 = makeGroup(BoolOp::Union, {l});
+    auto cs2 = compileScene(r2, reg, "", false, nullptr);
+    auto d2 = packNodes(r2, reg, cs2, {});
+    int idx = 1;  // (the leaf: node 1)
+    int trow = (int)d2[idx * NODE_VEC4S * 4 + 12 * 4 + 1];
+    int off = texOffset(l.mat, CH_METALLIC);
+    CHECK(off > 0, "metallic is the second slot (offset %d)", off);
+    // the code: r = the slot's vec4 offset, data read as ndatx(trow, r + k) (= vec4 trow * 16 + r + k)
+    CHECK(cs2.glsl.find("int r = " + std::to_string(off) + ";") != std::string::npos, "second slot addressed by its vec4 offset");
+    CHECK(cs2.glsl.find("ndatx(trow, r + 6).z") != std::string::npos && cs2.glsl.find("int r = trow") == std::string::npos, "slot data read from the first texture row");
+    CLOSE(d2[((size_t)trow * NODE_VEC4S + off + 6) * 4 + 2], 0.625, 1e-6);  // value 2 where that read lands
+  }
   {  // the Materials example: every channel with a checker; bump adds relief (shape unchanged); views
     SceneFile mf = materialsScene();
     std::set<int> chans;

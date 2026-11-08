@@ -4,6 +4,12 @@ Versions follow `project(4DCAD VERSION ...)` in CMakeLists.txt; `4DCAD --version
 running one, and scene files record the version that saved them (`appVersion`). Pushing a tag
 `v<version>` builds the release (see README > Releases).
 
+## 1.0.2
+
+- **Fix: several textured channels on one object.** Only the first textured channel of an object
+  read its own settings; every further one (e.g. metallic next to a colour texture) read the wrong
+  data and usually had no effect. Each channel now reads its own pattern, values and placement.
+
 ## 1.0.1
 
 ### Materials

@@ -123,24 +123,25 @@ float opSS(float a, inout MAT ma, float b, MAT mb, float k) {
   float h = clamp(0.5 - 0.5 * (a + b) / k, 0.0, 1.0); ma = ma * (1.0 - h) + mb * h; return mix(a, -b, h) + k * h * (1.0 - h);
 }
 // textures (see textures.hpp): the point's texture coordinate (the slot's mapping) and the remap of a
-// mask (low..high, contrast, invert, curve); r = the slot's first data row
+// mask (low..high, contrast, invert, curve); the slot's data: vec4 r counted from row tb (the node's
+// first texture row)
 float g_texNear = INF;   // textures only where a leaf is this near (the ray march sets it)
 bool g_texMat = true;    // colour / material textures (the hit)
 bool g_texBump = false;  // bump textures (the normal phase's relief samples)
 float g_bumpH = 0.0;     // the relief there: the bump textures' heights, world units (the leaves add to it)
-vec4 texCoord(vec4 x, int r) { return mat4(ndatx(r, 0), ndatx(r, 1), ndatx(r, 2), ndatx(r, 3)) * x + ndatx(r, 4); }
-float texRemap(float m, int r) {
-  vec4 a = ndatx(r, 5), b = ndatx(r, 6);
+vec4 texCoord(vec4 x, int tb, int r) { return mat4(ndatx(tb, r + 0), ndatx(tb, r + 1), ndatx(tb, r + 2), ndatx(tb, r + 3)) * x + ndatx(tb, r + 4); }
+float texRemap(float m, int tb, int r) {
+  vec4 a = ndatx(tb, r + 5), b = ndatx(tb, r + 6);
   m = clamp((m - a.y) * a.z, 0.0, 1.0);
   if (a.w != 1.0) m = m < 0.5 ? 0.5 * pow(2.0 * m, a.w) : 1.0 - 0.5 * pow(2.0 - 2.0 * m, a.w);
   if (b.x > 0.5) m = 1.0 - m;
   int nc = int(b.y);
   if (nc >= 2) {
-    vec2 prev = ndatx(r, 8).xy;
+    vec2 prev = ndatx(tb, r + 8).xy;
     float res = prev.y;
     for (int i = 1; i < 8; i++) {
       if (i >= nc) break;
-      vec4 cc = ndatx(r, 8 + i / 2);
+      vec4 cc = ndatx(tb, r + 8 + i / 2);
       vec2 cur = (i - (i / 2) * 2) == 0 ? cc.xy : cc.zw;
       if (m <= cur.x) { res = m <= prev.x ? prev.y : mix(prev.y, cur.y, smoothstep(prev.x, cur.x, m)); break; }
       prev = cur; res = cur.y;
@@ -315,29 +316,29 @@ static std::string texturesGLSL(const Node& n, int i, int dim, const std::string
       const TexUse& u = use.at(M.tex[c].def);
       int sp = M.tex[texMappingChannel(M, c)].map.space;
       std::string x = sp == TS_WORLD && !xWorld.empty() ? xWorld : sp == TS_PARENT && !xParent.empty() ? xParent : "q0";
-      L << "      {  // " << CHANNEL_NAMES[c] << "\n        int r = trow + " << texOffset(M, c) << ";\n";
+      L << "      {  // " << CHANNEL_NAMES[c] << "\n        int r = " << texOffset(M, c) << ";  // (vec4 offset from the first texture row)\n";
       if (x == "q0" && dim < 4) {
         L << "        vec4 tx = q0;";
         for (int a = dim; a < 4; a++) L << " tx." << C[a] << " = 0.0;";
         L << "\n";
         x = "tx";
       }
-      std::string call = "tex" + u.suffix + "(texCoord(" + x + ", r)";
-      for (int v = 0; v < u.vec4s; v++) call += ", ndatx(r, " + std::to_string(TEX_SLOT_HEADER + v) + ")";
+      std::string call = "tex" + u.suffix + "(texCoord(" + x + ", trow, r)";
+      for (int v = 0; v < u.vec4s; v++) call += ", ndatx(trow, r + " + std::to_string(TEX_SLOT_HEADER + v) + ")";
       call += ")";
       const char* T = u.kind == TEXK_MASK ? "float" : u.kind == TEXK_RGB ? "vec3" : "vec4";
       L << "        g_loopGuard = 0;\n        " << T << " tv = " << call << ";\n";
       if (c == CH_COLOR) {
-        if (u.kind == TEXK_MASK) L << "        t_cm = texRemap(tv, r) * ndatx(r, 5).x;\n        col = mix(col, ndatx(r, 7).rgb, t_cm);\n";
-        else if (u.kind == TEXK_RGB) L << "        t_cm = ndatx(r, 5).x;\n        col = mix(col, tv, t_cm);\n";
-        else L << "        t_cm = texRemap(tv.a, r) * ndatx(r, 5).x;\n        col = mix(col, tv.rgb, t_cm);\n";
+        if (u.kind == TEXK_MASK) L << "        t_cm = texRemap(tv, trow, r) * ndatx(trow, r + 5).x;\n        col = mix(col, ndatx(trow, r + 7).rgb, t_cm);\n";
+        else if (u.kind == TEXK_RGB) L << "        t_cm = ndatx(trow, r + 5).x;\n        col = mix(col, tv, t_cm);\n";
+        else L << "        t_cm = texRemap(tv.a, trow, r) * ndatx(trow, r + 5).x;\n        col = mix(col, tv.rgb, t_cm);\n";
       } else {
         const char* mask = u.kind == TEXK_MASK ? "tv" : u.kind == TEXK_RGB ? "dot(tv, vec3(0.299, 0.587, 0.114))" : "tv.a";
-        L << "        float tw = texRemap(" << mask << ", r) * ndatx(r, 5).x;\n";
-        if (c == CH_BUMP) L << "        g_bumpH += ndatx(r, 6).z * tw * " << bumpScale << ";\n";
+        L << "        float tw = texRemap(" << mask << ", trow, r) * ndatx(trow, r + 5).x;\n";
+        if (c == CH_BUMP) L << "        g_bumpH += ndatx(trow, r + 6).z * tw * " << bumpScale << ";\n";
         else {
           const char* var = c == CH_ROUGHNESS ? "m11.x" : c == CH_SPECULAR ? "m11.y" : c == CH_TRANSPARENCY ? "m11.z" : c == CH_METALLIC ? "m11.w" : "t_em";
-          L << "        " << var << " = mix(" << var << ", ndatx(r, 6).z, tw);\n";
+          L << "        " << var << " = mix(" << var << ", ndatx(trow, r + 6).z, tw);\n";
         }
       }
       L << "      }\n";
