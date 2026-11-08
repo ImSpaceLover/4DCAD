@@ -16,16 +16,28 @@ fields (SDFs) and drawn by ray marching on the GPU. It has two rendering methods
 
 ## Running
 
-**Windows:** download `4DCAD.exe` from the repository's **Releases** page (or the latest CI
-run's artifact, below) and run it. No installation is needed. It draws with
+**Windows:** download `4DCAD-<version>-windows.zip` from the repository's **Releases** page,
+unzip it and run `4DCAD.exe` (the bare exe is attached too; or take the latest CI run's artifact,
+below). No installation is needed. It draws with
 **Vulkan** when the graphics driver supports it (better on AMD cards) and otherwise with
 **OpenGL 3.3+**; Settings > Rendering > Graphics API (or `--vulkan` / `--gl`) chooses. Keep the
 driver up to date.
 
 **CI builds:** every push is built and tested by GitHub Actions (`.github/workflows/build.yml`).
 The latest Windows exe can be downloaded from the run's **4DCAD-windows** artifact
-(Actions tab → the run → Artifacts). Pushing a tag such as `v1.2` also attaches the exe to a GitHub Release.
-Executables are not committed to the repository (they would grow its history with every build).
+(Actions tab → the run → Artifacts). Executables are not committed to the repository (they would
+grow its history with every build).
+
+**Versions and releases:** the version is set in `CMakeLists.txt` (`project(4DCAD VERSION 1.0.0)`)
+and listed in [CHANGELOG.md](CHANGELOG.md); the title bar, Help and `4DCAD --version` show it, and
+scene files record the version that saved them. Pushing a tag `v<version>` (e.g. `v1.0`) publishes a
+GitHub Release "4DCAD <version>" whose notes are that version's changelog section, with:
+* `4DCAD-<version>-windows.zip` and `4DCAD-<version>-linux.tar.gz`: the program, README, CHANGELOG
+  and a `library` folder: `Examples/`, `Worlds/` and `Showcase/` scenes (File > Open),
+  `Modifiers/*.4dmod.json` and `Textures/*.4dtex.json` (every built-in definition, as editable
+  copies: Library > Import) and `Objects/` (the built-in object library). `tools/fdpack` writes
+  the definition and object files.
+* `4DCAD.exe` on its own.
 
 **Building from source** (Windows or Linux) needs CMake ≥ 3.16, a C++17
 compiler and git. Dependencies (GLFW, Dear ImGui, nlohmann/json) are downloaded

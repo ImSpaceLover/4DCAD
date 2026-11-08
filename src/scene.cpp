@@ -1,4 +1,5 @@
 #include "scene.hpp"
+#include "version.hpp"
 
 #include <set>
 
@@ -747,7 +748,7 @@ std::string sceneToJson(const Node& root, const PrimitiveRegistry&, const std::s
                         const std::vector<CameraBookmark>* bookmarks, const std::vector<PointLight>* lights,
                         const std::string& activeCamera, const std::string* animationJson, const Space* space,
                         const CurvedCamState* curvedCam) {
-  json j = {{"format", "4dcad-scene"}, {"version", 3}, {"root", nodeJ(root)}, {"primitives", json::array()}};
+  json j = {{"format", "4dcad-scene"}, {"version", 3}, {"appVersion", FD_VERSION}, {"root", nodeJ(root)}, {"primitives", json::array()}};
   if (json md = usedModifierDefs(root); !md.empty()) j["modifierDefs"] = md;  // (custom definitions the scene uses)
   if (json td = usedTextureDefs(root); !td.empty()) j["textureDefs"] = td;
   j["world"] = world.empty() ? json(nullptr) : json(world);

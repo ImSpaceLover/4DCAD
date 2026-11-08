@@ -21,6 +21,32 @@ jobs:
         run: cmake --build build -j 4
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Library package (built-in modifiers, textures, objects + example scenes)
+        run: |
+          build/fdpack package/library
+          mkdir -p package/library/Examples package/library/Worlds package/library/Showcase
+          cp examples/*.json package/library/Examples/
+          cp test_worlds/*.json package/library/Worlds/
+          cp tests/scenes/*.json package/library/Showcase/
+          cat > package/library/README.txt <<'TXT'
+          4DCAD library
+          =============
+          Examples/, Worlds/, Showcase/  scenes: open them with File > Open.
+          Modifiers/*.4dmod.json         modifier definitions: Library > Import (then edit / duplicate them).
+          Textures/*.4dtex.json          texture definitions: Library > Import.
+          Objects/*.json                 the built-in object library: Library > Import.
+          The built-in modifiers and textures are already inside the program; these files are
+          editable copies and starting points for your own.
+          TXT
+          sed -i 's/^          //' package/library/README.txt
+          cp README.md CHANGELOG.md package/
+          cp build/4DCAD package/
+      - name: Upload the library package
+        uses: actions/upload-artifact@v4
+        with:
+          name: 4DCAD-package-linux
+          path: package
+          if-no-files-found: error
 
   windows:
     name: Windows exe (MinGW-w64, static)
@@ -41,17 +67,45 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Attach exe to the GitHub release
+    name: Release (zip with the exe + library, Linux tarball)
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: 4DCAD-windows
+          path: win
+      - uses: actions/download-artifact@v4
+        with:
+          name: 4DCAD-package-linux
+          path: pkg
+      - name: Build the archives and the release notes
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          echo "V=$V" >> "$GITHUB_ENV"
+          # Windows: exe + library + docs
+          mkdir -p "4DCAD-$V-windows"
+          cp win/4DCAD.exe "4DCAD-$V-windows/"
+          cp -r pkg/library pkg/README.md pkg/CHANGELOG.md "4DCAD-$V-windows/"
+          zip -r -q "4DCAD-$V-windows.zip" "4DCAD-$V-windows"
+          # Linux: binary + library + docs
+          mkdir -p "4DCAD-$V-linux"
+          cp -r pkg/4DCAD pkg/library pkg/README.md pkg/CHANGELOG.md "4DCAD-$V-linux/"
+          chmod +x "4DCAD-$V-linux/4DCAD"
+          tar czf "4DCAD-$V-linux.tar.gz" "4DCAD-$V-linux"
+          cp win/4DCAD.exe 4DCAD.exe
+          # notes: this version's section of CHANGELOG.md
+          awk -v v="## $V" '$0 == v {on = 1; next} /^## / {if (on) exit} on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "4DCAD $V" > notes.md
       - uses: softprops/action-gh-release@v2
         with:
-          files: 4DCAD.exe
-          generate_release_notes: true
+          name: 4DCAD ${{ env.V }}
+          body_path: notes.md
+          files: |
+            4DCAD-${{ env.V }}-windows.zip
+            4DCAD-${{ env.V }}-linux.tar.gz
+            4DCAD.exe

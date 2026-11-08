@@ -5,6 +5,7 @@
 //         [--debug-ray] (debug ray on, frozen after the first frame) [--strafe D] [--turn DEG] (then move / turn)
 //         [--render out.png|.jpg|.gif|.avi|.mp4|.webm [--animation] [--render-size WxH] [--samples N] [--aa N]]
 //         (renders like the Render window, from the active camera, then quits)
+#include "version.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -78,6 +79,10 @@ int main(int argc, char** argv) {
   int renderW = 0, renderH = 0, renderSamples = -1, renderAA = -1;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
+    if (a == "--version" || a == "-v") {
+      std::printf("4DCAD %s%s%s\n", FD_VERSION, FD_GIT_COMMIT[0] ? " (" : "", FD_GIT_COMMIT[0] ? FD_GIT_COMMIT ")" : "");
+      return 0;
+    }
     if (a == "--example" && i + 1 < argc) example = argv[++i];
     else if (a == "--geo") startGeo = true;
     else if (a == "--select" && i + 1 < argc) selectName = argv[++i];
@@ -122,7 +127,7 @@ int main(int argc, char** argv) {
   VulkanContext vk;
   if (want != Backend::OpenGL) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    win = glfwCreateWindow(W, H, "4DCAD", nullptr, nullptr);
+    win = glfwCreateWindow(W, H, "4DCAD " FD_VERSION_SHORT, nullptr, nullptr);
     vk.pipelineCachePath = (std::filesystem::path(dataDir()) / "shadercache" / "vulkan-pipelines.bin").string();
     if (win && vk.init(win, vkErr)) useVulkan = true;
     else {
@@ -141,7 +146,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-    win = glfwCreateWindow(W, H, "4DCAD", nullptr, nullptr);
+    win = glfwCreateWindow(W, H, "4DCAD " FD_VERSION_SHORT, nullptr, nullptr);
     if (!win) { std::fprintf(stderr, "Failed to create an OpenGL 3.3 window (update your graphics driver)\n"); glfwTerminate(); return 1; }
     glfwMakeContextCurrent(win);
     glfwSwapInterval(1);

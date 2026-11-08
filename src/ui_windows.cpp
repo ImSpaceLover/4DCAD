@@ -1,5 +1,6 @@
 // Settings, SDF code and help windows.
 #include "ui_common.hpp"
+#include "version.hpp"
 
 namespace fd {
 
@@ -331,6 +332,8 @@ void UI::sdfWindow() {
 void UI::helpWindow() {
   ImGui::SetNextWindowSize({640, 560}, ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Help", &showHelp_)) { ImGui::End(); return; }
+  ImGui::TextColored({0.6f, 0.85f, 1, 1}, "4DCAD %s%s%s", FD_VERSION, FD_GIT_COMMIT[0] ? "  (" : "", FD_GIT_COMMIT[0] ? FD_GIT_COMMIT ")" : "");
+  ImGui::TextDisabled("A 4D CSG modeller: ray-marched signed distance fields. Changes: CHANGELOG.md");
   ImGui::SeparatorText("Modes");
   ImGui::TextWrapped("Tab: Edit / Explore.  V: Full 4D / Geodesic 3D (needs a world object: World menu in the toolbar, or Properties > Use as world).");
   ImGui::SeparatorText("Edit, Full 4D (Blender-like)");
