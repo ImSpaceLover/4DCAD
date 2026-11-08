@@ -81,14 +81,14 @@ int texSlotVec4s(const TexSlot& s) {
 }
 int texOffset(const Material& m, int ch) {
   if (ch < 0 || ch >= CH_COUNT || !m.tex[ch].used()) return -1;
-  int o = 0;
+  int o = TEX_FRAME_VEC4S;
   for (int c = 0; c < ch; c++) if (m.tex[c].used()) o += texSlotVec4s(m.tex[c]);
   return o;
 }
 int texTotalVec4s(const Material& m) {
   int o = 0;
   for (auto& t : m.tex) if (t.used()) o += texSlotVec4s(t);
-  return o;
+  return o ? o + TEX_FRAME_VEC4S : 0;
 }
 
 std::vector<float> packTexSlot(const Material& m, int ch, int dim) {

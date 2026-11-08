@@ -10,6 +10,7 @@
 #include "polytope.hpp"
 #include "shaderlang.hpp"
 #include "defs.hpp"
+#include "space.hpp"
 #include "textures.hpp"
 #include <nlohmann/json.hpp>
 #include "shaders.hpp"
@@ -361,8 +362,8 @@ int main() {
     CLOSE(d[row * NODE_VEC4S * 4 + 4], 2.5, 1e-6);   // extrude half length
     int trow = (int)d[1 * NODE_VEC4S * 4 + 12 * 4 + 1];  // texture rows (after the modifier rows)
     CHECK(trow > row, "texture rows after the modifier rows (%d, %d)", trow, row);
-    CLOSE(d[trow * NODE_VEC4S * 4 + 20], 0.4, 1e-6);   // strength
-    CLOSE(d[trow * NODE_VEC4S * 4 + 5], 2.5, 1e-6);    // A: scale on Y (the XW rotation leaves Y alone)
+    CLOSE(d[trow * NODE_VEC4S * 4 + TEX_FRAME_VEC4S * 4 + 20], 0.4, 1e-6);   // strength (after the texture frame)
+    CLOSE(d[trow * NODE_VEC4S * 4 + TEX_FRAME_VEC4S * 4 + 5], 2.5, 1e-6);    // A: scale on Y (the XW rotation leaves Y alone)
     {
       Node e2 = e;
       e2.children[0].mat.tex[CH_BUMP] = legacyColorSlot(TEX_NOISE, 1, 1, {0, 0, 0});
@@ -1017,6 +1018,37 @@ int main() {
     bool listed = false;
     for (auto& av : animatableValues(leaf)) if (av.path == "tex.bump.value2") listed = true;
     CHECK(listed, "texture values are animatable");
+  }
+  {  // textures on planes in hyperbolic space: object-space coordinates from the true point (not the
+     // symmetry slice) in the object's own frame (the re-anchoring near the camera undone), so the
+     // same world point has the same texture coordinate whatever the camera
+    Space sp;
+    sp.kind = SpaceKind::Hyperbolic;
+    sp.radius = 8;
+    Node pl = makeShape("plane", "Ground");
+    pl.mat.tex[CH_COLOR] = legacyColorSlot(TEX_CHECKER, 1, 1, {0, 0, 0});
+    Node rt = makeGroup(BoolOp::Union, {pl});
+    rt.id = "root";
+    auto csH = compileScene(rt, reg, "", false, nullptr, SpaceKind::Hyperbolic);
+    CHECK(csH.glsl.find("vec4 qt = qm;") != std::string::npos && csH.glsl.find("* qt) / s;") != std::string::npos, "curved textures use the unsliced point");
+    double k = sp.k();
+    V4 pw = cs::expO(sp, {1.3, 0, 0.7, 0});  // a point on the plane (y = 0)
+    auto texCoordAt = [&](V4 camPos) {
+      M4 camIso = cs::transvection(k, cs::origin(), cs::expO(sp, camPos));
+      auto dd = packNodes(rt, reg, csH, {}, &sp, &camIso);
+      int li = 1;
+      M4 inv;
+      for (int q = 0; q < 16; q++) inv[q] = dd[li * NODE_VEC4S * 4 + q];
+      size_t tb = (size_t)dd[li * NODE_VEC4S * 4 + 12 * 4 + 1];
+      M4 F;
+      for (int q = 0; q < 16; q++) F[q] = dd[tb * NODE_VEC4S * 4 + q];
+      V4 pc = mul(cs::inverse(k, camIso), pw);  // the camera-relative point the shader gets
+      V4 qm = mul(inv, pc);
+      return cs::logO(sp, mul(F, qm));  // tq0 (scale 1)
+    };
+    V4 a1 = texCoordAt({0, 1, 0, 0}), a2 = texCoordAt({9, 1.5, -6, 0});  // (the second far: the plane is re-anchored)
+    CHECK(length(a1 - a2) < 1e-3, "texture coordinate independent of the camera (%.4f %.4f %.4f | %.4f %.4f %.4f)", a1[0], a1[1], a1[2], a2[0], a2[1], a2[2]);
+    CHECK(std::abs(a1[0] - 1.3) < 1e-3 && std::abs(a1[2] - 0.7) < 1e-3, "... = the point's own normal coordinates (%.4f %.4f)", a1[0], a1[2]);
   }
   {  // two textured channels on one object: the second slot's data is read where packNodes put it
     // (regression: the code added the slot's vec4 offset to the row number, so every slot but the

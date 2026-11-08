@@ -4,6 +4,15 @@ Versions follow `project(4DCAD VERSION ...)` in CMakeLists.txt; `4DCAD --version
 running one, and scene files record the version that saved them (`appVersion`). Pushing a tag
 `v<version>` builds the release (see README > Releases).
 
+## 1.0.3
+
+- **Fix: textures on planes, rods and other infinite objects in hyperbolic / spherical scenes.**
+  The exact distance of those objects moves each point to one place along the plane / rod, and
+  the texture used that point, so the whole object showed a single colour (no texture). Textures
+  now use the point itself, in the object's own frame: they show, stay fixed on the object when
+  the camera moves (the precision re-anchoring near the camera is undone for them), and run on
+  across the copies of infinite repeats and the cells of honeycombs.
+
 ## 1.0.2
 
 - **Fix: several textured channels on one object.** Only the first textured channel of an object

@@ -296,7 +296,7 @@ static void emitTextureDefs(const Node& root, std::ostream& o, std::map<std::str
 // its relief to g_bumpH (the shape itself is unchanged). xWorld / xParent: the point in those spaces
 // ("" = object space); dWorld: the leaf's distance in world units; bumpScale: local -> world units
 static std::string texturesGLSL(const Node& n, int i, int dim, const std::string& xWorld, const std::string& xParent, const std::string& dWorld,
-                                const std::string& bumpScale, const std::map<std::string, TexUse>& use) {
+                                const std::string& bumpScale, const std::map<std::string, TexUse>& use, const std::string& objPoint = "q0") {
   auto D = [](int i, int k) { return "ndat(" + std::to_string(i) + ", " + std::to_string(k) + ")"; };
   std::ostringstream L;
   L << "  float t_em = " << D(i, 9) << ".x, t_cm = 0.0;\n  vec4 m11 = " << D(i, 11) << ";\n";
@@ -315,10 +315,10 @@ static std::string texturesGLSL(const Node& n, int i, int dim, const std::string
       if (!active(c) || (c == CH_BUMP) != (pass == 1)) continue;
       const TexUse& u = use.at(M.tex[c].def);
       int sp = M.tex[texMappingChannel(M, c)].map.space;
-      std::string x = sp == TS_WORLD && !xWorld.empty() ? xWorld : sp == TS_PARENT && !xParent.empty() ? xParent : "q0";
+      std::string x = sp == TS_WORLD && !xWorld.empty() ? xWorld : sp == TS_PARENT && !xParent.empty() ? xParent : objPoint;
       L << "      {  // " << CHANNEL_NAMES[c] << "\n        int r = " << texOffset(M, c) << ";  // (vec4 offset from the first texture row)\n";
-      if (x == "q0" && dim < 4) {
-        L << "        vec4 tx = q0;";
+      if (x == objPoint && dim < 4) {
+        L << "        vec4 tx = " << objPoint << ";";
         for (int a = dim; a < 4; a++) L << " tx." << C[a] << " = 0.0;";
         L << "\n";
         x = "tx";
@@ -660,13 +660,18 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
         L << "    d /= s;\n" << extrudeGLSL(n, ax, "", "mrow") << "    d *= s;\n  }\n";
       }
       L << "  vec4 x12 = " << D(i, 12) << ";\n";
-      L << texturesGLSL(n, i, 4, "", "", "d", "s", texUse);
+      if (n.mat.textured())  // texture coordinates in the object's own frame (undo the cell anchoring)
+        L << "  int tfr = int(x12.y);\n  vec4 tq0 = clogO(mat4(ndatx(tfr, 0), ndatx(tfr, 1), ndatx(tfr, 2), ndatx(tfr, 3)) * qm) / s;\n";
+      L << texturesGLSL(n, i, 4, "", "", "d", "s", texUse, n.mat.textured() ? "tq0" : "q0");
       L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, t_cm));\n";
       L << "  return d;\n}\n";
     } else if (n.isLeaf()) {
       // exact in curved space (as the CPU evaluator): infinite extrusions measured from the point's
       // foot on their plane / line, the outermost repeat by exact copies along its line
       auto sym = symmetryAxes(n, reg);
+      // textures: the point before the symmetry slice / exact repeat (which move it to one place
+      // along the plane / rod / copies, fine for the distance but not for a pattern)
+      if (n.mat.textured()) L << "  vec4 qt = qm;\n";
       if (!sym.empty()) {
         double mk[3] = {0, 0, 0};
         for (int a : sym) mk[a] = 1;
@@ -687,7 +692,9 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       L << "  vec4 x12 = " << D(i, 12) << ";\n";  // (.y: first texture row)
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
-      L << texturesGLSL(n, i, nodeDim(n, reg), "", "", "d * s", "s", texUse);
+      if (n.mat.textured())  // in the object's own frame (undo the re-anchoring near the camera)
+        L << "  int tfr = int(x12.y);\n  vec4 tq0 = clogO(mat4(ndatx(tfr, 0), ndatx(tfr, 1), ndatx(tfr, 2), ndatx(tfr, 3)) * qt) / s;\n";
+      L << texturesGLSL(n, i, nodeDim(n, reg), "", "", "d * s", "s", texUse, n.mat.textured() ? "tq0" : "q0");
       L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, t_cm));\n";
       L << "  return d * s * " << D(i, 8) << ".w;\n}\n";  // .w: spherical safety factor
     } else {
@@ -969,6 +976,7 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
     size_t rows = ((size_t)texTotalVec4s(n.mat) + NODE_VEC4S - 1) / NODE_VEC4S;
     d.resize(d.size() + rows * S, 0.f);
     int dim = nodeDim(n, reg);
+    for (int k = 0; k < 4; k++) d[base * S + (size_t)k * 5] = 1.f;  // the texture frame: identity (curved: set below)
     for (int c = 0; c < CH_COUNT; c++) {
       if (!n.mat.tex[c].used()) continue;
       auto v = packTexSlot(n.mat, c, dim);
@@ -1010,12 +1018,14 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
         float* v = &d[it->second * S_PER];
         M4 iso = cs::nodeIso(*space, n.xf, sAnc);
         double anchoredR = -1;  // infinite objects re-anchored near the camera: their near part's size
+        M4 texFrame = identity();  // (the anchoring undone, for texture coordinates)
         if (n.isHoneycomb() && camIso) {
           // anchor the tiling at the cell the camera is in (one of its own symmetries, found in
           // double precision): the shader then folds small coordinates near the eye
           int par = 0;
           M4 g = honeycombCellOf(*space, n.poly, mul(cs::inverse(k, world), col(*camIso, 3)), &par);
           iso = mul(iso, cs::inverse(k, g));
+          texFrame = cs::inverse(k, g);
           if (par && n.poly.alternate)
             for (int q = 0; q < 3; q++) std::swap(v[6 * 4 + q], v[10 * 4 + q]);  // that cell's colour
         }
@@ -1024,9 +1034,14 @@ std::vector<float> packNodes(Node& root, const PrimitiveRegistry& reg, const Com
           // matrix stays small however far from the scene's origin you are
           M4 A = anchorNear(*space, n, reg, mul(cs::inverse(k, world), col(*camIso, 3)), S);
           iso = mul(iso, A);
+          texFrame = A;
           anchoredR = anchoredRadius(n, reg);  // one copy / the extent across the symmetric axes
         }
         world = mul(parentWorld, iso);  // (re-anchored)
+        if (n.isLeaf() && n.mat.textured()) {  // the texture frame: the first 4 vec4 of its texture rows
+          size_t tb = (size_t)v[12 * 4 + 1];
+          for (int q = 0; q < 16; q++) d[tb * S_PER + q] = (float)texFrame[q];  // (S here: the scale)
+        }
         // absolute: camera-relative point -> node frame, in one matrix (double precision here)
         M4 inv = absolute ? cs::inverse(k, mul(camInv, world)) : cs::inverse(k, iso);
         for (int q = 0; q < 16; q++) v[q] = (float)inv[q];

@@ -22,6 +22,10 @@ double texMaskOf(TexKind kind, const double v[4]);
 // per used channel: 0-3 A (columns), 4 b, 5 (strength, low, 1 / (high - low), contrast exponent),
 // 6 (invert, curve points, value 2, 0), 7 (colour 2, 0), 8-11 curve points (in, out) x 8, 12.. parameters
 constexpr int TEX_SLOT_HEADER = 12;
+// the node's texture rows start with its texture frame: a 4x4 matrix (4 vec4) taking the shader's
+// node-frame point back to the object's own frame (curved spaces re-anchor planes, rods, repeats and
+// honeycombs near the camera; identity otherwise); the slots follow
+constexpr int TEX_FRAME_VEC4S = 4;
 int texSlotVec4s(const TexSlot& s);
 int texOffset(const Material& m, int ch);  // vec4 offset within the node's texture rows, -1 if unused
 int texTotalVec4s(const Material& m);
