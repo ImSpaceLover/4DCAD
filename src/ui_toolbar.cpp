@@ -212,6 +212,14 @@ void UI::toolbar() {
   ImGui::SameLine(0, 2);
   if (ImGui::Button("Redo")) app.redo();
   ImGui::SameLine(0, 16);
+  // debug views: one material value at each point
+  ImGui::SetNextItemWidth(150);
+  int dv = app.quality.debugView;
+  if (ImGui::Combo("##view", &dv, VIEW_NAMES, 10)) app.quality.debugView = dv;
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("View: Lit, or one material setting on its own (grey: 0 = black, 1 = white; specular 0..2;\n"
+                      "bump relief: mid grey = 0; normals as colours), to check what textures do");
+  ImGui::SameLine(0, 8);
   if (ImGui::Button("Settings")) showQuality_ = !showQuality_;
   if (app.dirty()) { ImGui::SameLine(); ImGui::TextColored({1, 0.75f, 0.3f, 1}, "unsaved"); }
   ImGui::SameLine();

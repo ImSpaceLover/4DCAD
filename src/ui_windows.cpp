@@ -79,6 +79,8 @@ void UI::qualityWindow() {
       {
         const char* models[2] = {"Simple", "Path traced (PBR)"};
         ImGui::Combo("Lighting model", &q.lighting, models, 2);
+        ImGui::Combo("View", &q.debugView, VIEW_NAMES, 10);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Debug views: one material setting on its own (also in the toolbar; not saved)");
         if (ImGui::IsItemHovered())
           ImGui::SetTooltip("Simple: sun, point lights and ambient light; glowing objects shine as point lights.\n"
                             "Path traced: physically based. Light bounces between surfaces, glowing objects are\n"

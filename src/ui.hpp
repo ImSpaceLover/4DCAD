@@ -20,7 +20,7 @@ class UI {
   void onScroll(double y) { wheel_ += y; }
   bool exitNow = false;  // set once quitting is confirmed
   void requestQuit();    // asks to save unsaved changes first
-  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "new") openNewScene_ = true; if (what == "defs") openDefEditor(false, "twist", true); if (what == "texdefs") openDefEditor(true, "", false); if ((what == "texmode" || what == "texpreview") && app.selected()) { app.saveAsTexture(app.selected()->id); if (what == "texpreview") app.textureModeView(1); } if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
+  void debugOpen(const std::string& what) { if (what == "settings") showQuality_ = true; if (what == "graph") showGraph_ = true; if (what == "render") showRender_ = true; if (what == "new") openNewScene_ = true; if (what == "defs") openDefEditor(false, "twist", true); if (what == "texdefs") openDefEditor(true, "", false); if (what.rfind("mat", 0) == 0 && what.size() == 4 && app.selected()) { matSel_ = what[3] - '0'; matSelNode_ = app.selected()->id; } if ((what == "texmode" || what == "texpreview") && app.selected()) { app.saveAsTexture(app.selected()->id); if (what == "texpreview") app.textureModeView(1); } if (what == "sdf") { showSdf_ = true; if (app.selected()) sdfNodeId_ = app.selected()->id; } }
 
  private:
   App& app;
@@ -96,7 +96,9 @@ class UI {
   void pasteKeys();
   /** Per-value keying in Properties: a diamond next to the last widget, right-click menu. */
   void keyable(const std::string& target, const std::vector<std::string>& paths);
-  void textureSlot(Node& n, int ch, bool& live, bool& done);  // a material channel's texture (Properties)
+  void textureSlot(Node& n, int ch, bool& live, bool& done);  // the selected material channel's texture (Properties)
+  int matSel_ = -1;           // Properties > Material: the channel whose texture is shown
+  std::string matSelNode_;
   // modifier / texture definitions: Library sections and the editor window (ui_defs.cpp)
   void defsLibrary();
   void defEditorWindow();

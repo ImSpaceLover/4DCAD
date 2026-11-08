@@ -126,7 +126,8 @@ float opSS(float a, inout MAT ma, float b, MAT mb, float k) {
 // mask (low..high, contrast, invert, curve); r = the slot's first data row
 float g_texNear = INF;   // textures only where a leaf is this near (the ray march sets it)
 bool g_texMat = true;    // colour / material textures (the hit)
-bool g_texBump = false;  // bump textures (the normal samples)
+bool g_texBump = false;  // bump textures (the normal phase's relief samples)
+float g_bumpH = 0.0;     // the relief there: the bump textures' heights, world units (the leaves add to it)
 vec4 texCoord(vec4 x, int r) { return mat4(ndatx(r, 0), ndatx(r, 1), ndatx(r, 2), ndatx(r, 3)) * x + ndatx(r, 4); }
 float texRemap(float m, int r) {
   vec4 a = ndatx(r, 5), b = ndatx(r, 6);
@@ -289,14 +290,15 @@ static void emitTextureDefs(const Node& root, std::ostream& o, std::map<std::str
   if (bump) o << "#define SCENE_BUMP 1\n";
 }
 
-// a leaf's textures, applied to col / t_em / m11 (and d: bump), which it declares (t_em, m11) or
-// expects (col, d, q0, x12 = node slot 12: .y the first texture row). xWorld / xParent: the point in
-// those spaces ("" = object space); dWorld: the leaf's distance in world units; bumpScale: local -> d units
+// a leaf's textures, applied to col / t_em / m11, which it declares (t_em, m11, t_cm = the colour
+// texture's mask) or expects (col, d, q0, x12 = node slot 12: .y the first texture row); bump adds
+// its relief to g_bumpH (the shape itself is unchanged). xWorld / xParent: the point in those spaces
+// ("" = object space); dWorld: the leaf's distance in world units; bumpScale: local -> world units
 static std::string texturesGLSL(const Node& n, int i, int dim, const std::string& xWorld, const std::string& xParent, const std::string& dWorld,
                                 const std::string& bumpScale, const std::map<std::string, TexUse>& use) {
   auto D = [](int i, int k) { return "ndat(" + std::to_string(i) + ", " + std::to_string(k) + ")"; };
   std::ostringstream L;
-  L << "  float t_em = " << D(i, 9) << ".x;\n  vec4 m11 = " << D(i, 11) << ";\n";
+  L << "  float t_em = " << D(i, 9) << ".x, t_cm = 0.0;\n  vec4 m11 = " << D(i, 11) << ";\n";
   const Material& M = n.mat;
   auto active = [&](int c) { return M.tex[c].used() && use.count(M.tex[c].def); };
   bool any = false;
@@ -326,13 +328,13 @@ static std::string texturesGLSL(const Node& n, int i, int dim, const std::string
       const char* T = u.kind == TEXK_MASK ? "float" : u.kind == TEXK_RGB ? "vec3" : "vec4";
       L << "        g_loopGuard = 0;\n        " << T << " tv = " << call << ";\n";
       if (c == CH_COLOR) {
-        if (u.kind == TEXK_MASK) L << "        col = mix(col, ndatx(r, 7).rgb, texRemap(tv, r) * ndatx(r, 5).x);\n";
-        else if (u.kind == TEXK_RGB) L << "        col = mix(col, tv, ndatx(r, 5).x);\n";
-        else L << "        col = mix(col, tv.rgb, texRemap(tv.a, r) * ndatx(r, 5).x);\n";
+        if (u.kind == TEXK_MASK) L << "        t_cm = texRemap(tv, r) * ndatx(r, 5).x;\n        col = mix(col, ndatx(r, 7).rgb, t_cm);\n";
+        else if (u.kind == TEXK_RGB) L << "        t_cm = ndatx(r, 5).x;\n        col = mix(col, tv, t_cm);\n";
+        else L << "        t_cm = texRemap(tv.a, r) * ndatx(r, 5).x;\n        col = mix(col, tv.rgb, t_cm);\n";
       } else {
         const char* mask = u.kind == TEXK_MASK ? "tv" : u.kind == TEXK_RGB ? "dot(tv, vec3(0.299, 0.587, 0.114))" : "tv.a";
         L << "        float tw = texRemap(" << mask << ", r) * ndatx(r, 5).x;\n";
-        if (c == CH_BUMP) L << "        d -= ndatx(r, 6).z * tw * " << bumpScale << ";\n";
+        if (c == CH_BUMP) L << "        g_bumpH += ndatx(r, 6).z * tw * " << bumpScale << ";\n";
         else {
           const char* var = c == CH_ROUGHNESS ? "m11.x" : c == CH_SPECULAR ? "m11.y" : c == CH_TRANSPARENCY ? "m11.z" : c == CH_METALLIC ? "m11.w" : "t_em";
           L << "        " << var << " = mix(" << var << ", ndatx(r, 6).z, tw);\n";
@@ -658,7 +660,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       }
       L << "  vec4 x12 = " << D(i, 12) << ";\n";
       L << texturesGLSL(n, i, 4, "", "", "d", "s", texUse);
-      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
+      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, t_cm));\n";
       L << "  return d;\n}\n";
     } else if (n.isLeaf()) {
       // exact in curved space (as the CPU evaluator): infinite extrusions measured from the point's
@@ -684,8 +686,8 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       L << "  vec4 x12 = " << D(i, 12) << ";\n";  // (.y: first texture row)
       for (int a = nodeDim(n, reg); a < 4; a++) L << "  d = opExtrude(d, abs(q." << C[a] << ") - 0.5 * par.z);\n";
       L << "  vec4 c6 = " << D(i, 6) << ", m9 = " << D(i, 9) << ";\n  vec3 col = c6.rgb;\n";
-      L << texturesGLSL(n, i, nodeDim(n, reg), "", "", "d * s", "1.0", texUse);
-      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
+      L << texturesGLSL(n, i, nodeDim(n, reg), "", "", "d * s", "s", texUse);
+      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, t_cm));\n";
       L << "  return d * s * " << D(i, 8) << ".w;\n}\n";  // .w: spherical safety factor
     } else {
       if (!n.mods.empty()) L << "  int mrow = int(" << D(i, 12) << ".x);\n";
@@ -815,8 +817,8 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
       if (n.isHoneycomb()) L << "  col = mix(col, " << D(i, 10) << ".rgb, hpar * " << D(i, 13) << ".w);\n";
       // textures: only near the surface while marching (g_texNear), bump only in the normal phase;
       // they can be off (fast mode)
-      L << texturesGLSL(n, i, nodeDim(n, reg), "g", "p", "d * s * sAcc", "1.0", texUse);
-      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, 0.0));\n";
+      L << texturesGLSL(n, i, nodeDim(n, reg), "g", "p", "d * s * sAcc", "s * sAcc", texUse);
+      L << "  m = MAT(vec4(col, c6.w), vec4(t_em, m11.xyz), vec4(m11.w, " << D(i, 8) << ".y, " << D(i, 14) << ".x, t_cm));\n";
       // attached to a surface: the shape is extruded along the surface normal, so keep it to its
       // own sheet (two-sided, within its size): other sheets of the world (e.g. the other room of a
       // double wormhole) must not show it

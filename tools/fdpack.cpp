@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include "defs.hpp"
+#include "examples.hpp"
 #include "scene.hpp"
 #include "version.hpp"
 
@@ -30,6 +31,15 @@ int main(int argc, char** argv) {
   for (auto& d : builtinModifierDefs()) n += put(out / "Modifiers" / (d.id + ".4dmod.json"), modifierDefToJson(d).dump(1));
   for (auto& d : builtinTextureDefs()) n += put(out / "Textures" / (d.id + ".4dtex.json"), textureDefToJson(d).dump(1));
   n += put(out / "Objects" / "4dcad-builtin-library.json", libraryToJson(builtinFolders()));
+  // the example scenes built into File > Examples
+  fs::create_directories(out / "Examples");
+  for (auto& ex : EXAMPLES) {
+    SceneFile f = ex.make();
+    PrimitiveRegistry reg;
+    std::vector<PointLight> lights = f.lights;
+    n += put(out / "Examples" / (std::string(ex.id) + ".4dscene.json"),
+             sceneToJson(f.root, reg, f.world, f.camera ? &*f.camera : nullptr, nullptr, &lights, f.activeCamera, nullptr, &f.space, nullptr));
+  }
   std::printf("4DCAD %s: wrote %d library files to %s\n", FD_VERSION, n, out.string().c_str());
   return 0;
 }

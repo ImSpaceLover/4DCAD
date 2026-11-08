@@ -173,6 +173,10 @@ void UI::overlays(ImDrawList* dl) {
                   v.eye[0], v.eye[1], v.eye[2], v.eye[3]);
   lines.push_back(buf);
   int highlight = -1;
+  if (app.quality.debugView > 0) {
+    std::snprintf(buf, sizeof buf, "View: %s (toolbar: Lit for the normal image)", VIEW_NAMES[std::clamp(app.quality.debugView, 0, 9)]);
+    lines.push_back(buf);
+  }
   if (app.viewportCompiling || (app.renderer && app.renderer->pendingCompiles() > 0)) lines.push_back("Compiling shader...");
   if (app.accumSamples > 0 && app.accumSamples < app.quality.viewportSamples && app.mode == Mode::Edit) {
     std::snprintf(buf, sizeof buf, "Refining %d / %d", app.accumSamples, app.quality.viewportSamples);

@@ -37,7 +37,7 @@ inline const char* FRAME_BLOCK = R"(
   ivec4 f_k;         // point light shadow mask, bounces, over-relaxation, AO samples
   ivec4 f_l;         // shadow ray steps, specular on, stochastic on, sample index
   vec4 f_e;          // lens aperture, focus distance, (accumulation weight: used by the renderer), curvature radius
-  vec4 f_f;          // sky intensity (path tracing), 0, 0, 0
+  vec4 f_f;          // sky intensity (path tracing), 4D light falloff, debug view, 0
   vec4 u_lpos[8];    // point lights: 4D position
   vec4 u_lcol[8];    // rgb * intensity, range
   vec4 u_lext[8];    // radius, area light (emissive object, path tracing) / point light
@@ -77,6 +77,7 @@ inline const char* FRAME_DEFINES = R"(
 #define u_focus f_e.y
 #define u_curvR f_e.w
 #define u_skyI f_f.x
+#define u_view int(f_f.z + 0.5)
 #define u_lightShadowMask f_k.x
 #define u_maxLayers f_k.y
 #define u_relax f_k.z
@@ -159,12 +160,29 @@ void geoMove(inout vec4 p, inout vec4 d, float h) {
 }
 vec4 geoPoint(vec4 p, vec4 d, float h) { geoMove(p, d, h); return p; }
 
-// bump textures change the distance in the normal phase: its centre sample is taken again
+// bump: the normal phase also samples the relief (g_bumpH, summed by the leaves' bump textures) at
+// the hit and BUMP_W further along each axis, wider than the geometry's samples, so hard-edged
+// patterns (checkers, stripes) get bevels instead of a slope only along their edges
 #ifdef SCENE_BUMP
-#define NORMAL_K0 0
+#define NORMAL_END 10
 #else
-#define NORMAL_K0 1
+#define NORMAL_END 5
 #endif
+#define BUMP_W (0.012 + 0.002 * t)
+// debug views (Settings > Rendering > View): one material value at the hit
+vec3 debugView(int v, MAT m, vec4 n, float bh) {
+  float g = 0.0;
+  if (v == 1) return m[0].rgb;                 // colour
+  if (v == 2) g = m[1].y;                      // roughness
+  if (v == 3) g = m[2].x;                      // metallic
+  if (v == 4) g = m[1].z * 0.5;                // specular (0..2)
+  if (v == 5) g = m[1].x;                      // emission
+  if (v == 6) g = m[1].w;                      // transparency
+  if (v == 7) g = 0.5 + bh * 10.0;             // bump relief (world units: +-0.05 = white / black)
+  if (v == 8) return n.xyz * 0.5 + 0.5;        // shading normal (after bump)
+  if (v == 9) g = m[2].w;                      // the colour texture's mask
+  return vec3(clamp(g, 0.0, 1.0));
+}
 bool g_noBody = false;     // primary ray still inside the player's own body
 bool g_noDbg = false;      // primary ray still next to the eye (the debug ray may pass through it)
 
@@ -427,7 +445,8 @@ void main() {
   bool hit = false, inside = false, exiting = false, toSky = true;
   MAT hm = MAT(0.0);
   vec4 hp = p, n = vec4(0.0);
-  float nv[5];
+  float nv[5], bv[5];
+  float bumpHit = 0.0;
   float occ = 0.0, aow = 1.0;
   vec4 sp = vec4(0.0), sdir = vec4(0.0), slp = vec4(0.0);  // shadow ray: point, direction, point light it homes in on
   float st = 0.0, sh = 1.0, shMax = 0.0;
@@ -450,9 +469,9 @@ void main() {
     if (phase == DONE) break;
     vec4 q = p;
 #ifdef VIEW_CURVED
-    if (phase == NORMAL) { q = hp; if (k > 0) { q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); } }
+    if (phase == NORMAL) { q = hp; if (k > 0 && k != 5) { if (k >= 6) q[k - 6] += BUMP_W / u_curvR; else q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); } }
 #else
-    if (phase == NORMAL) { q = hp; if (k > 0) q[k - 1] += 1e-3; }
+    if (phase == NORMAL) { q = hp; if (k >= 6) q[k - 6] += BUMP_W; else if (k > 0 && k < 5) q[k - 1] += 1e-3; }
 #endif
     else if (phase == AO) {
       vec4 ad = n;
@@ -478,8 +497,9 @@ void main() {
     g_noDbg = phase == MARCH && t < 0.12;
     // textures only near the surface: material ones for the hit, bump ones for the normal samples
     g_texMat = phase == MARCH && !inside;
-    g_texBump = phase == NORMAL;
-    g_texNear = phase == MARCH || phase == NORMAL ? u_eps * (1.0 + t * 0.02) * 3.0 + 3e-3 : -1.0;
+    g_texBump = phase == NORMAL && k >= 5;
+    g_texNear = phase == MARCH || phase == NORMAL ? u_eps * (1.0 + t * 0.02) * 3.0 + 3e-3 + (g_texBump ? BUMP_W : 0.0) : -1.0;
+    g_bumpH = 0.0;
     float d = map(q, mm);   // the only scene evaluation site
 
     bool advance = false, startLights = false;
@@ -490,7 +510,7 @@ void main() {
       if (inside) {  // travelling through a transparent object until its far side
         if (d > -u_eps * 0.5) {
           // reached the far side: find its normal, then bend the ray out of the object
-          exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = NORMAL_K0;
+          exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = 1;
         } else {
           h = max(-d, u_eps * 2.0);
 #ifdef VIEW_GEO
@@ -508,7 +528,7 @@ void main() {
         if (!sorFail && d < u_eps * (1.0 + t * 0.02)) {
           hit = true; hm = mm; hp = p; nv[0] = d;
           if (firstT < 0.0) firstT = t;
-          phase = NORMAL; k = NORMAL_K0;
+          phase = NORMAL; k = 1;
         } else if (t > u_maxDist || steps >= u_maxSteps) {
           phase = DONE;
         } else {
@@ -525,9 +545,15 @@ void main() {
         }
       }
     } else if (phase == NORMAL) {
-      nv[k] = d; k++;
-      if (k == 5) {
-        n = normalize(vec4(nv[1], nv[2], nv[3], nv[4]) - nv[0]);
+      if (k < 5) nv[k] = d; else bv[k - 5] = g_bumpH;
+      k++;
+      if (k == NORMAL_END) {
+        vec4 gd = (vec4(nv[1], nv[2], nv[3], nv[4]) - nv[0]) / 1e-3;
+#ifdef SCENE_BUMP
+        gd -= (vec4(bv[1], bv[2], bv[3], bv[4]) - bv[0]) / BUMP_W;  // the relief raises the surface: d - h
+        bumpHit = bv[0];
+#endif
+        n = normalize(gd);
 #ifdef VIEW_GEO
         n = normalize(n - dot(n, wn) * wn + 1e-6);
 #endif
@@ -548,6 +574,11 @@ void main() {
 #endif
           ro = p; rd = dir; t0 = t;
           omega = 1.0; prevR = 0.0; stepLen = 0.0;
+          continue;
+        }
+        if (u_view > 0) {  // debug views: one material value at the hit, nothing else
+          accum = pow(debugView(u_view, hm, n, bumpHit), vec3(2.2));
+          phase = DONE; toSky = false;
           continue;
         }
         occ = 0.0; aow = 1.0;
@@ -642,7 +673,8 @@ void main() {
 #endif
         // the rim light (the sky / world colour on grazing surfaces) is ambient light: it follows the
         // ambient setting (0.18 = default), so ambient 0 leaves only what the lights reach
-        vec3 lit = base * (u_ambient * ao + 0.9 * diffAcc) + specAcc + 0.12 * fre * ao * rim * (u_ambient / 0.18);
+        // (the sky's reflection on grazing surfaces grows with the specular value: 0.35 = as before)
+        vec3 lit = base * (u_ambient * ao + 0.9 * diffAcc) + specAcc + 0.12 * fre * ao * rim * (u_ambient / 0.18) * (clamp(hm[1].z, 0.0, 2.0) / 0.35);
         vec3 c = mix(lit, base, emissive);  // emissive: always fully lit, unshadowed
         c = mix(c, vec3(1.0, 0.6, 0.15), hm[0].a * (0.25 + 0.5 * fre));  // selection highlight
         float f = t / u_maxDist;
@@ -650,7 +682,8 @@ void main() {
         // no bounces left (or bounces off): mirrors and glass are drawn as plain surfaces, not dark
         bool canBounce = layers < u_maxLayers;
         float transp = canBounce ? clamp(hm[1].w, 0.0, 1.0) : 0.0;
-        float metal = canBounce ? clamp(hm[2].x, 0.0, 1.0) : 0.0;
+        // rough metal: part of its reflection is spread out (satin): drawn as its own lit colour
+        float metal = canBounce ? clamp(hm[2].x, 0.0, 1.0) * (1.0 - 0.75 * hm[1].y * hm[1].y) : 0.0;
         float wSurf = (1.0 - transp) * (1.0 - metal);  // the surface's own colour
         int path = 0;                                   // 0: stop here, 1: reflect, 2: refract
         vec3 tint = vec3(1.0);
@@ -733,7 +766,7 @@ void main() {
   }
 
   vec3 col = accum;
-  if (toSky) col += thr * sky(p, dir, rayWorldCol);  // the ray (or what continued of it) ended in the sky
+  if (toSky) col += u_view > 0 ? vec3(0.002) : thr * sky(p, dir, rayWorldCol);  // the ray (or what continued of it) ended in the sky
   float tGrid = firstT >= 0.0 ? firstT : 1e9;
   col = groundGrid(col, gro, grd, tGrid);
   col = pow(col, vec3(0.4545));
@@ -936,7 +969,8 @@ void main() {
   bool inside = false, exiting = false, toSky = true, glass = false;
   MAT hm = MAT(0.0);
   vec4 hp = p, n = vec4(0.0);
-  float nv[5];
+  float nv[5], bv[5];
+  float bumpHit = 0.0;
   vec4 sp = vec4(0.0), sdir = vec4(0.0);
   float st = 0.0, shMax = 0.0;
   int sSteps = 0;
@@ -966,9 +1000,9 @@ void main() {
     if (phase == DONE) break;
     vec4 q = p;
 #ifdef VIEW_CURVED
-    if (phase == NORMAL) { q = hp; if (k > 0) { q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); } }
+    if (phase == NORMAL) { q = hp; if (k > 0 && k != 5) { if (k >= 6) q[k - 6] += BUMP_W / u_curvR; else q[k - 1] += 1e-3 / u_curvR; if (abs(q.w) < 100.0) q = crenorm(q); } }
 #else
-    if (phase == NORMAL) { q = hp; if (k > 0) q[k - 1] += 1e-3; }
+    if (phase == NORMAL) { q = hp; if (k >= 6) q[k - 6] += BUMP_W; else if (k > 0 && k < 5) q[k - 1] += 1e-3; }
 #endif
     else if (phase == SHADOW) q = sp;
 
@@ -979,8 +1013,9 @@ void main() {
     g_noDbg = phase == MARCH && t < 0.12;
     // textures only near the surface: material ones for the hit, bump ones for the normal samples
     g_texMat = phase == MARCH && !inside;
-    g_texBump = phase == NORMAL;
-    g_texNear = phase == MARCH || phase == NORMAL ? u_eps * (1.0 + t * 0.02) * 3.0 + 3e-3 : -1.0;
+    g_texBump = phase == NORMAL && k >= 5;
+    g_texNear = phase == MARCH || phase == NORMAL ? u_eps * (1.0 + t * 0.02) * 3.0 + 3e-3 + (g_texBump ? BUMP_W : 0.0) : -1.0;
+    g_bumpH = 0.0;
     float d = map(q, mm);   // the only scene evaluation site
 
     bool advance = false, bounce = false;
@@ -989,7 +1024,7 @@ void main() {
 
     if (phase == MARCH) {
       if (inside) {  // through a transparent object until its far side
-        if (d > -u_eps * 0.5) { exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = NORMAL_K0; }
+        if (d > -u_eps * 0.5) { exiting = true; hp = p; nv[0] = d; phase = NORMAL; k = 1; }
         else {
           h = max(-d, u_eps * 2.0);
 #ifdef VIEW_GEO
@@ -1007,7 +1042,7 @@ void main() {
         if (!sorFail && d < u_eps * (1.0 + t * 0.02)) {
           hm = mm; hp = p; nv[0] = d;
           if (firstT < 0.0) firstT = t;
-          phase = NORMAL; k = NORMAL_K0;
+          phase = NORMAL; k = 1;
         } else if (t > u_maxDist || steps >= u_maxSteps) {
           phase = DONE;
         } else {
@@ -1024,9 +1059,15 @@ void main() {
         }
       }
     } else if (phase == NORMAL) {
-      nv[k] = d; k++;
-      if (k == 5) {
-        n = normalize(vec4(nv[1], nv[2], nv[3], nv[4]) - nv[0]);
+      if (k < 5) nv[k] = d; else bv[k - 5] = g_bumpH;
+      k++;
+      if (k == NORMAL_END) {
+        vec4 gd = (vec4(nv[1], nv[2], nv[3], nv[4]) - nv[0]) / 1e-3;
+#ifdef SCENE_BUMP
+        gd -= (vec4(bv[1], bv[2], bv[3], bv[4]) - bv[0]) / BUMP_W;  // the relief raises the surface: d - h
+        bumpHit = bv[0];
+#endif
+        n = normalize(gd);
 #ifdef VIEW_GEO
         n = normalize(n - dot(n, wn) * wn + 1e-6);
 #endif
