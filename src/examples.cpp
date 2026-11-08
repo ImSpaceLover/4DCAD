@@ -106,7 +106,7 @@ SceneFile materialsScene() {
   Node m = ball("Metallic 0-1 checker", X0 + 2 * DX, 0, 0.85, {0.9, 0.72, 0.35});
   m.mat.metallic = 0; m.mat.roughness = 0.15;
   m.mat.tex[CH_METALLIC] = checker(1);
-  Node sp = ball("Specular 0-1 checker", X0 + 3 * DX, 0, 0.85, {0.35, 0.4, 0.5});
+  Node sp = ball("Specular 0-1 checker", X0 + 3 * DX, 0, 0.85, {0.03, 0.03, 0.04});  // (dark: the reflection is what shows)
   sp.mat.specular = 0; sp.mat.roughness = 0.15;
   sp.mat.tex[CH_SPECULAR] = checker(1);
   Node e = ball("Emission 0-1 checker", X0 + 4 * DX, 0, 0.85, {1.0, 0.55, 0.2});
@@ -125,7 +125,7 @@ SceneFile materialsScene() {
       {"Colour", {0.12, 0.12, 0.12}, nullptr},
       {"Roughness", {0.85, 0.85, 0.9}, [](Material& mm, double v) { mm.metallic = 1; mm.roughness = v < 0.5 ? 0.05 : 1; }},
       {"Metallic", {0.9, 0.72, 0.35}, [](Material& mm, double v) { mm.metallic = v; mm.roughness = 0.15; }},
-      {"Specular", {0.35, 0.4, 0.5}, [](Material& mm, double v) { mm.specular = v; mm.roughness = 0.15; }},
+      {"Specular", {0.03, 0.03, 0.04}, [](Material& mm, double v) { mm.specular = v; mm.roughness = 0.15; }},
       {"Emission", {1.0, 0.55, 0.2}, [](Material& mm, double v) { mm.emissive = v; mm.emissionStrength = 3; }},
       {"Transparency", {0.6, 0.8, 1.0}, [](Material& mm, double v) { mm.transparency = v * 0.9; mm.roughness = 0.1; }},
       {"Bump", {0.75, 0.75, 0.75}, [](Material& mm, double) { mm.roughness = 0.3; mm.specular = 0.8; }},
