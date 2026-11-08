@@ -31,7 +31,9 @@ grow its history with every build).
 **Versions and releases:** the version is set in `CMakeLists.txt` (`project(4DCAD VERSION 1.0.0)`)
 and listed in [CHANGELOG.md](CHANGELOG.md); the title bar, Help and `4DCAD --version` show it, and
 scene files record the version that saved them. Pushing a tag `v<version>` (e.g. `v1.0`) publishes a
-GitHub Release "4DCAD <version>" whose notes are that version's changelog section, with:
+GitHub Release "4DCAD <version>" whose notes are that version's changelog section (or run the Build
+workflow by hand, Actions > Build > Run workflow, with "release" set to the version: the release then
+creates the tag), with:
 * `4DCAD-<version>-windows.zip` and `4DCAD-<version>-linux.tar.gz`: the program, README, CHANGELOG
   and a `library` folder: `Examples/`, `Worlds/` and `Showcase/` scenes (File > Open),
   `Modifiers/*.4dmod.json` and `Textures/*.4dtex.json` (every built-in definition, as editable
