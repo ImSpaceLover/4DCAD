@@ -316,6 +316,7 @@ FrameUniforms frameUniforms(const FrameParams& fp, int w, int h) {
   std::memcpy(u.e, ee, sizeof ee);
   u.f[0] = std::max(0.f, q.skyIntensity);
   u.f[1] = q.light4D == 1 ? 1.f : 0.f;
+  u.f[2] = (float)std::clamp(q.debugView, 0, 9);
   std::memcpy(u.i, ii, sizeof ii);
   std::memcpy(u.j, jj, sizeof jj);
   std::memcpy(u.k, kk, sizeof kk);

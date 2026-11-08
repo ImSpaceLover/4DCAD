@@ -86,6 +86,8 @@ enum TextureType { TEX_NONE = 0, TEX_CHECKER, TEX_STRIPES, TEX_GRID, TEX_NOISE, 
 enum TexChannel { CH_COLOR = 0, CH_ROUGHNESS, CH_METALLIC, CH_SPECULAR, CH_EMISSION, CH_TRANSPARENCY, CH_BUMP, CH_COUNT };
 inline const char* CHANNEL_NAMES[CH_COUNT] = {"Colour", "Roughness", "Metallic", "Specular", "Emission", "Transparency", "Bump"};
 inline const char* CHANNEL_IDS[CH_COUNT] = {"color", "roughness", "metallic", "specular", "emission", "transparency", "bump"};
+// debug views of the viewport: one material value at each point (shaders.hpp debugView)
+inline const char* VIEW_NAMES[10] = {"Lit", "Colour", "Roughness", "Metallic", "Specular", "Emission", "Transparency", "Bump relief", "Normals", "Colour texture mask"};
 enum TexSpace { TS_OBJECT = 0, TS_WORLD, TS_PARENT, TS_COUNT };
 inline const char* TEX_SPACE_NAMES[TS_COUNT] = {"Object", "World", "Parent"};
 
@@ -260,6 +262,7 @@ struct QualitySettings {
   // moving / fast views use the simple model.
   int lighting = 0;
   float skyIntensity = 1.0f;      // path traced: brightness of the sky's light (0 = black)
+  int debugView = 0;              // the viewport shows one material value (VIEW_NAMES); not saved
   // path traced images: display (applied after averaging the samples)
   float exposure = 0.0f;          // stops (x 2^exposure)
   int tonemap = 1;                // 0 = clip, 1 = filmic (ACES): bright light rolls off instead of burning out

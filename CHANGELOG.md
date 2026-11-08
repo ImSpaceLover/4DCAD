@@ -4,6 +4,29 @@ Versions follow `project(4DCAD VERSION ...)` in CMakeLists.txt; `4DCAD --version
 running one, and scene files record the version that saved them (`appVersion`). Pushing a tag
 `v<version>` builds the release (see README > Releases).
 
+## 1.0.1
+
+### Materials
+- **Debug views** (toolbar "View", Settings > Rendering): the viewport shows one material setting on
+  its own: colour, roughness, metallic, specular, emission, transparency, bump relief, normals or
+  the colour texture's mask (grey: 0 = black, 1 = white), to check what textures do.
+- **Bump works with hard-edged patterns:** the relief is sampled separately and wider than the
+  geometry, so checkers, stripes, grids and bricks give bevelled reliefs (before, their relief only
+  sloped along a hair-thin line at each edge, so it looked like nothing). Bump never changes the
+  shape: clicks, collisions and silhouettes stay as they are.
+- **Roughness and specular show in simple lighting:** rough metal spreads its reflection (satin),
+  and specular scales the sky's reflection on grazing surfaces (0.35, the default, looks as before).
+  Roughness / metallic textures always reached the renderer; they were hard to see.
+- **New Material panel:** one row per channel (value + texture button); the selected channel's
+  texture opens below with its value where the pattern is 0 and where it is 1, a preview strip,
+  the pattern's parameters, **Placement** and **Adjust pattern**. The colour's texture is in the
+  table like the others (shown once).
+- New textures start with a clear 0 -> 1 range.
+
+### Examples
+- **Materials** (File > Examples): every channel with a plain 0-1 checker, a reference row with each
+  channel at 0 and at 1, and surroundings to reflect. The release library has all examples as files.
+
 ## 1.0
 
 The first numbered release. Everything below is new compared with the unversioned builds.

@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
   double turnDeg = 0, strafe = 0;
   Backend forceBackend = Backend::Auto;
   int frames = 30, W = 1600, H = 900;
+  int debugViewArg = 0;
   std::string renderOut, newSpace;
   bool renderAnim = false;
   int renderW = 0, renderH = 0, renderSamples = -1, renderAA = -1;
@@ -84,6 +85,7 @@ int main(int argc, char** argv) {
       return 0;
     }
     if (a == "--example" && i + 1 < argc) example = argv[++i];
+    else if (a == "--view" && i + 1 < argc) debugViewArg = std::atoi(argv[++i]);  // debug view (testing): 1 colour .. 9
     else if (a == "--geo") startGeo = true;
     else if (a == "--select" && i + 1 < argc) selectName = argv[++i];
     else if (a == "--tool" && i + 1 < argc) toolName = argv[++i];
@@ -239,6 +241,7 @@ int main(int argc, char** argv) {
   std::string err;
   if (!sceneArg.empty() && !app.loadSceneFile(sceneArg, err)) app.toast(err, true);
   for (auto& ex : EXAMPLES) if (example == ex.id) app.loadScene(ex.make());
+  app.quality.debugView = debugViewArg;
   if (!newSpace.empty()) {  // --new hyperbolic[:R] | spherical[:R] | flat
     std::string kind = newSpace.substr(0, newSpace.find(':'));
     double r = newSpace.find(':') != std::string::npos ? std::atof(newSpace.substr(newSpace.find(':') + 1).c_str()) : 8;

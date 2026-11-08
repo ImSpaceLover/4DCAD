@@ -266,12 +266,12 @@ void App::renderFrame() {
   }
   float scale = std::clamp(prof.resolution, 0.1f, 2.0f);
   // progressive stochastic refinement while nothing changes (Edit mode, main settings)
-  bool refine = q.stochastic && !moving && !fast && mode == Mode::Edit && q.viewportSamples > 1;
+  bool refine = q.stochastic && !moving && !fast && mode == Mode::Edit && q.viewportSamples > 1 && q.debugView == 0;
   std::ostringstream key;
   key.precision(9);
   for (double x : v.eye) key << x << ',';
   for (double x : v.frame) key << x << ',';
-  key << version_ << '|' << geo << (int)mode << '|' << vpW << 'x' << vpH << '|' << scale << '|' << fov() << '|' << q.maxSteps << q.shadows << q.ao
+  key << q.debugView << version_ << '|' << geo << (int)mode << '|' << vpW << 'x' << vpH << '|' << scale << '|' << fov() << '|' << q.maxSteps << q.shadows << q.ao
       << q.geoMaxStep << q.geoProjectIters << q.maxDistFull << q.maxDistGeo << q.eps << q.stepScale << q.shadowK << q.shadowMax << q.aoStrength
       << q.fog << q.ambient << q.lightYaw << q.lightPitch << q.lightW << q.skyTop[0] << q.skyTop[1] << q.skyTop[2] << q.skyBottom[0]
       << q.skyBottom[1] << q.skyBottom[2] << q.grid << exploreSet.showOwnBody << exploreSet.bodyRadius << '|';

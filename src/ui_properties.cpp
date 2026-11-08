@@ -232,100 +232,156 @@ static bool curveEditor(std::vector<std::array<double, 2>>& pts, bool& done) {
   return changed;
 }
 
+// the texture list of a channel (popup body); returns true when one was picked
+static bool texturePicker(TexSlot& t, int ch, const std::string& skipId) {
+  bool picked = false;
+  std::string cat;
+  for (auto& td : defs().textures()) {
+    if (td->id.rfind("__", 0) == 0 || (!skipId.empty() && td->id == skipId)) continue;  // (internal / itself)
+    std::string c = td->category.empty() ? "Custom" : td->category;
+    if (c != cat) { ImGui::SeparatorText(c.c_str()); cat = c; }
+    std::string nm = td->name + (textureKind(*td) != TEXK_MASK ? "  (colour)" : "");
+    if (ImGui::Selectable(nm.c_str(), t.def == td->id)) {
+      bool fresh = !t.used();
+      t.def = td->id;
+      t.params.clear();
+      conformValues(t.params, td->params);
+      if (fresh) {  // a clear 0 -> 1 range to start with
+        t.value2 = ch == CH_BUMP ? 0.03 : ch == CH_TRANSPARENCY ? 0.9 : 1.0;
+        t.strength = 1;
+      }
+      picked = true;
+    }
+    if (!td->description.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", td->description.c_str());
+  }
+  return picked;
+}
+
+// the base value of a channel (the row value, = "where the pattern is 0")
+static double* channelValue(Material& m, int ch) {
+  switch (ch) {
+    case CH_ROUGHNESS: return &m.roughness;
+    case CH_METALLIC: return &m.metallic;
+    case CH_SPECULAR: return &m.specular;
+    case CH_EMISSION: return &m.emissive;
+    case CH_TRANSPARENCY: return &m.transparency;
+    default: return nullptr;
+  }
+}
+static const char* channelPath(int ch) {
+  switch (ch) {
+    case CH_ROUGHNESS: return "mat.roughness";
+    case CH_METALLIC: return "mat.metallic";
+    case CH_SPECULAR: return "mat.specular";
+    case CH_EMISSION: return "mat.emissive";
+    case CH_TRANSPARENCY: return "mat.transparency";
+    default: return "";
+  }
+}
+static const char* channelTip(int ch) {
+  switch (ch) {
+    case CH_COLOR: return "The surface colour";
+    case CH_ROUGHNESS: return "0 = sharp highlights and reflections, 1 = matte (spread out)";
+    case CH_METALLIC: return "0 = plain, 1 = mirror tinted by the colour";
+    case CH_SPECULAR: return "Strength of highlights and of the sky's reflection on grazing surfaces (0..2)";
+    case CH_EMISSION: return "Glows. Simple lighting: always lit, lights its surroundings as a point light.\nPath-traced lighting: a real light source of its own shape";
+    case CH_TRANSPARENCY: return "See-through surfaces (bounces per pixel: Settings > Rendering)";
+    case CH_BUMP: return "Relief from a texture: changes the lighting only (the shape, clicks and collisions are unchanged)";
+    default: return "";
+  }
+}
+
+// the selected channel's texture: pattern 0 / 1 values, its parameters, Placement, Adjust pattern
 void UI::textureSlot(Node& n, int ch, bool& live, bool& done) {
   TexSlot& t = n.mat.tex[ch];
   auto d = defs().texture(t.def);
+  if (!t.used() || !d) return;
   ImGui::PushID(1000 + ch);
-  std::string label = t.used() ? (d ? d->name : "Unknown (" + t.def + ")") : std::string("None");
-  ImGui::SetNextItemWidth(150);
-  std::string comboLab = std::string(ch == CH_BUMP ? "Bump" : app.texMode.active ? "Fill" : "Texture") + "##slot";
-  if (ImGui::BeginCombo(comboLab.c_str(), label.c_str())) {
-    if (ImGui::Selectable("None", !t.used())) { t.def.clear(); done = true; }
-    std::string cat;
-    for (auto& td : defs().textures()) {
-      if (td->id.rfind("__", 0) == 0 || td->id == app.texMode.texId && app.texMode.active) continue;  // (internal / itself)
-      std::string c = td->category.empty() ? "Custom" : td->category;
-      if (c != cat) { ImGui::SeparatorText(c.c_str()); cat = c; }
-      std::string nm = td->name + (textureKind(*td) != TEXK_MASK ? "  (colour)" : "");
-      if (ImGui::Selectable(nm.c_str(), t.def == td->id)) {
-        bool fresh = !t.used();
-        t.def = td->id;
-        t.params.clear();
-        conformValues(t.params, td->params);
-        if (fresh && ch == CH_BUMP) t.value2 = 0.02;  // a small relief
-        if (fresh && ch != CH_COLOR && ch != CH_BUMP) t.value2 = ch == CH_ROUGHNESS ? 0.15 : 1.0;
-        done = true;
-      }
-      if (!td->description.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", td->description.c_str());
-    }
-    ImGui::EndCombo();
-  }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip(ch == CH_COLOR ? "A procedural 4D texture: masks blend to the second colour, colour textures give the colour"
-                      : ch == CH_BUMP ? "Relief that changes the lighting only (the shape, clicks and collisions are unchanged)"
-                                      : "Blends this value to the second value where the texture's mask is 1");
-  d = defs().texture(t.def);
-  if (!t.used() || !d) { ImGui::PopID(); return; }
   std::string nid = n.id, pre = std::string("tex.") + CHANNEL_IDS[ch] + ".";
   auto key = [&](const std::vector<std::string>& paths) { keyable(nid, paths); };
   auto track = [&] { if (ImGui::IsItemEdited()) live = true; if (ImGui::IsItemDeactivatedAfterEdit()) done = true; };
-  ImGui::Indent(12);
-  conformValues(t.params, d->params);
-  paramWidgets(d->params, [&](int i, int c) { return paramValue(t.params, d->params, i, c); },
-               [&](int i, double v, int c) { setParamValue(t.params, d->params, i, v, c); }, pre + "p.", key, live, done);
+  const char* chName = app.texMode.active && ch == CH_COLOR ? "Fill" : CHANNEL_NAMES[ch];
+  ImGui::SeparatorText((std::string(chName) + " texture: " + d->name).c_str());
+  if (ImGui::SmallButton("Change")) ImGui::OpenPopup("pick");
+  if (ImGui::BeginPopup("pick")) {
+    if (texturePicker(t, ch, app.texMode.active ? app.texMode.texId : "")) done = true;
+    ImGui::EndPopup();
+  }
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Remove")) { t.def.clear(); done = true; ImGui::PopID(); return; }
+  d = defs().texture(t.def);
+  if (!d) { ImGui::PopID(); return; }
+  if (!d->description.empty()) { ImGui::SameLine(); ImGui::TextDisabled("(?)"); if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", d->description.c_str()); }
   TexKind kind = textureKind(*d);
+  // what the pattern does: the value where it is 0 (the row value) and where it is 1
+  const float W = 150;
+  ImGui::TextDisabled("%s where the pattern is:", ch == CH_BUMP ? "Relief" : app.texMode.active && ch == CH_COLOR ? "Colour" : CHANNEL_NAMES[ch]);
   if (ch == CH_COLOR) {
+    float c0[3] = {(float)n.color[0], (float)n.color[1], (float)n.color[2]};
+    ImGui::SetNextItemWidth(W + 30);
+    if (ImGui::ColorEdit3("at 0", c0)) for (int k = 0; k < 3; k++) n.color[k] = c0[k];
+    track();
+    key({"color.r", "color.g", "color.b"});
     if (kind == TEXK_MASK) {
       float c2[3] = {(float)t.color2[0], (float)t.color2[1], (float)t.color2[2]};
-      ImGui::SetNextItemWidth(180);
-      if (ImGui::ColorEdit3("Second colour", c2)) for (int k = 0; k < 3; k++) t.color2[k] = c2[k];
+      ImGui::SetNextItemWidth(W + 30);
+      if (ImGui::ColorEdit3("at 1", c2)) for (int k = 0; k < 3; k++) t.color2[k] = c2[k];
       track();
       key({pre + "color2.r", pre + "color2.g", pre + "color2.b"});
-    }
-  } else {
+    } else ImGui::TextDisabled(kind == TEXK_RGBA ? "Colours from the texture, where it covers the surface" : "Colours from the texture");
+  } else if (ch == CH_BUMP) {
+    ImGui::TextDisabled("  at 0: flat");
     float v2 = (float)t.value2;
-    ImGui::SetNextItemWidth(120);
-    if (ch == CH_BUMP) { if (ImGui::DragFloat("Height", &v2, 0.001f, -1.f, 1.f, "%.4f")) t.value2 = v2; }
-    else if (ImGui::SliderFloat("Second value", &v2, 0, ch == CH_SPECULAR ? 2.f : 1.f)) t.value2 = v2;
+    ImGui::SetNextItemWidth(W);
+    if (ImGui::DragFloat("at 1 (height)", &v2, 0.001f, -0.5f, 0.5f, "%.4f")) t.value2 = v2;
     track();
     key({pre + "value2"});
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip(ch == CH_BUMP ? "Relief height where the mask is 1 (negative: dents)" : "The value where the mask is 1");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Height of the relief in the object's units (negative: dents). Hard edges get a small bevel.");
+  } else {
+    float hi = ch == CH_SPECULAR ? 2.f : 1.f;
+    double* base = channelValue(n.mat, ch);
+    float v0 = (float)*base, v2 = (float)t.value2;
+    ImGui::SetNextItemWidth(W);
+    if (ImGui::SliderFloat("at 0", &v0, 0, hi)) *base = v0;
+    track();
+    key({channelPath(ch)});
+    ImGui::SetNextItemWidth(W);
+    if (ImGui::SliderFloat("at 1", &v2, 0, hi)) t.value2 = v2;
+    track();
+    key({pre + "value2"});
   }
-  float st = (float)t.strength;
-  ImGui::SetNextItemWidth(120);
-  if (ImGui::SliderFloat("Strength", &st, 0, 1)) t.strength = st;
-  track();
-  key({pre + "strength"});
-  // remap (the mask: colour textures without coverage use their brightness)
-  if (ImGui::TreeNode("Remap")) {
-    float lo = (float)t.low, hi = (float)t.high, ct = (float)t.contrast;
-    ImGui::SetNextItemWidth(120);
-    if (ImGui::DragFloat("Low", &lo, 0.005f, -1.f, 2.f, "%.3f")) t.low = lo;
-    track(); key({pre + "low"});
-    ImGui::SetNextItemWidth(120);
-    if (ImGui::DragFloat("High", &hi, 0.005f, -1.f, 2.f, "%.3f")) t.high = hi;
-    track(); key({pre + "high"});
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Masks from Low to High map to 0..1 (clamped)");
-    ImGui::SetNextItemWidth(120);
-    if (ImGui::SliderFloat("Contrast", &ct, -1, 1)) t.contrast = ct;
-    track(); key({pre + "contrast"});
-    if (ImGui::Checkbox("Invert", &t.invert)) done = true;
-    if (curveEditor(t.curve, done)) live = true;
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Reset curve")) { t.curve.clear(); done = true; }
-    // the mapped mask, 0 -> 1
+  // the result along the pattern 0 -> 1 (after Adjust pattern)
+  {
     ImVec2 p0 = ImGui::GetCursorScreenPos();
-    float w = std::min(220.f, ImGui::GetContentRegionAvail().x);
-    for (int k = 0; k < 64; k++) {
-      int g = (int)std::lround(255 * std::clamp(texRemap(t, (k + 0.5) / 64.0), 0.0, 1.0));
-      ImGui::GetWindowDrawList()->AddRectFilled({p0.x + w * k / 64, p0.y}, {p0.x + w * (k + 1) / 64 + 1, p0.y + 10}, IM_COL32(g, g, g, 255));
+    float w = std::min(240.f, ImGui::GetContentRegionAvail().x);
+    for (int k = 0; k < 48; k++) {
+      double m = std::clamp(texRemap(t, (k + 0.5) / 48.0), 0.0, 1.0) * t.strength;
+      ImU32 col;
+      if (ch == CH_COLOR) {
+        std::array<double, 3> a = n.color, b = kind == TEXK_MASK ? t.color2 : std::array<double, 3>{1, 1, 1};
+        col = IM_COL32((int)(255 * (a[0] + (b[0] - a[0]) * m)), (int)(255 * (a[1] + (b[1] - a[1]) * m)), (int)(255 * (a[2] + (b[2] - a[2]) * m)), 255);
+      } else {
+        double* base = channelValue(n.mat, ch);
+        double b0 = base ? *base : 0, v = b0 + (t.value2 - b0) * m;
+        double hi = ch == CH_SPECULAR ? 2 : ch == CH_BUMP ? std::max(1e-6, std::abs(t.value2)) * 2 : 1;
+        int g = (int)std::lround(255 * std::clamp(ch == CH_BUMP ? 0.5 + v / hi : v / hi, 0.0, 1.0));
+        col = IM_COL32(g, g, g, 255);
+      }
+      ImGui::GetWindowDrawList()->AddRectFilled({p0.x + w * k / 48, p0.y}, {p0.x + w * (k + 1) / 48 + 1, p0.y + 9}, col);
     }
-    ImGui::Dummy({w, 12});
-    ImGui::TreePop();
+    ImGui::Dummy({w, 11});
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The result from pattern 0 (left) to 1 (right)");
   }
-  // mapping: the texture coordinates
-  if (ImGui::TreeNode("Mapping")) {
-    std::vector<std::string> fromNames{"Own"};
+  // the texture's own parameters
+  conformValues(t.params, d->params);
+  if (!d->params.empty()) {
+    ImGui::TextDisabled("Pattern");
+    paramWidgets(d->params, [&](int i, int c) { return paramValue(t.params, d->params, i, c); },
+                 [&](int i, double v, int c) { setParamValue(t.params, d->params, i, v, c); }, pre + "p.", key, live, done);
+  }
+  // placement: the texture coordinates
+  if (ImGui::TreeNode("Placement")) {
+    std::vector<std::string> fromNames{"Its own"};
     std::vector<int> fromCh{-1};
     for (int c = 0; c < CH_COUNT; c++)
       if (c != ch && n.mat.tex[c].used() && n.mat.tex[c].mapFrom < 0) { fromNames.push_back(std::string("Same as ") + CHANNEL_NAMES[c]); fromCh.push_back(c); }
@@ -333,36 +389,34 @@ void UI::textureSlot(Node& n, int ch, bool& live, bool& done) {
     for (int k = 0; k < (int)fromCh.size(); k++) if (fromCh[k] == t.mapFrom) cur = k;
     std::vector<const char*> fn;
     for (auto& s2 : fromNames) fn.push_back(s2.c_str());
-    ImGui::SetNextItemWidth(150);
-    if (ImGui::Combo("Use mapping", &cur, fn.data(), (int)fn.size())) { t.mapFrom = fromCh[cur]; done = true; }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Share another channel's mapping so their patterns stay aligned");
+    ImGui::SetNextItemWidth(W);
+    if (ImGui::Combo("Placement", &cur, fn.data(), (int)fn.size())) { t.mapFrom = fromCh[cur]; done = true; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Share another channel's placement so their patterns line up");
     if (t.mapFrom < 0) {
       TexMapping& m = t.map;
-      ImGui::SetNextItemWidth(120);
-      if (ImGui::Combo("Space", &m.space, TEX_SPACE_NAMES, TS_COUNT)) done = true;
+      ImGui::SetNextItemWidth(W);
+      if (ImGui::Combo("Attached to", &m.space, TEX_SPACE_NAMES, TS_COUNT)) done = true;
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Object: moves and turns with the object. World: fixed in space. Parent: shared by a group's objects.\n"
-                          "Curved spaces use object space.");
+                          "Curved spaces use the object.");
       float sc = (float)m.scale;
-      ImGui::SetNextItemWidth(120);
-      if (ImGui::DragFloat("Scale", &sc, 0.01f, 0.001f, 1000.f, "%.3f")) m.scale = std::max(0.001f, sc);
+      ImGui::SetNextItemWidth(W);
+      if (ImGui::DragFloat("Cells per unit", &sc, 0.01f, 0.001f, 1000.f, "%.3f")) m.scale = std::max(0.001f, sc);
       track(); key({pre + "scale"});
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pattern cells per unit");
       float as[4], of[4];
       for (int k = 0; k < 4; k++) { as[k] = (float)m.axisScale[k]; of[k] = (float)m.offset[k]; }
       ImGui::SetNextItemWidth(220);
-      if (ImGui::DragFloat4("Axis scale", as, 0.01f, 0.001f, 1000.f, "%.2f")) for (int k = 0; k < 4; k++) m.axisScale[k] = std::max(0.001f, as[k]);
+      if (ImGui::DragFloat4("Stretch X Y Z W", as, 0.01f, 0.001f, 1000.f, "%.2f")) for (int k = 0; k < 4; k++) m.axisScale[k] = std::max(0.001f, as[k]);
       track(); key({pre + "axisScale.x", pre + "axisScale.y", pre + "axisScale.z", pre + "axisScale.w"});
       ImGui::SetNextItemWidth(220);
       if (ImGui::DragFloat4("Offset", of, 0.01f, -1000.f, 1000.f, "%.2f")) for (int k = 0; k < 4; k++) m.offset[k] = of[k];
       track(); key({pre + "offset.x", pre + "offset.y", pre + "offset.z", pre + "offset.w"});
-      // rotation: the 3D planes first, then the planes through W
       float r3[3] = {(float)m.rot[0], (float)m.rot[1], (float)m.rot[3]}, rw[3] = {(float)m.rot[2], (float)m.rot[4], (float)m.rot[5]};
       ImGui::SetNextItemWidth(220);
-      if (ImGui::DragFloat3("Rotate XY XZ YZ", r3, 0.5f, -360.f, 360.f, "%.1f")) { m.rot[0] = r3[0]; m.rot[1] = r3[1]; m.rot[3] = r3[2]; }
+      if (ImGui::DragFloat3("Turn XY XZ YZ", r3, 0.5f, -360.f, 360.f, "%.1f")) { m.rot[0] = r3[0]; m.rot[1] = r3[1]; m.rot[3] = r3[2]; }
       track(); key({pre + "rot.XY", pre + "rot.XZ", pre + "rot.YZ"});
       ImGui::SetNextItemWidth(220);
-      if (ImGui::DragFloat3("Rotate XW YW ZW", rw, 0.5f, -360.f, 360.f, "%.1f")) { m.rot[2] = rw[0]; m.rot[4] = rw[1]; m.rot[5] = rw[2]; }
+      if (ImGui::DragFloat3("Turn XW YW ZW", rw, 0.5f, -360.f, 360.f, "%.1f")) { m.rot[2] = rw[0]; m.rot[4] = rw[1]; m.rot[5] = rw[2]; }
       track(); key({pre + "rot.XW", pre + "rot.YW", pre + "rot.ZW"});
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turns the pattern through the fourth dimension");
       if (m.space == TS_OBJECT && ImGui::Button("Fit to object")) {
@@ -381,11 +435,33 @@ void UI::textureSlot(Node& n, int ch, bool& live, bool& done) {
           done = true;
         }
       }
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale and offset so that one cell of the pattern covers the object");
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("One cell of the pattern covers the object");
     }
     ImGui::TreePop();
   }
-  ImGui::Unindent(12);
+  // adjust pattern: how the pattern's values map to 0..1
+  if (ImGui::TreeNode("Adjust pattern")) {
+    float lo = (float)t.low, hi = (float)t.high, ct = (float)t.contrast, st = (float)t.strength;
+    ImGui::SetNextItemWidth(W);
+    if (ImGui::DragFloat("Low", &lo, 0.005f, -1.f, 2.f, "%.3f")) t.low = lo;
+    track(); key({pre + "low"});
+    ImGui::SetNextItemWidth(W);
+    if (ImGui::DragFloat("High", &hi, 0.005f, -1.f, 2.f, "%.3f")) t.high = hi;
+    track(); key({pre + "high"});
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pattern values from Low to High become 0..1 (clamped)");
+    ImGui::SetNextItemWidth(W);
+    if (ImGui::SliderFloat("Contrast", &ct, -1, 1)) t.contrast = ct;
+    track(); key({pre + "contrast"});
+    if (ImGui::Checkbox("Invert", &t.invert)) done = true;
+    ImGui::SetNextItemWidth(W);
+    if (ImGui::SliderFloat("Strength", &st, 0, 1)) t.strength = st;
+    track(); key({pre + "strength"});
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far the pattern goes toward its value at 1 (1 = all the way)");
+    if (curveEditor(t.curve, done)) live = true;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset curve")) { t.curve.clear(); done = true; }
+    ImGui::TreePop();
+  }
   ImGui::PopID();
 }
 
@@ -520,75 +596,95 @@ void UI::propertiesPanel() {
         }
       }
     }
-    ImGui::SeparatorText("Shape");
-    float c[3] = {(float)n->color[0], (float)n->color[1], (float)n->color[2]};
-    if (ImGui::ColorEdit3("Color", c)) for (int i = 0; i < 3; i++) n->color[i] = c[i];
-    keyable(nid, {"color.r", "color.g", "color.b"});
-    track();
-    mixed([](const Node& x) { return x.color; });
-    textureSlot(*n, CH_COLOR, live, done);
-    mixed([](const Node& x) { return x.mat.tex[CH_COLOR]; });
     if (dim < 4) {
+      ImGui::SeparatorText("Shape");
       float th = (float)n->thickness;
       if (ImGui::DragFloat("Thickness", &th, 0.005f, 0.001f, 10.f)) n->thickness = std::max(0.001f, th);
       keyable(nid, {"thickness"});
       track();
-    mixed([](const Node& x) { return x.thickness; });
+      mixed([](const Node& x) { return x.thickness; });
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Extent along the unused axes%s", n->anchor ? " (here: across the world surface)" : "");
     }
-    if (!app.texMode.active) {  // (texture editing mode: objects have a colour and a fill only)
+    // ---- material: one row per channel (value, texture), then the selected channel's texture ----
     ImGui::SeparatorText("Material");
-    float em = (float)n->mat.emissive;
-    if (ImGui::SliderFloat("Emissive", &em, 0, 1)) { bool was = n->mat.emissive > 0; n->mat.emissive = em; if (was != (em > 0)) done = true; }
-    keyable(nid, {"mat.emissive"});
-    track();
-    mixed([](const Node& x) { return x.mat.emissive; });
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Glows. Simple lighting: always lit, lights its surroundings as a point light.\n"
-                        "Path-traced lighting: a real light source of its own shape");
-    if (n->mat.emissive > 0) {
-      float es = (float)n->mat.emissionStrength;
-      if (ImGui::DragFloat("Emission strength", &es, 0.05f, 0.f, 200.f, "%.2f")) n->mat.emissionStrength = std::max(0.f, es);
-      track();
-      mixed([](const Node& x) { return x.mat.emissionStrength; });
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Path-traced lighting: how much light it gives (colour x emissive x strength)");
+    if (matSelNode_ != n->id) { matSelNode_ = n->id; matSel_ = -1; }
+    int rows = app.texMode.active ? 1 : CH_COUNT;  // (texture editing mode: a colour and a fill only)
+    if (ImGui::BeginTable("material", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
+      ImGui::TableSetupColumn("ch", ImGuiTableColumnFlags_WidthFixed, 92);
+      ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("tex", ImGuiTableColumnFlags_WidthFixed, 100);
+      for (int ch = 0; ch < rows; ch++) {
+        ImGui::PushID(ch);
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(ch == CH_EMISSION ? "Emission" : CHANNEL_NAMES[ch]);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", channelTip(ch));
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-28);
+        if (ch == CH_COLOR) {
+          float c[3] = {(float)n->color[0], (float)n->color[1], (float)n->color[2]};
+          if (ImGui::ColorEdit3("##v", c, ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoInputs)) for (int i = 0; i < 3; i++) n->color[i] = c[i];
+          track();
+          keyable(nid, {"color.r", "color.g", "color.b"});
+          mixed([](const Node& x) { return x.color; });
+        } else if (ch == CH_BUMP) {
+          ImGui::AlignTextToFramePadding();
+          ImGui::TextDisabled(n->mat.tex[CH_BUMP].used() ? "from texture" : "texture only");
+        } else {
+          double* v = channelValue(n->mat, ch);
+          float f = (float)*v;
+          bool wasEm = n->mat.emissive > 0;
+          if (ImGui::SliderFloat("##v", &f, 0, ch == CH_SPECULAR ? 2.f : 1.f)) *v = f;
+          if (ch == CH_EMISSION && wasEm != (n->mat.emissive > 0)) done = true;  // (emissive objects: structure)
+          track();
+          keyable(nid, {channelPath(ch)});
+          mixed([ch](const Node& x) { return *channelValue(const_cast<Material&>(x.mat), ch); });
+        }
+        ImGui::TableNextColumn();
+        TexSlot& t = n->mat.tex[ch];
+        auto td = t.used() ? defs().texture(t.def) : nullptr;
+        bool sel = matSel_ == ch && td;
+        if (td) {
+          std::string lab = td->name + "##t";
+          if (sel) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+          if (ImGui::Button(lab.c_str(), {-1, 0})) matSel_ = sel ? -1 : ch;
+          if (sel) ImGui::PopStyleColor();
+          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s texture: click to %s its settings", app.texMode.active ? "Fill" : CHANNEL_NAMES[ch], sel ? "close" : "show");
+        } else {
+          if (ImGui::Button(app.texMode.active ? "+ fill##t" : "+ texture##t", {-1, 0})) ImGui::OpenPopup("pick");
+          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Put a texture on %s", ch == CH_COLOR ? "the colour" : CHANNEL_NAMES[ch]);
+          if (ImGui::BeginPopup("pick")) {
+            if (texturePicker(t, ch, app.texMode.active ? app.texMode.texId : "")) { done = true; matSel_ = ch; }
+            ImGui::EndPopup();
+          }
+        }
+        if (others.size()) mixed([ch](const Node& x) { return x.mat.tex[ch]; });
+        ImGui::PopID();
+      }
+      ImGui::EndTable();
     }
-    textureSlot(*n, CH_EMISSION, live, done);
-    float ro = (float)n->mat.roughness, spc = (float)n->mat.specular, tr = (float)n->mat.transparency;
-    if (ImGui::SliderFloat("Roughness", &ro, 0, 1)) n->mat.roughness = ro;
-    keyable(nid, {"mat.roughness"});
-    track();
-    mixed([](const Node& x) { return x.mat.roughness; });
-    textureSlot(*n, CH_ROUGHNESS, live, done);
-    if (ImGui::SliderFloat("Specular", &spc, 0, 2)) n->mat.specular = spc;
-    keyable(nid, {"mat.specular"});
-    track();
-    mixed([](const Node& x) { return x.mat.specular; });
-    textureSlot(*n, CH_SPECULAR, live, done);
-    if (ImGui::SliderFloat("Transparency", &tr, 0, 1)) n->mat.transparency = tr;
-    keyable(nid, {"mat.transparency"});
-    track();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("See-through surfaces (bounces per pixel: Settings > Rendering)");
-    mixed([](const Node& x) { return x.mat.transparency; });
-    textureSlot(*n, CH_TRANSPARENCY, live, done);
-    if (n->mat.transparency > 0) {
-      float io = (float)n->mat.ior;
-      if (ImGui::SliderFloat("Refraction index", &io, 1.0f, 2.5f, "%.2f")) n->mat.ior = io;
-      keyable(nid, {"mat.ior"});
-      track();
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("How much light bends entering / leaving it: 1 = none, 1.33 water, 1.5 glass, 2.4 diamond");
-      mixed([](const Node& x) { return x.mat.ior; });
+    if (!app.texMode.active) {
+      // values that only matter for some materials
+      if (n->mat.emissive > 0 || n->mat.tex[CH_EMISSION].used()) {
+        float es = (float)n->mat.emissionStrength;
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::DragFloat("Emission strength", &es, 0.05f, 0.f, 200.f, "%.2f")) n->mat.emissionStrength = std::max(0.f, es);
+        track();
+        mixed([](const Node& x) { return x.mat.emissionStrength; });
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Path-traced lighting: how much light it gives (colour x emission x strength)");
+      }
+      if (n->mat.transparency > 0 || n->mat.tex[CH_TRANSPARENCY].used()) {
+        float io = (float)n->mat.ior;
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::SliderFloat("Refraction index", &io, 1.0f, 2.5f, "%.2f")) n->mat.ior = io;
+        keyable(nid, {"mat.ior"});
+        track();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("How much light bends entering / leaving it: 1 = none, 1.33 water, 1.5 glass, 2.4 diamond");
+        mixed([](const Node& x) { return x.mat.ior; });
+      }
     }
-    float me = (float)n->mat.metallic;
-    if (ImGui::SliderFloat("Metallic (mirror)", &me, 0, 1)) n->mat.metallic = me;
-    keyable(nid, {"mat.metallic"});
-    track();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflects the scene, tinted by the colour (1 = mirror)");
-    mixed([](const Node& x) { return x.mat.metallic; });
-    textureSlot(*n, CH_METALLIC, live, done);
-    textureSlot(*n, CH_BUMP, live, done);
-    mixed([](const Node& x) { return x.mat.tex[CH_BUMP]; });
-    }
+    if (matSel_ >= 0 && matSel_ < rows) textureSlot(*n, matSel_, live, done);
     if (n->isCustom()) {
       ImGui::SeparatorText("Custom SDF (GLSL)");
       if (codeEditId_ != n->id) { codeEditId_ = n->id; codeBuf_ = n->code; }

@@ -1,6 +1,7 @@
 // Core unit tests (no OpenGL). Run: ctest, or ./fdtests
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 #include <string>
 
 #include "animation.hpp"
@@ -1016,6 +1017,23 @@ int main() {
     bool listed = false;
     for (auto& av : animatableValues(leaf)) if (av.path == "tex.bump.value2") listed = true;
     CHECK(listed, "texture values are animatable");
+  }
+  {  // the Materials example: every channel with a checker; bump adds relief (shape unchanged); views
+    SceneFile mf = materialsScene();
+    std::set<int> chans;
+    walk(mf.root, [&](Node& n, Node*, int) { for (int c = 0; c < CH_COUNT; c++) if (n.mat.tex[c].used() && n.mat.tex[c].def == "checker" && n.id != "ground") chans.insert(c); });
+    CHECK((int)chans.size() == CH_COUNT, "the Materials example uses every channel (%d)", (int)chans.size());
+    auto cs = compileScene(mf.root, reg, "", false, nullptr);
+    CHECK(cs.glsl.find("g_bumpH += ") != std::string::npos && cs.glsl.find("SCENE_BUMP") != std::string::npos, "bump adds to the relief samples");
+    CHECK(cs.glsl.find("d -= ndatx") == std::string::npos, "bump leaves the distance alone (hits / clicks unchanged)");
+    CHECK(cs.glsl.find("t_cm = texRemap") != std::string::npos, "the colour mask reaches the material (debug view)");
+    std::string body = buildFragmentShader(cs.glsl, false, ShaderTarget::OpenGL);
+    CHECK(body.find("debugView(u_view, hm, n, bumpHit)") != std::string::npos && body.find("BUMP_W") != std::string::npos, "debug views and wide relief samples");
+    // the relief on the CPU: the checker's two plateaus
+    Node bu;
+    walk(mf.root, [&](Node& n, Node*, int) { if (n.mat.tex[CH_BUMP].used()) bu = n; });
+    double h0 = texturedChannel(bu, CH_BUMP, 4, {0.25, 0.25, 0.25, 0.25}, {}, {}), h1 = texturedChannel(bu, CH_BUMP, 4, {0.75, 0.25, 0.25, 0.25}, {}, {});
+    CHECK(std::min(h0, h1) == 0 && std::abs(std::max(h0, h1) - 0.03) < 1e-12, "bump plateaus 0 / 0.03 (%.3f %.3f)", h0, h1);
   }
   {  // textures made of shapes: a two-colour flag, exposed parameters, fills, cycles
     Node red = makeShape("tesseract", "Red", {-1, 0, 0, 0}, {1, 0, 0});
