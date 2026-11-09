@@ -89,7 +89,9 @@ inline const char* CHANNEL_IDS[CH_COUNT] = {"color", "roughness", "metallic", "s
 // denoisers of refined images (path tracing and simple lighting), guided by the surfaces' colour / depth
 inline const char* DENOISE_NAMES[5] = {"Off", "Edge-aware (wavelet)", "Bilateral", "Median (fireflies)", "Median + edge-aware"};
 // debug views of the viewport: one material value at each point (shaders.hpp debugView)
-inline const char* VIEW_NAMES[10] = {"Lit", "Colour", "Roughness", "Metallic", "Specular", "Emission", "Transparency", "Bump relief", "Normals", "Colour texture mask"};
+constexpr int VIEW_COUNT = 11;
+inline const char* VIEW_NAMES[VIEW_COUNT] = {"Lit", "Colour", "Roughness", "Metallic", "Specular", "Emission", "Transparency", "Bump relief", "Normals",
+                                             "Colour texture mask", "Cost (SDF evaluations)"};
 enum TexSpace { TS_OBJECT = 0, TS_WORLD, TS_PARENT, TS_COUNT };
 inline const char* TEX_SPACE_NAMES[TS_COUNT] = {"Object", "World", "Parent"};
 
@@ -214,6 +216,11 @@ struct RenderProfile {
   bool ao = false;          // ambient occlusion
   int aoSamples = 3;        // 1..5
   int shadowSteps = 24;     // max steps of a shadow ray
+  int upscale = 1;          // below full resolution: 0 = bilinear, 1 = sharp (bicubic + sharpening)
+  // dynamic resolution (the fast profile): lowers / raises the resolution to hold a frame rate
+  bool dynamicRes = false;
+  int targetFps = 60;
+  float minRes = 0.3f;      // lowest resolution it may go to (x the window)
   enum Preset { Fast, Balanced, Full };
   static RenderProfile preset(Preset p) {
     RenderProfile r;  // Fast
@@ -265,6 +272,8 @@ struct QualitySettings {
   int lighting = 0;
   float skyIntensity = 1.0f;      // path traced: brightness of the sky's light (0 = black)
   int debugView = 0;              // the viewport shows one material value (VIEW_NAMES); not saved
+  float costScale = 512;          // the Cost view: evaluations per pixel shown as red
+  int upscale = 1;                // below full resolution: 0 = bilinear, 1 = sharp
   // path traced images: display (applied after averaging the samples)
   float exposure = 0.0f;          // stops (x 2^exposure)
   int tonemap = 1;                // 0 = clip, 1 = filmic (ACES): bright light rolls off instead of burning out

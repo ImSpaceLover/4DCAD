@@ -4,6 +4,17 @@ Versions follow `project(4DCAD VERSION ...)` in CMakeLists.txt; `4DCAD --version
 running one, and scene files record the version that saved them (`appVersion`). Pushing a tag
 `v<version>` builds the release (see README > Releases).
 
+## 1.2.0
+
+- **Dynamic resolution** (Fast mode / Explore): holds a target frame rate by lowering the resolution
+  when frames are slow and raising it again when there is time to spare (down to a lowest
+  resolution; the status line shows the current value).
+- **Sharp upscaling:** below full resolution, the image is enlarged with a bicubic filter and edge
+  sharpening limited by the neighbouring pixels (no halos) instead of a plain stretch (Settings >
+  Rendering: Upscaling, for the main settings and Fast mode).
+- **Cost view** (toolbar View > Cost): a heat map of SDF evaluations per pixel, to find what makes a
+  scene slow.
+
 ## 1.1.0
 
 - **The look belongs to the scene:** the sun (intensity, direction, size), ambient light, sky colours

@@ -349,6 +349,21 @@ Settings > Rendering > **Lighting model** (saved, part of render presets):
 
 ## Performance
 
+**Faster Explore** (Settings > Rendering > Fast mode, used in Explore):
+* **Resolution** is the biggest lever (0.5x = about 4x fewer pixels). With **Upscaling: Sharp** (the
+  default) low resolutions are enlarged with a bicubic filter plus edge sharpening limited by the
+  neighbouring pixels (no halos), so 0.5x looks much closer to full resolution than a plain stretch.
+* **Dynamic resolution** lowers the resolution when frames are slower than the **Target fps** (down
+  to the **Lowest resolution**) and raises it again when there is time to spare; the status line shows
+  the current value. A frame rate limit below the target is respected.
+* Then bounces, ambient occlusion, sun / point-light shadows and their ray steps, textures and
+  highlights, max steps.
+* **View > Cost** (toolbar View combo): a heat map of how many SDF evaluations each pixel needed
+  (blue few, red = the scale next to the combo, white more), counting the ray march, normals,
+  shadows, AO and bounces. Hot areas show which objects, modifiers or effects are expensive: large
+  smooth blends, twists / bends / noise displacement (smaller steps), custom code, many repeats,
+  transparent objects.
+
 * **Per-scene shaders.** Each scene structure (the tree, operations, modifier
   types, primitives) is compiled into its own GLSL program. Every number
   (positions, colours, materials, sizes, extrusion lengths, repeat spacing,

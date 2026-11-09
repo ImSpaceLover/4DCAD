@@ -95,6 +95,13 @@ void UI::qualityWindow() {
       ImGui::SeparatorText("Performance");
       Ff("Resolution", q.resolutionScale, 0.25f, 2.f, "%.2fx");
       Ff("While moving", q.motionScale, 0.2f, 1.f, "%.2fx", "Resolution factor while the camera or objects move");
+      {
+        const char* ups[2] = {"Bilinear", "Sharp"};
+        ImGui::Combo("Upscaling", &q.upscale, ups, 2);
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Below full resolution: how the image is enlarged to the window.\n"
+                            "Sharp: bicubic with edge sharpening (no halos), a small extra pass. Bilinear: plain stretch");
+      }
       ImGui::SliderInt("Frame rate limit", &q.frameLimit, 0, 144, q.frameLimit == 0 ? "display rate" : "%d fps");
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Caps how often the app draws: less GPU / CPU load (laptops, slower PCs).\nImage / video renders also have a priority in the Render window.");
       ImGui::SeparatorText("Ray marching");
@@ -107,7 +114,7 @@ void UI::qualityWindow() {
       {
         const char* models[2] = {"Simple", "Path traced (PBR)"};
         ImGui::Combo("Lighting model", &q.lighting, models, 2);
-        ImGui::Combo("View", &q.debugView, VIEW_NAMES, 10);
+        ImGui::Combo("View", &q.debugView, VIEW_NAMES, VIEW_COUNT);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Debug views: one material setting on its own (also in the toolbar; not saved)");
         if (ImGui::IsItemHovered())
           ImGui::SetTooltip("Simple: sun, point lights and ambient light; glowing objects shine as point lights.\n"
@@ -176,6 +183,21 @@ void UI::qualityWindow() {
         ImGui::Checkbox("Also while moving in Edit mode", &q.fastWhileMovingInEdit);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Use these settings while the camera or objects move in Edit mode too (instead of \"While moving\")");
         Ff("Resolution##fast", f.resolution, 0.2f, 1.5f, "%.2fx");
+        {
+          const char* ups[2] = {"Bilinear", "Sharp"};
+          ImGui::Combo("Upscaling##fast", &f.upscale, ups, 2);
+          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sharp: bicubic with edge sharpening; low resolutions look much crisper");
+        }
+        ImGui::Checkbox("Dynamic resolution##fast", &f.dynamicRes);
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Lowers the resolution when frames are slower than the target and raises it again\n"
+                            "(up to the resolution above) when there is time to spare");
+        if (f.dynamicRes) {
+          ImGui::Indent();
+          ImGui::SliderInt("Target fps##fast", &f.targetFps, 20, 144);
+          Ff("Lowest resolution##fast", f.minRes, 0.1f, 1.f, "%.2fx");
+          ImGui::Unindent();
+        }
         ImGui::SliderInt("Max steps##fast", &f.maxSteps, 16, 512);
         ImGui::SliderInt("Bounces##fast", &f.bounces, 0, 6);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflections / refractions per pixel (0: mirrors and glass look like plain surfaces)");

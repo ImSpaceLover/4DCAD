@@ -84,10 +84,10 @@ class GLRenderer : public Renderer {
   const char* backendName() const override { return "OpenGL"; }
   void finish() override { gl::Finish(); }
   void flush() override { gl::Flush(); }
-  void post(int op, const RenderTarget& src, const RenderTarget* b, RenderTarget& dst, const float* p) override {
+  void post(int op, const RenderTarget& src, const RenderTarget* b, RenderTarget& dst, const float* p, int outW, int outH) override {
     if (src.id < 0 || op < 0 || op >= POST_COUNT || !post_[op].id) return;
     const PostProg& pp = post_[op];
-    int w = targets_[src.id].w, h = targets_[src.id].h;
+    int w = outW > 0 ? outW : targets_[src.id].w, h = outH > 0 ? outH : targets_[src.id].h;
     GLTarget& d = ensure(dst, w, h);
     GLTarget& s = targets_[src.id];
     GLuint btex = b && b->id >= 0 ? targets_[b->id].tex : s.tex;

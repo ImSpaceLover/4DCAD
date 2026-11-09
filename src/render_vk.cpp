@@ -359,9 +359,10 @@ class VKRenderer : public Renderer {
     });
   }
   void flushAndWait() override {}  // threaded draws are already finished (immediate)
-  void post(int op, const RenderTarget& src, const RenderTarget* bt, RenderTarget& dst, const float* pc) override {
+  void post(int op, const RenderTarget& src, const RenderTarget* bt, RenderTarget& dst, const float* pc, int outW, int outH) override {
     if (src.id < 0 || targets_[src.id].current < 0 || op < 0 || op >= POST_COUNT || !postPipe_[op]) return;
     int sw = targets_[src.id].v[targets_[src.id].current].w, sh = targets_[src.id].v[targets_[src.id].current].h;
+    if (outW > 0 && outH > 0) { sw = outW; sh = outH; }  // (the output size; the input is sampled by texel)
     VKImage& d = ensure(dst, sw, sh);
     VKImage& s = targets_[src.id].v[targets_[src.id].current];
     VkImageView bview = bt && bt->id >= 0 && targets_[bt->id].current >= 0 ? targets_[bt->id].v[targets_[bt->id].current].view : s.view;

@@ -215,10 +215,17 @@ void UI::toolbar() {
   // debug views: one material value at each point
   ImGui::SetNextItemWidth(150);
   int dv = app.quality.debugView;
-  if (ImGui::Combo("##view", &dv, VIEW_NAMES, 10)) app.quality.debugView = dv;
+  if (ImGui::Combo("##view", &dv, VIEW_NAMES, VIEW_COUNT)) app.quality.debugView = dv;
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("View: Lit, or one material setting on its own (grey: 0 = black, 1 = white; specular 0..2;\n"
-                      "bump relief: mid grey = 0; normals as colours), to check what textures do");
+                      "bump relief: mid grey = 0; normals as colours), to check what textures do.\n"
+                      "Cost: how many SDF evaluations each pixel needed (blue few .. red = the scale, white more)");
+  if (app.quality.debugView == 10) {
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(90);
+    ImGui::DragFloat("##costscale", &app.quality.costScale, 4.f, 16.f, 20000.f, "red = %.0f");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Evaluations per pixel shown as red (more: white)");
+  }
   ImGui::SameLine(0, 8);
   if (ImGui::Button("Settings")) showQuality_ = !showQuality_;
   if (app.dirty()) { ImGui::SameLine(); ImGui::TextColored({1, 0.75f, 0.3f, 1}, "unsaved"); }

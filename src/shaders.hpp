@@ -37,7 +37,7 @@ inline const char* FRAME_BLOCK = R"(
   ivec4 f_k;         // point light shadow mask, bounces, over-relaxation, AO samples
   ivec4 f_l;         // shadow ray steps, specular on, stochastic on, sample index
   vec4 f_e;          // lens aperture, focus distance, (accumulation weight: used by the renderer), curvature radius
-  vec4 f_f;          // sky intensity (path tracing), 4D light falloff, debug view, 0
+  vec4 f_f;          // sky intensity (path tracing), 4D light falloff, debug view, cost view scale
   vec4 u_lpos[8];    // point lights: 4D position
   vec4 u_lcol[8];    // rgb * intensity, range
   vec4 u_lext[8];    // radius, area light (emissive object, path tracing) / point light
@@ -78,6 +78,7 @@ inline const char* FRAME_DEFINES = R"(
 #define u_curvR f_e.w
 #define u_skyI f_f.x
 #define u_view int(f_f.z + 0.5)
+#define u_costScale f_f.w
 #define u_lightShadowMask f_k.x
 #define u_maxLayers f_k.y
 #define u_relax f_k.z
@@ -170,6 +171,17 @@ vec4 geoPoint(vec4 p, vec4 d, float h) { geoMove(p, d, h); return p; }
 #endif
 #define BUMP_W (0.012 + 0.002 * t)
 // debug views (Settings > Rendering > View): one material value at the hit
+// the Cost view: a heat map of SDF evaluations per pixel (blue -> cyan -> green -> yellow -> red -> white)
+vec3 heat(float x) {
+  x = max(x, 0.0);
+  if (x > 1.0) return mix(vec3(1.0, 0.0, 0.0), vec3(1.0), clamp(x - 1.0, 0.0, 1.0));
+  vec3 c0 = vec3(0.05, 0.1, 0.6), c1 = vec3(0.0, 0.8, 1.0), c2 = vec3(0.1, 0.9, 0.2), c3 = vec3(1.0, 0.9, 0.0), c4 = vec3(1.0, 0.0, 0.0);
+  float f = x * 4.0;
+  if (f < 1.0) return mix(c0, c1, f);
+  if (f < 2.0) return mix(c1, c2, f - 1.0);
+  if (f < 3.0) return mix(c2, c3, f - 2.0);
+  return mix(c3, c4, f - 3.0);
+}
 vec3 debugView(int v, MAT m, vec4 n, float bh) {
   float g = 0.0;
   if (v == 1) return m[0].rgb;                 // colour
@@ -576,7 +588,7 @@ void main() {
           omega = 1.0; prevR = 0.0; stepLen = 0.0;
           continue;
         }
-        if (u_view > 0) {  // debug views: one material value at the hit, nothing else
+        if (u_view > 0 && u_view != 10) {  // debug views: one material value at the hit, nothing else (Cost: below)
           accum = pow(debugView(u_view, hm, n, bumpHit), vec3(2.2));
           phase = DONE; toSky = false;
           continue;
@@ -766,10 +778,11 @@ void main() {
   }
 
   vec3 col = accum;
-  if (toSky) col += u_view > 0 ? vec3(0.002) : thr * sky(p, dir, rayWorldCol);  // the ray (or what continued of it) ended in the sky
+  if (toSky) col += u_view > 0 && u_view != 10 ? vec3(0.002) : thr * sky(p, dir, rayWorldCol);  // the ray (or what continued of it) ended in the sky
   float tGrid = firstT >= 0.0 ? firstT : 1e9;
   col = groundGrid(col, gro, grd, tGrid);
   col = pow(col, vec3(0.4545));
+  if (u_view == 10) col = heat(float(g_cost) / max(u_costScale, 1.0));  // the Cost view: everything this pixel evaluated
   fragColor = vec4(col, 1.0);
 }
 )";
@@ -1319,6 +1332,33 @@ void main() {
   vec3 c = max(texelFetch(u_a, ivec2(gl_FragCoord.xy), 0).rgb, vec3(0.0)) * u_p0.x;
   c = u_p0.y > 0.5 ? aces(c) : min(c, vec3(1.0));
   fragColor = vec4(pow(c, vec3(0.4545)), 1.0);
+}
+)";
+  if (op == 4)  // upscale: Catmull-Rom bicubic of the low-resolution image, then sharpening limited by
+    // the nearest 2x2 input pixels (no halos). u_p0.x = sharpening, u_p0.zw = the output size
+    return head + R"(
+vec3 tap(ivec2 q, ivec2 sz) { return texelFetch(u_a, clamp(q, ivec2(0), sz - 1), 0).rgb; }
+vec4 cr(float t) {  // Catmull-Rom weights
+  float t2 = t * t, t3 = t2 * t;
+  return vec4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2);
+}
+void main() {
+  ivec2 sz = textureSize(u_a, 0);
+  vec2 pos = gl_FragCoord.xy * vec2(sz) / max(u_p0.zw, vec2(1.0)) - 0.5;
+  ivec2 b = ivec2(floor(pos));
+  vec2 f = pos - vec2(b);
+  vec4 wx = cr(f.x), wy = cr(f.y);
+  vec3 c = vec3(0.0);
+  for (int y = 0; y < 4; y++) {
+    vec3 row = vec3(0.0);
+    for (int x = 0; x < 4; x++) row += tap(b + ivec2(x - 1, y - 1), sz) * wx[x];
+    c += row * wy[y];
+  }
+  vec3 a00 = tap(b, sz), a10 = tap(b + ivec2(1, 0), sz), a01 = tap(b + ivec2(0, 1), sz), a11 = tap(b + ivec2(1, 1), sz);
+  vec3 mn = min(min(a00, a10), min(a01, a11)), mx = max(max(a00, a10), max(a01, a11));
+  vec3 lin = mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y);
+  c = clamp(c + u_p0.x * (c - lin), mn, mx);  // sharpen against the bilinear look, within the local range
+  fragColor = vec4(c, 1.0);
 }
 )";
   if (op == 2)  // bilateral: radius u_p0.x pixels, stopped by colour (u_p0.y), surface colour and depth

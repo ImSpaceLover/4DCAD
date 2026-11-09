@@ -158,6 +158,13 @@ class App {
   RenderTarget mainRT, thumbRT;
   RenderTarget mainAccRT;  // path tracing (single-threaded viewport): the linear running average
   RenderTarget mainGuideRT, mainTmpRT[2];  // (its denoiser: guide image, scratch)
+  RenderTarget mainUpRT;                    // the sharp upscale of a low-resolution viewport image
+  bool upscaled_ = false;
+  // dynamic resolution (the fast profile): the factor of its resolution, and the last frame time
+  float dynScale_ = 1, scaleShown_ = 1;
+  int slowFrames_ = 0, fastFrames_ = 0;
+  double lastDt_ = 0;
+  void updateDynamicResolution(double dt, const RenderProfile& prof);
   int thumbW = 300, thumbH = 225;
   std::unique_ptr<Renderer> renderer;  // the UI thread's renderer (offline renders; headless runs: everything)
   // the viewport and the thumbnail render on their own threads (interactive use; see render_thread.hpp)

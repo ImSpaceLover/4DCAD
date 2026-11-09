@@ -128,6 +128,7 @@ float opSS(float a, inout MAT ma, float b, MAT mb, float k) {
 float g_texNear = INF;   // textures only where a leaf is this near (the ray march sets it)
 bool g_texMat = true;    // colour / material textures (the hit)
 bool g_texBump = false;  // bump textures (the normal phase's relief samples)
+int g_cost = 0;          // leaf SDF evaluations of this pixel (the Cost view)
 float g_bumpH = 0.0;     // the relief there: the bump textures' heights, world units (the leaves add to it)
 vec4 texCoord(vec4 x, int tb, int r) { return mat4(ndatx(tb, r + 0), ndatx(tb, r + 1), ndatx(tb, r + 2), ndatx(tb, r + 3)) * x + ndatx(tb, r + 4); }
 float texRemap(float m, int tb, int r) {
@@ -644,6 +645,7 @@ static CompiledScene compileCurved(Node& root, const PrimitiveRegistry& reg, con
       else L << "  float bd = cdistO(qm) - br;\n";
       L << "  if (bd > par.w && !g_exact) { m = MAT(0.0); return bd; }\n";
     }
+    if (n.isLeaf()) L << "  g_cost++;\n";  // (the Cost view: real SDF evaluations)
     L << "  float s = par.x;\n";
     auto ax = modifierAxes(n, reg);
     if (n.isPolytope()) {
@@ -800,6 +802,7 @@ CompiledScene compileScene(Node& root, const PrimitiveRegistry& reg, const std::
     // bounding-sphere early out (threshold covers the parent's smooth blend radius)
     if (n.id != root.id) L << "  vec4 par = " << D(i, 5) << ";\n  float bd = length(p - " << D(i, 7) << ") - " << D(i, 8) << ".x;\n  if (bd > par.w && !g_exact) { m = MAT(0.0); return bd; }\n";
     else L << "  vec4 par = " << D(i, 5) << ";\n";
+    if (n.isLeaf()) L << "  g_cost++;\n";  // (the Cost view: real SDF evaluations)
       bool follow = n.anchor && n.anchor->follow && (role == Role::Tangent || role == Role::Hug);
     if (follow)  // bent along the surface (packNodes stores the path; 13.x = its first row)
       L << "  float s = par.x;\n  vec4 q = followLocal(p, int(" << D(i, 13) << ".x)) / s;\n  vec4 q0 = q;\n";

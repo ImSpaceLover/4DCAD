@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     else if (a == "--ambient" && i + 1 < argc) ambientOverride = std::atof(argv[++i]);
     else if (a == "--fog" && i + 1 < argc) fogOverride = std::atof(argv[++i]);
     // path tracing display: --denoise 0|1, --exposure STOPS, --tonemap 0|1, --light4d 0|1 (physical / like 3D)
-    else if ((a == "--denoise" || a == "--exposure" || a == "--tonemap" || a == "--light4d") && i + 1 < argc) ptOverrides.push_back({a, std::atof(argv[++i])});  // background compiles even for --screenshot (testing)
+    else if ((a == "--denoise" || a == "--exposure" || a == "--tonemap" || a == "--light4d" || a == "--res" || a == "--upscale") && i + 1 < argc) ptOverrides.push_back({a, std::atof(argv[++i])});  // background compiles even for --screenshot (testing)
     else if (a == "--vulkan") forceBackend = Backend::Vulkan;
     else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &W, &H);
     else if (a[0] != '-') sceneArg = a;
@@ -255,6 +255,8 @@ int main(int argc, char** argv) {
     if (k == "--exposure") app.quality.exposure = (float)v;
     if (k == "--tonemap") app.quality.tonemap = (int)v;
     if (k == "--light4d") app.quality.light4D = (int)v;
+    if (k == "--res") app.quality.resolutionScale = app.quality.fast.resolution = (float)v;  // (testing: both profiles)
+    if (k == "--upscale") app.quality.upscale = app.quality.fast.upscale = std::clamp((int)v, 0, 1);
   }
   if (lightOverride >= 0) app.quality.lighting = lightOverride;
   if (skyOverride >= 0) app.quality.skyIntensity = (float)skyOverride;
@@ -297,6 +299,7 @@ int main(int argc, char** argv) {
     app.now = t;
     if (frameStats && frame > 2) frameTimes.push_back(rawDt);
     app.fps = app.fps * 0.9 + (dt > 0 ? 1 / dt : 0) * 0.1;
+    app.lastDt_ = dt;  // (dynamic resolution reacts to the raw frame time)
     // explore mouse capture
     if (app.wantCapture && !screenshot.empty()) app.wantCapture = false;
     if (app.wantCapture) { glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED); app.mouseCaptured = true; app.wantCapture = false; }

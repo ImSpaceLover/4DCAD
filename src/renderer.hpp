@@ -86,7 +86,7 @@ struct FrameParams {
 };
 
 /** Full-screen post passes (path tracing). */
-enum PostOp { POST_RESOLVE = 0, POST_ATROUS = 1, POST_BILATERAL = 2, POST_MEDIAN = 3, POST_COUNT };
+enum PostOp { POST_RESOLVE = 0, POST_ATROUS = 1, POST_BILATERAL = 2, POST_MEDIAN = 3, POST_UPSCALE = 4, POST_COUNT };
 /** How a refined image is shown. */
 struct PostSettings {
   float exposure = 0;  // stops
@@ -154,7 +154,8 @@ class Renderer {
   /** A full-screen pass: dst (resized to a's size) = op(a, b) with parameters p[8].
    *  POST_RESOLVE: p0 = exposure factor, p1 = tonemap. POST_ATROUS: b = guide, p0 = step,
    *  p1 = colour sigma, p2 = colour-guide sigma, p3 = depth sigma (relative). */
-  virtual void post(int op, const RenderTarget& a, const RenderTarget* b, RenderTarget& dst, const float* p) = 0;
+  /** outW / outH: the output size (0 = the input's; POST_UPSCALE draws at the full size). */
+  virtual void post(int op, const RenderTarget& a, const RenderTarget* b, RenderTarget& dst, const float* p, int outW = 0, int outH = 0) = 0;
   /** Path tracing accumulates linear light (averaging gamma-encoded samples would darken rare bright
    *  ones). This shows it: optional denoising (guide: see FrameParams::ptGuide; tmp: two scratch
    *  targets), exposure, tone mapping and gamma, into dst (display / saving). */

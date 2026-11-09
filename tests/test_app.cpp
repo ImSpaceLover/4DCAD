@@ -1121,6 +1121,23 @@ int main() {
     CHECK(t.applyPreset("{\"quality\":{\"denoise\":3}}", err) && t.quality.denoise == 3, "denoiser type");
   }
 
+  {  // dynamic resolution: slow frames lower the resolution to the minimum, spare time raises it, the
+     // dead band keeps it
+    App t;
+    RenderProfile p;
+    p.resolution = 1; p.minRes = 0.3f; p.targetFps = 60; p.dynamicRes = true;
+    for (int i = 0; i < 200; i++) t.updateDynamicResolution(1.0 / 20, p);
+    CHECK(std::abs(t.dynScale_ - 0.3f) < 1e-6, "slow: down to the minimum (%.2f)", t.dynScale_);
+    float before = t.dynScale_;
+    for (int i = 0; i < 100; i++) t.updateDynamicResolution(1.0 / 60, p);
+    CHECK(t.dynScale_ == before, "at the target: stays (%.2f)", t.dynScale_);
+    for (int i = 0; i < 2000; i++) t.updateDynamicResolution(1.0 / 200, p);
+    CHECK(t.dynScale_ == 1.f, "spare time: back up to full (%.2f)", t.dynScale_);
+    t.quality.frameLimit = 30;  // a limit below the target: aims for the limit
+    for (int i = 0; i < 100; i++) t.updateDynamicResolution(1.0 / 30, p);
+    CHECK(t.dynScale_ == 1.f, "frame rate limit below the target: not chased (%.2f)", t.dynScale_);
+  }
+
   std::printf("%d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

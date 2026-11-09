@@ -174,7 +174,9 @@ void UI::overlays(ImDrawList* dl) {
   lines.push_back(buf);
   int highlight = -1;
   if (app.quality.debugView > 0) {
-    std::snprintf(buf, sizeof buf, "View: %s (toolbar: Lit for the normal image)", VIEW_NAMES[std::clamp(app.quality.debugView, 0, 9)]);
+    if (app.quality.debugView == 10)
+      std::snprintf(buf, sizeof buf, "View: Cost: SDF evaluations per pixel (blue few, red = %.0f, white more; toolbar: Lit for the normal image)", app.quality.costScale);
+    else std::snprintf(buf, sizeof buf, "View: %s (toolbar: Lit for the normal image)", VIEW_NAMES[std::clamp(app.quality.debugView, 0, VIEW_COUNT - 1)]);
     lines.push_back(buf);
   }
   if (app.viewportCompiling || (app.renderer && app.renderer->pendingCompiles() > 0)) lines.push_back("Compiling shader...");
@@ -188,6 +190,10 @@ void UI::overlays(ImDrawList* dl) {
   }
   if (app.mode == Mode::Explore) {
     if (!app.mouseCaptured) lines.push_back("Click the viewport to capture the mouse");
+    if (app.quality.fast.dynamicRes) {
+      std::snprintf(buf, sizeof buf, "Resolution %.2fx (auto, target %d fps)", app.scaleShown_, app.quality.fast.targetFps);
+      lines.push_back(buf);
+    }
     if (!app.anim.empty()) {
       std::snprintf(buf, sizeof buf, "Animation: frame %d / %d %s (%s: play / pause, %s: from the start)", (int)std::round(app.anim.frame),
                     (int)std::round(app.playbackEnd()),

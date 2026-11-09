@@ -194,6 +194,7 @@ RenderProfile App::mainProfile() const {
   prof.ao = q.ao;
   prof.aoSamples = 5;
   prof.shadowSteps = 64;
+  prof.upscale = q.upscale;
   return prof;
 }
 
@@ -212,7 +213,22 @@ uint64_t App::viewportTexture(bool& flip) {
   if (viewThread) { flip = viewThread->flipY(); return viewThread->acquire().tex; }
   if (!renderer) return 0;
   flip = renderer->flipY();
-  return renderer->texture(mainRT);
+  return renderer->texture(upscaled_ ? mainUpRT : mainRT);
+}
+
+void App::updateDynamicResolution(double dt, const RenderProfile& prof) {
+  // a frame rate limit below the target: aim for the limit (it can never go faster)
+  int target = prof.targetFps;
+  if (quality.frameLimit > 0) target = std::min(target, quality.frameLimit);
+  double fps = dt > 0 ? 1.0 / dt : target;
+  float lo = std::clamp(prof.minRes / std::max(prof.resolution, 0.01f), 0.05f, 1.f);
+  if (fps < 0.92 * target) { slowFrames_++; fastFrames_ = 0; }
+  else if (fps > 1.12 * target) { fastFrames_++; slowFrames_ = 0; }
+  else { slowFrames_ = fastFrames_ = 0; }  // (the dead band: stays)
+  // a step of 0.05 down after 3 slow frames, up after 20 fast ones (0.05 steps: fewer reallocations)
+  if (slowFrames_ >= 3) { dynScale_ -= 0.05f * std::max(1.f, std::round(dynScale_ * 2.f)); slowFrames_ = 0; }
+  if (fastFrames_ >= 20) { dynScale_ += 0.05f; fastFrames_ = 0; }
+  dynScale_ = std::clamp(std::round(dynScale_ * 20.f) / 20.f, lo, 1.f);
 }
 
 uint64_t App::thumbnailTexture(bool& flip) {
@@ -264,14 +280,18 @@ void App::renderFrame() {
     prof = mainProfile();
     prof.resolution = quality.resolutionScale * (moving ? quality.motionScale : 1.0f);
   }
-  float scale = std::clamp(prof.resolution, 0.1f, 2.0f);
+  // dynamic resolution (the fast profile): a factor adjusted to hold the target frame rate
+  if (fast && prof.dynamicRes) updateDynamicResolution(lastDt_, prof);
+  else { dynScale_ = 1; slowFrames_ = fastFrames_ = 0; }
+  float scale = std::clamp(prof.resolution * dynScale_, 0.05f, 2.0f);
+  scaleShown_ = scale;
   // progressive stochastic refinement while nothing changes (Edit mode, main settings)
   bool refine = q.stochastic && !moving && !fast && mode == Mode::Edit && q.viewportSamples > 1 && q.debugView == 0;
   std::ostringstream key;
   key.precision(9);
   for (double x : v.eye) key << x << ',';
   for (double x : v.frame) key << x << ',';
-  key << q.debugView << version_ << '|' << geo << (int)mode << '|' << vpW << 'x' << vpH << '|' << scale << '|' << fov() << '|' << q.maxSteps << q.shadows << q.ao
+  key << q.debugView << ":" << q.costScale << version_ << '|' << geo << (int)mode << '|' << vpW << 'x' << vpH << '|' << scale << '|' << fov() << '|' << q.maxSteps << q.shadows << q.ao
       << q.geoMaxStep << q.geoProjectIters << q.maxDistFull << q.maxDistGeo << q.eps << q.stepScale << q.shadowK << q.shadowMax << q.aoStrength
       << q.fog << q.ambient << q.lightYaw << q.lightPitch << q.lightW << q.skyTop[0] << q.skyTop[1] << q.skyTop[2] << q.skyBottom[0]
       << q.skyBottom[1] << q.skyBottom[2] << q.grid << exploreSet.showOwnBody << exploreSet.bodyRadius << '|';
@@ -332,6 +352,7 @@ void App::renderFrame() {
   if (space.curved()) curvedParams(fp, v, key);
   std::string k = key.str();
   fp.scale = scale;
+  bool drew = false;
   if (k != lastKey_) {
     if (k.substr(0, k.find('|')) != lastKey_.substr(0, lastKey_.find('|'))) lastChange_ = now;
     lastKey_ = k;
@@ -350,6 +371,7 @@ void App::renderFrame() {
         renderer->render(mainGuideRT, (int)vpW, (int)vpH, vr, reg, world, highlightSet(), g);
       }
       renderer->render(acc ? mainAccRT : mainRT, (int)vpW, (int)vpH, vr, reg, world, highlightSet(), fp);
+      drew = true;
       if (acc && !renderer->compiling()) renderer->present(mainAccRT, dn ? &mainGuideRT : nullptr, mainTmpRT, mainRT, postSettings(q, 1, !fp.pathTrace));
       accumSamples = refine ? 1 : 0;
       if (renderer->compiling()) { lastKey_.clear(); accumSamples = 0; viewportCompiling = true; }  // not drawn yet: again next frame
@@ -362,8 +384,17 @@ void App::renderFrame() {
     fp.blend = 1.0f / (accumSamples + 1);
     bool dn = q.denoise > 0, acc = fp.pathTrace || dn;
     renderer->render(acc ? mainAccRT : mainRT, (int)vpW, (int)vpH, isolate.empty() ? root : viewRoot_, reg, world, highlightSet(), fp);
+    drew = true;
     if (acc) renderer->present(mainAccRT, dn ? &mainGuideRT : nullptr, mainTmpRT, mainRT, postSettings(q, accumSamples + 1, !fp.pathTrace));
     accumSamples++;
+  }
+  // below full resolution: the sharp upscale to the viewport's size (else the bilinear stretch)
+  if (drew && !viewThread) {
+    upscaled_ = fp.scale < 0.98f && fp.prof.upscale == 1;
+    if (upscaled_) {
+      float pu[8] = {0.6f, 0, vpW, vpH, 0, 0, 0, 0};
+      renderer->post(POST_UPSCALE, mainRT, nullptr, mainUpRT, pu, (int)vpW, (int)vpH);
+    }
   }
   if (viewThread) {
     RenderThread::Image im = viewThread->acquire();

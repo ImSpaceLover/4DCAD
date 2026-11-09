@@ -60,7 +60,7 @@ void RenderThread::loop() {
   }
   flip_ = r->flipY();
   r_ = r.get();
-  RenderTarget acc, disp[SLOTS], guide, tmp[2];  // (guide, tmp: path tracing's denoiser)
+  RenderTarget acc, disp[SLOTS], guide, tmp[2], low;  // (guide, tmp: the denoiser; low: before the upscale)
   RenderRequest cur;
   bool have = false;
   int sample = 0;
@@ -137,8 +137,13 @@ void RenderThread::loop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (s < 0) break;
-    if (cur.fp.pathTrace || denoise)  // linear average -> (denoised,) tone mapped, gamma-encoded (simple lighting: as it is)
-      r->present(acc, denoise ? &guide : nullptr, tmp, disp[s], postSettings(cur.quality, sample + 1, !cur.fp.pathTrace));
+    // below full resolution: the sharp upscale to the full size (else shown stretched)
+    bool up = cur.fp.scale < 0.98f && cur.fp.prof.upscale == 1;
+    float pu[8] = {0.6f, 0, (float)cur.w, (float)cur.h, 0, 0, 0, 0};
+    if (cur.fp.pathTrace || denoise) {  // linear average -> (denoised,) tone mapped, gamma-encoded (simple lighting: as it is)
+      r->present(acc, denoise ? &guide : nullptr, tmp, up ? low : disp[s], postSettings(cur.quality, sample + 1, !cur.fp.pathTrace));
+      if (up) r->post(POST_UPSCALE, low, nullptr, disp[s], pu, cur.w, cur.h);
+    } else if (up) r->post(POST_UPSCALE, acc, nullptr, disp[s], pu, cur.w, cur.h);
     else r->copyTarget(acc, disp[s]);
     r->flushAndWait();  // finished before the UI may sample it
     uint64_t tex = r->texture(disp[s]);
@@ -153,6 +158,7 @@ void RenderThread::loop() {
   r_ = nullptr;
   r->destroy(acc);
   r->destroy(guide);
+  r->destroy(low);
   for (auto& t : tmp) r->destroy(t);
   for (auto& d : disp) r->destroy(d);
   r.reset();

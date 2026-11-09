@@ -35,7 +35,9 @@ nlohmann::json qualityToJson(const QualitySettings& q) {
   const RenderProfile& f = q.fast;
   r["fast"] = {{"resolution", f.resolution}, {"maxSteps", f.maxSteps}, {"bounces", f.bounces}, {"textures", f.textures},
                {"specular", f.specular}, {"pointLights", f.pointLights}, {"shadows", f.shadows}, {"pointShadows", f.pointShadows},
-               {"ao", f.ao}, {"aoSamples", f.aoSamples}, {"shadowSteps", f.shadowSteps}};
+               {"ao", f.ao}, {"aoSamples", f.aoSamples}, {"shadowSteps", f.shadowSteps}, {"upscale", f.upscale},
+               {"dynamicRes", f.dynamicRes}, {"targetFps", f.targetFps}, {"minRes", f.minRes}};
+  r["upscale"] = q.upscale;
   return r;
 }
 
@@ -62,12 +64,18 @@ void qualityFromJson(const nlohmann::json& r, QualitySettings& q) {
   q.tonemap = std::clamp(q.tonemap, 0, 1);
   q.light4D = std::clamp(q.light4D, 0, 1);
   q.lighting = std::clamp(q.lighting, 0, 1);
+  getKey(r, "upscale", q.upscale);
+  q.upscale = std::clamp(q.upscale, 0, 1);
   auto& f = q.fast;
   if (r.contains("fast") && r["fast"].is_object()) {
     auto& o = r["fast"];
     getKey(o, "resolution", f.resolution); getKey(o, "maxSteps", f.maxSteps); getKey(o, "bounces", f.bounces); getKey(o, "textures", f.textures);
     getKey(o, "specular", f.specular); getKey(o, "pointLights", f.pointLights); getKey(o, "shadows", f.shadows); getKey(o, "pointShadows", f.pointShadows);
     getKey(o, "ao", f.ao); getKey(o, "aoSamples", f.aoSamples); getKey(o, "shadowSteps", f.shadowSteps);
+    getKey(o, "upscale", f.upscale); getKey(o, "dynamicRes", f.dynamicRes); getKey(o, "targetFps", f.targetFps); getKey(o, "minRes", f.minRes);
+    f.upscale = std::clamp(f.upscale, 0, 1);
+    f.targetFps = std::clamp(f.targetFps, 10, 240);
+    f.minRes = std::clamp(f.minRes, 0.1f, 1.f);
   } else if (r.contains("exploreSimple")) {  // settings from before the fast profile: the old Explore switches
     bool simple = r.value("exploreSimple", true);
     f.textures = !simple;
